@@ -1,0 +1,5 @@
+if (message && message.text && message.text.toLowerCase().includes("sen")) {
+  Bot.sendAudio("Devin_The_Dude_Anythang.mp3", {
+    reply_to_message_id: message.message_id
+  });
+}
