@@ -7,26 +7,25 @@ const { chromium } = require('playwright');
     process.exit(1);
   }
 
-  const isUsa = url.includes('stake.us') || url.includes('shuffle.us');
-  const proxy = isUsa 
-    ? undefined // Or configure a US proxy if needed
-    : { server: 'http://your-norway-proxy-ip:port' }; // Optional/Adjust as needed for Norway routing
-
   const browser = await chromium.launch({
     headless: true,
     args: ['--no-sandbox', '--disable-setuid-sandbox']
   });
 
   const context = await browser.newContext({
-    viewport: { width: 1280, height: 800 },
-    // If routing location-specific requests:
-    geolocation: isUsa ? { latitude: 37.7749, longitude: -122.4194 } : { latitude: 59.9139, longitude: 10.7522 },
-    permissions: ['geolocation']
+    viewport: { width: 1280, height: 800 }
   });
 
   const page = await context.newPage();
-  await page.goto(url, { waitUntil: 'networkidle', timeout: 60000 });
-  await page.screenshot({ path: 'win.png', fullPage: true });
-  await browser.close();
-  console.log("Screenshot saved as win.png");
+  
+  try {
+    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
+    await page.waitForTimeout(5000);
+    await page.screenshot({ path: 'win.png', fullPage: true });
+    console.log("Screenshot saved as win.png");
+  } catch (err) {
+    console.error("Error loading page:", err);
+  } finally {
+    await browser.close();
+  }
 })();
