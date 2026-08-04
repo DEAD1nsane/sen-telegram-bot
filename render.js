@@ -1,6 +1,6 @@
 const { chromium } = require('playwright-extra');
-const stealth = require('puppeteer-extra-plugin-stealth');
-chromium.use(stealth());
+const stealth = require('puppeteer-extra-plugin-stealth')();
+chromium.use(stealth);
 
 (async () => {
   const url = process.argv[2];
