@@ -215,7 +215,7 @@ async def handle_webhook(request: Request):
                             final_prompt = "\n\n".join(context_parts) + f"\n\nUser Question: {clean_prompt}"
 
                         response = gemini_client.models.generate_content(
-                            model='gemini-3.1-flash-lite',
+                            model='gemini-2.5-flash',
                             contents=final_prompt,
                             config=types.GenerateContentConfig(
                                 system_instruction="Use the web search context and saved memories provided if relevant. Do not use markdown formatting such as bold (**), headers (#), or italics (*). Return plain text only."
