@@ -2,7 +2,6 @@ FROM python:3.10-slim
 
 WORKDIR /app
 
-# Install system dependencies FIRST (Playwright needs these for Chromium)
 RUN apt-get update && apt-get install -y \
     wget \
     gnupg \
@@ -31,22 +30,23 @@ RUN apt-get update && apt-get install -y \
     libxrandr2 \
     libxrender1 \
     libxss1 \
+    libxtst6 \
     lsb-release \
     nodejs \
     npm \
     xdg-utils \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy and install Python dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Install Playwright browsers (now that all system deps are present)
-RUN playwright install --with-deps chromium
+COPY package*.json ./
+RUN npm install
 
-# Copy application code last (takes advantage of Docker layer caching)
+RUN npx playwright install --with-deps chromium
+
 COPY . .
 
 ENV PYTHONUNBUFFERED=1
 
-CMD ["sh", "-c", "node bot.js & uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}"]
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
