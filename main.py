@@ -1,13 +1,13 @@
 import re
 import os
 import requests
+import subprocess
 from fastapi import FastAPI, Request, Response
 import telebot
 import redis
 from google import genai
 from google.genai import types
 
-# Robust Redis connection fallback
 redis_url = os.environ.get("REDIS_URL")
 if not redis_url:
     host = os.environ.get("REDISHOST", "localhost")
@@ -51,6 +51,25 @@ def free_web_search(query: str) -> str:
         print(f"Search fetch error: {e}")
     return ""
 
+def trigger_win_screenshot(url: str, chat_id: int, msg_id: int, is_private: bool):
+    try:
+        subprocess.run(
+            ["node", "render.js", url],
+            capture_output=True,
+            text=True,
+            timeout=60
+        )
+        
+        if os.path.exists("win.png"):
+            kwargs = {"timeout": 60}
+            if not is_private:
+                kwargs["reply_to_message_id"] = msg_id
+                
+            with open("win.png", "rb") as photo:
+                bot.send_photo(chat_id, photo, **kwargs)
+    except Exception as e:
+        print(f"Error capturing/sending win screenshot: {e}")
+
 @app.get("/")
 def home_check():
     return {"status": "ok", "message": "Bot webhook server is running."}
@@ -73,6 +92,16 @@ async def handle_webhook(request: Request):
             msg_id = update.message.message_id
             text = update.message.text or ""
             is_private = update.message.chat.type == "private"
+
+            target_domains = ['stake.us', 'stake.com', 'shuffle.us', 'shuffle.com', 'gamba.com', 'thrill.com', 'duel.com']
+            is_match = any(domain in text.lower() for domain in target_domains) and any(kw in text.lower() for kw in ['modal=', 'bet', 'ref='])
+            
+            if is_match:
+                url_match = re.search(r'https?://[^\s]+', text)
+                if url_match:
+                    target_url = url_match.group(0)
+                    trigger_win_screenshot(target_url, chat_id, msg_id, is_private)
+                    return Response(status_code=200)
 
             if text.startswith(("/delete", "/del")):
                 if user_id == OWNER_ID:
