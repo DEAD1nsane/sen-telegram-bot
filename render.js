@@ -1,6 +1,4 @@
-const { chromium } = require('playwright-extra');
-const stealth = require('puppeteer-extra-plugin-stealth')();
-chromium.use(stealth);
+const { chromium } = require('playwright');
 
 (async () => {
   const url = process.argv[2];
@@ -15,14 +13,16 @@ chromium.use(stealth);
   });
 
   const context = await browser.newContext({
-    viewport: { width: 1280, height: 800 }
+    viewport: { width: 390, height: 844 },
+    userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1',
+    isMobile: true
   });
 
   const page = await context.newPage();
   
   try {
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
-    await page.waitForTimeout(5000);
+    await page.waitForTimeout(15000);
     await page.screenshot({ path: 'win.png', fullPage: true });
     console.log("Screenshot saved as win.png");
   } catch (err) {
