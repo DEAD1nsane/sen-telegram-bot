@@ -89,12 +89,29 @@ async def handle_webhook(request: Request):
         update = telebot.types.Update.de_json(json_data)
         
         if update and update.message:
+            text = update.message.text or ""
+            
+            # Check for win screenshot links immediately
+            target_domains = ['stake.us', 'stake.com', 'shuffle.us', 'shuffle.com', 'gamba.com', 'thrill.com', 'duel.com']
+            is_match = any(domain in text.lower() for domain in target_domains) and any(kw in text.lower() for kw in ['modal=', 'bet', 'ref='])
+            
+            if is_match:
+                print(f"Matched win URL: {text}")
+                chat_id = update.message.chat.id
+                msg_id = update.message.message_id
+                is_private = update.message.chat.type == "private"
+                url_match = re.search(r'https?://[^\s]+', text)
+                if url_match:
+                    target_url = url_match.group(0)
+                    trigger_win_screenshot(target_url, chat_id, msg_id, is_private)
+                    return Response(status_code=200)
+
             user_id = update.message.from_user.id
             user_id_str = str(user_id)
             chat_id = update.message.chat.id
             msg_id = update.message.message_id
-            text = update.message.text or ""
             is_private = update.message.chat.type == "private"
+
 
             target_domains = ['stake.us', 'stake.com', 'shuffle.us', 'shuffle.com', 'gamba.com', 'thrill.com', 'duel.com']
             is_match = any(domain in text.lower() for domain in target_domains) and any(kw in text.lower() for kw in ['modal=', 'bet', 'ref='])
