@@ -77,6 +77,10 @@ def trigger_win_screenshot(url: str, chat_id: int, msg_id: int, is_private: bool
 def home_check():
     return {"status": "ok", "message": "Bot webhook server is running."}
 
+@app.get("/")
+def read_root():
+    return {"status": "alive"}
+
 @app.post("/getWebhookInfo")
 @app.get("/getWebhookInfo")
 def webhook_info_check():
