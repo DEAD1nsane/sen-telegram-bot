@@ -1,6 +1,4 @@
-const { chromium } = require('playwright-extra');
-const stealth = require('puppeteer-extra-plugin-stealth')();
-chromium.use(stealth);
+const { chromium } = require('playwright');
 
 (async () => {
   const url = process.argv[2];
@@ -11,7 +9,7 @@ chromium.use(stealth);
 
   const browser = await chromium.launch({
     headless: true,
-    args: ['--no-sandbox', '--disable-setuid-sandbox']
+    args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu']
   });
 
   const context = await browser.newContext({
@@ -22,13 +20,8 @@ chromium.use(stealth);
 
   const page = await context.newPage();
 
-  await page.addInitScript(() => {
-    Object.defineProperty(navigator, 'webdriver', { get: () => false });
-  });
-
   try {
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
-    // Give extra breathing room for client-side hydro without hanging on networkidle
     await page.waitForTimeout(5000);
     await page.screenshot({ path: 'output.png', fullPage: true });
     console.log("Screenshot saved as output.png");
