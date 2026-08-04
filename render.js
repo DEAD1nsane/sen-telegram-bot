@@ -9,6 +9,12 @@ chromium.use(stealth);
     process.exit(1);
   }
 
+  // Skip rendering for both shuffle.com and shuffle.us since previews show the win
+  if (url.includes('shuffle.com') || url.includes('shuffle.us')) {
+    console.log("Shuffle URL detected; skipping render.");
+    process.exit(0);
+  }
+
   const browser = await chromium.launch({
     headless: true,
     args: ['--no-sandbox', '--disable-setuid-sandbox']
