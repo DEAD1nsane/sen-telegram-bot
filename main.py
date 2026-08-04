@@ -7,7 +7,15 @@ import redis
 from google import genai
 from google.genai import types
 
-redis_client = redis.from_url(os.environ.get("REDIS_URL"))
+# Robust Redis connection fallback
+redis_url = os.environ.get("REDIS_URL")
+if not redis_url:
+    host = os.environ.get("REDISHOST", "localhost")
+    port = os.environ.get("REDISPORT", "6379")
+    password = os.environ.get("REDISPASSWORD", "")
+    redis_url = f"redis://default:{password}@{host}:{port}" if password else f"redis://{host}:{port}"
+
+redis_client = redis.from_url(redis_url)
 
 API_TOKEN = os.getenv("BOT_TOKEN")
 bot = telebot.TeleBot(API_TOKEN)
@@ -27,8 +35,6 @@ CACHED_FILE_IDS = {
     "sen": None,
     "magic": None
 }
-
-mrcunto_count = 0
 
 def free_web_search(query: str) -> str:
     try:
@@ -51,7 +57,6 @@ def home_check():
 
 @app.post("/webhook")
 async def handle_webhook(request: Request):
-    global mrcunto_count
     try:
         json_data = await request.json()
         update = telebot.types.Update.de_json(json_data)
@@ -249,17 +254,6 @@ async def handle_webhook(request: Request):
 
             if re.search(r'\bmagic(?:al)?\b', text, re.IGNORECASE):
                 send_audio_track(chat_id, msg_id, "magic", "Do You Believe In Magic.mp3", "Do You Believe In Magic", "The Lovin' Spoonful", is_private)
-
-            if re.search(r'@MrCuntosaurus', text, re.IGNORECASE):
-                if mrcunto_count < 5:
-                    mrcunto_count += 1
-                    try:
-                        kwargs = {"parse_mode": "Markdown"}
-                        if not is_private:
-                            kwargs["reply_to_message_id"] = msg_id
-                        bot.send_message(chat_id, "[Did someone say Matt?](https://www.youtube.com/watch?v=XqZsoesa55w)", **kwargs)
-                    except Exception as msg_err:
-                        print(f"Error sending video link: {msg_err}")
 
         return Response(status_code=200)
     except Exception as e:
