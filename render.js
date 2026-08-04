@@ -27,7 +27,9 @@ chromium.use(stealth);
   });
 
   try {
-    await page.goto(url, { waitUntil: 'networkidle', timeout: 60000 });
+    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
+    // Give extra breathing room for client-side hydro without hanging on networkidle
+    await page.waitForTimeout(5000);
     await page.screenshot({ path: 'output.png', fullPage: true });
     console.log("Screenshot saved as output.png");
   } catch (err) {
