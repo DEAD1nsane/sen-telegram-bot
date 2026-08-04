@@ -2,11 +2,10 @@ const { chromium } = require('playwright-extra');
 const stealth = require('puppeteer-extra-plugin-stealth')();
 chromium.use(stealth);
 
-async function getProxy() {
+async function getProxies() {
   const res = await fetch('https://api.proxyscrape.com/v4/free-proxy-list/get?request=display_proxies&proxy_format=ipport&country=us&protocol=http');
   const text = await res.text();
-  const proxies = text.trim().split('\r\n').filter(Boolean);
-  return proxies[0] || null;
+  return text.trim().split(/\r?\n/).filter(Boolean);
 }
 
 (async () => {
@@ -16,55 +15,58 @@ async function getProxy() {
     process.exit(1);
   }
 
-  const proxyIpPort = await getProxy();
-  if (!proxyIpPort) {
+  const proxies = await getProxies();
+  if (proxies.length === 0) {
     console.error("No proxies available");
     process.exit(1);
   }
 
-  console.log(`Using proxy: ${proxyIpPort}`);
+  let success = false;
 
-  const browser = await chromium.launch({
-    headless: true,
-    args: ['--no-sandbox', '--disable-setuid-sandbox'],
-    proxy: { server: `http://${proxyIpPort}` }
-  });
-
-  const context = await browser.newContext({
-    viewport: { width: 390, height: 844 },
-    userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1',
-    isMobile: true
-  });
-
-  await context.addCookies([{
-    name: 'cf_clearance',
-    value: '9eecd37eb482f97afc12372be3c5360d24697aa295aa9176bda4137e072922b8df32cf014058a7f46fe439c48732ffc4',
-    domain: '.stake.us',
-    path: '/'
-  }]);
-
-  const page = await context.newPage();
-
-  await page.addInitScript(() => {
-    Object.defineProperty(navigator, 'webdriver', { get: () => false });
-  });
-  
-  try {
-    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
-    
+  for (const proxyIpPort of proxies) {
+    console.log(`Trying proxy: ${proxyIpPort}`);
+    let browser;
     try {
-      const frame = page.frameLocator('iframe[src*="challenges.cloudflare.com"]');
-      await frame.locator('label.cb-lb').click({ timeout: 5000 });
-    } catch (e) {
-      // Ignore if Cloudflare widget frame is not present or already passed
-    }
+      browser = await chromium.launch({
+        headless: true,
+        args: ['--no-sandbox', '--disable-setuid-sandbox'],
+        proxy: { server: `http://${proxyIpPort}` }
+      });
 
-    await page.waitForTimeout(15000);
-    await page.screenshot({ path: 'win.png', fullPage: true });
-    console.log("Screenshot saved as win.png");
-  } catch (err) {
-    console.error("Error loading page:", err);
-  } finally {
-    await browser.close();
+      const context = await browser.newContext({
+        viewport: { width: 390, height: 844 },
+        userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1',
+        isMobile: true
+      });
+
+      const page = await context.newPage();
+
+      await page.addInitScript(() => {
+        Object.defineProperty(navigator, 'webdriver', { get: () => false });
+      });
+
+      await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
+      
+      try {
+        const frame = page.frameLocator('iframe[src*="challenges.cloudflare.com"]');
+        await frame.locator('label.cb-lb').click({ timeout: 5000 });
+      } catch (e) {
+        // Ignore if not present
+      }
+
+      await page.waitForTimeout(10000);
+      await page.screenshot({ path: 'win.png', fullPage: true });
+      console.log("Screenshot saved as win.png using proxy:", proxyIpPort);
+      success = true;
+      await browser.close();
+      break;
+    } catch (err) {
+      console.log(`Proxy ${proxyIpPort} failed:`, err.message);
+      if (browser) await browser.close();
+    }
+  }
+
+  if (!success) {
+    console.error("All proxies failed to load the page.");
   }
 })();
