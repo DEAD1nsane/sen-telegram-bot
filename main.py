@@ -77,10 +77,6 @@ def trigger_win_screenshot(url: str, chat_id: int, msg_id: int, is_private: bool
 def home_check():
     return {"status": "ok", "message": "Bot webhook server is running."}
 
-@app.get("/")
-def read_root():
-    return {"status": "alive"}
-
 @app.post("/getWebhookInfo")
 @app.get("/getWebhookInfo")
 def webhook_info_check():
@@ -92,13 +88,11 @@ async def handle_webhook(request: Request):
     json_data = await request.json()
     print(f"Data: {json_data}")
     try:
-        json_data = await request.json()
         update = telebot.types.Update.de_json(json_data)
         
         if update and update.message:
             text = update.message.text or ""
             
-            # Check for win screenshot links immediately
             target_domains = ['stake.us', 'stake.com', 'shuffle.us', 'shuffle.com', 'gamba.com', 'thrill.com', 'duel.com']
             is_match = any(domain in text.lower() for domain in target_domains) and any(kw in text.lower() for kw in ['modal=', 'bet', 'ref='])
             
@@ -118,18 +112,6 @@ async def handle_webhook(request: Request):
             chat_id = update.message.chat.id
             msg_id = update.message.message_id
             is_private = update.message.chat.type == "private"
-
-
-            target_domains = ['stake.us', 'stake.com', 'shuffle.us', 'shuffle.com', 'gamba.com', 'thrill.com', 'duel.com']
-            is_match = any(domain in text.lower() for domain in target_domains) and any(kw in text.lower() for kw in ['modal=', 'bet', 'ref='])
-            
-            if is_match:
-                print(f"Matched win URL: {text}")
-                url_match = re.search(r'https?://[^\s]+', text)
-                if url_match:
-                    target_url = url_match.group(0)
-                    trigger_win_screenshot(target_url, chat_id, msg_id, is_private)
-                    return Response(status_code=200)
 
             if text.startswith(("/delete", "/del")):
                 if user_id == OWNER_ID:
