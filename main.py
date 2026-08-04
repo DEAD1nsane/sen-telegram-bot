@@ -53,22 +53,25 @@ def free_web_search(query: str) -> str:
 
 def trigger_win_screenshot(url: str, chat_id: int, msg_id: int, is_private: bool):
     try:
-        subprocess.run(
+        result = subprocess.run(
             ["node", "render.js", url],
             capture_output=True,
             text=True,
             timeout=60
         )
-        
+        if result.returncode != 0:
+            print(f"Node script error: {result.stderr}")
+
         if os.path.exists("win.png"):
             kwargs = {"timeout": 60}
             if not is_private:
                 kwargs["reply_to_message_id"] = msg_id
-                
+
             with open("win.png", "rb") as photo:
                 bot.send_photo(chat_id, photo, **kwargs)
     except Exception as e:
         print(f"Error capturing/sending win screenshot: {e}")
+
 
 @app.get("/")
 def home_check():
