@@ -43,7 +43,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY package*.json ./
 RUN npm install
 
-RUN npx playwright install --with-deps chromium
+RUN npx playwright install chromium
 
 COPY . .
 
