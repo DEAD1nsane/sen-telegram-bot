@@ -28,6 +28,10 @@ chromium.use(stealth);
   }]);
 
   const page = await context.newPage();
+
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, 'webdriver', { get: () => false });
+  });
   
   try {
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
