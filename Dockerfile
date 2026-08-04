@@ -31,10 +31,9 @@ RUN apt-get update && apt-get install -y \
     libxrandr2 \
     libxrender1 \
     libxss1 \
-    libxtst6 \
     lsb-release \
-    nodejs
-    npm
+    nodejs \
+    npm \
     xdg-utils \
     && rm -rf /var/lib/apt/lists/*
 
