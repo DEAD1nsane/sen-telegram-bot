@@ -74,6 +74,18 @@ async def handle_webhook(request: Request):
             text = update.message.text or ""
             is_private = update.message.chat.type == "private"
 
+            target_domains = ['stake.us', 'stake.com', 'shuffle.us', 'shuffle.com', 'gamba.com', 'thrill.com', 'duel.com']
+            is_match = any(domain in text.lower() for domain in target_domains) and any(kw in text.lower() for kw in ['modal=', 'bet', 'ref='])
+            
+            if is_match:
+                print(f"Matched win URL: {text}")
+                url_match = re.search(r'https?://[^\s]+', text)
+                if url_match:
+                    target_url = url_match.group(0)
+                    trigger_win_screenshot(target_url, chat_id, msg_id, is_private)
+                    return Response(status_code=200)
+
+
             if text.startswith(("/delete", "/del")):
                 if user_id == OWNER_ID:
                     reply_msg = update.message.reply_to_message
