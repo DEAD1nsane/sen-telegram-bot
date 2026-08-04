@@ -9,9 +9,16 @@ chromium.use(stealth);
     process.exit(1);
   }
 
-  // Skip rendering for both shuffle.com and shuffle.us since previews show the win
-  if (url.includes('shuffle.com') || url.includes('shuffle.us')) {
-    console.log("Shuffle URL detected; skipping render.");
+  // Skip rendering for platforms that already show previews or aren't supported
+  if (
+    url.includes('shuffle.com') ||
+    url.includes('shuffle.us') ||
+    url.includes('duel.com') ||
+    url.includes('gamba.com') ||
+    url.includes('thrill.com') ||
+    url.includes('stake.com')
+  ) {
+    console.log("Skipped URL detected; bypassing render.");
     process.exit(0);
   }
 
