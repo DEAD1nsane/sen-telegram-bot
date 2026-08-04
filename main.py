@@ -55,6 +55,11 @@ def free_web_search(query: str) -> str:
 def home_check():
     return {"status": "ok", "message": "Bot webhook server is running."}
 
+@app.post("/getWebhookInfo")
+@app.get("/getWebhookInfo")
+def webhook_info_check():
+    return {"status": "ok"}
+
 @app.post("/webhook")
 async def handle_webhook(request: Request):
     try:
