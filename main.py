@@ -84,6 +84,9 @@ def webhook_info_check():
 
 @app.post("/webhook")
 async def handle_webhook(request: Request):
+    print("Webhook endpoint hit!")
+    json_data = await request.json()
+    print(f"Data: {json_data}")
     try:
         json_data = await request.json()
         update = telebot.types.Update.de_json(json_data)
