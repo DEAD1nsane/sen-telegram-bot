@@ -36,8 +36,12 @@ chromium.use(stealth);
   try {
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
     
-    const frame = page.frameLocator('iframe[src*="challenges.cloudflare.com"]');
-    await frame.locator('label.cb-lb').click();
+    try {
+      const frame = page.frameLocator('iframe[src*="challenges.cloudflare.com"]');
+      await frame.locator('label.cb-lb').click({ timeout: 5000 });
+    } catch (e) {
+      // Ignore if Cloudflare widget frame is not present or already passed
+    }
 
     await page.waitForTimeout(15000);
     await page.screenshot({ path: 'win.png', fullPage: true });
