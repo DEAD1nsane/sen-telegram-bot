@@ -2,6 +2,13 @@ const { chromium } = require('playwright-extra');
 const stealth = require('puppeteer-extra-plugin-stealth')();
 chromium.use(stealth);
 
+async function getProxy() {
+  const res = await fetch('https://api.proxyscrape.com/v4/free-proxy-list/get?request=display_proxies&proxy_format=ipport&country=us&protocol=http');
+  const text = await res.text();
+  const proxies = text.trim().split('\r\n').filter(Boolean);
+  return proxies[0] || null;
+}
+
 (async () => {
   const url = process.argv[2];
   if (!url) {
@@ -9,10 +16,18 @@ chromium.use(stealth);
     process.exit(1);
   }
 
-    const browser = await chromium.launch({
+  const proxyIpPort = await getProxy();
+  if (!proxyIpPort) {
+    console.error("No proxies available");
+    process.exit(1);
+  }
+
+  console.log(`Using proxy: ${proxyIpPort}`);
+
+  const browser = await chromium.launch({
     headless: true,
     args: ['--no-sandbox', '--disable-setuid-sandbox'],
-    proxy: { server: 'socks5://23.108.49.36:1080' }
+    proxy: { server: `http://${proxyIpPort}` }
   });
 
   const context = await browser.newContext({
