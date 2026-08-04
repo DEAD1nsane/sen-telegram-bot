@@ -9,10 +9,10 @@ chromium.use(stealth);
     process.exit(1);
   }
 
-  const browser = await chromium.launch({
+    const browser = await chromium.launch({
     headless: true,
     args: ['--no-sandbox', '--disable-setuid-sandbox'],
-    proxy: { server: 'socks5://127.0.0.1:9050' }
+    proxy: { server: 'socks5://23.108.49.36:1080' }
   });
 
   const context = await browser.newContext({
