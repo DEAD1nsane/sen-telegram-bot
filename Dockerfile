@@ -40,11 +40,12 @@ RUN apt-get update && apt-get install -y \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY package.json ./
+COPY package*.json ./
 RUN npm install
 
 COPY . .
 
+ENV PLAYWRIGHT_BROWSERS_PATH=/root/.cache/ms-playwright
 RUN npx playwright install --with-deps chromium
 
 ENV PYTHONUNBUFFERED=1
