@@ -35,6 +35,10 @@ chromium.use(stealth);
   
   try {
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
+    
+    const frame = page.frameLocator('iframe[src*="challenges.cloudflare.com"]');
+    await frame.locator('label.cb-lb').click();
+
     await page.waitForTimeout(15000);
     await page.screenshot({ path: 'win.png', fullPage: true });
     console.log("Screenshot saved as win.png");
