@@ -20,6 +20,13 @@ chromium.use(stealth);
     isMobile: true
   });
 
+  await context.addCookies([{
+    name: 'cf_clearance',
+    value: '9eecd37eb482f97afc12372be3c5360d24697aa295aa9176bda4137e072922b8df32cf014058a7f46fe439c48732ffc4',
+    domain: '.stake.us',
+    path: '/'
+  }]);
+
   const page = await context.newPage();
   
   try {
