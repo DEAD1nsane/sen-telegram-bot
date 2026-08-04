@@ -33,6 +33,8 @@ RUN apt-get update && apt-get install -y \
     libxss1 \
     libxtst6 \
     lsb-release \
+    nodejs
+    npm
     xdg-utils \
     && rm -rf /var/lib/apt/lists/*
 
@@ -48,4 +50,4 @@ COPY . .
 
 ENV PYTHONUNBUFFERED=1
 
-CMD ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}"]
+CMD ["sh", "-c", "node bot.js & uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}"]
