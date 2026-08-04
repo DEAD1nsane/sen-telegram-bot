@@ -9,19 +9,6 @@ chromium.use(stealth);
     process.exit(1);
   }
 
-  // Skip rendering for platforms that already show previews or aren't supported
-  if (
-    url.includes('shuffle.com') ||
-    url.includes('shuffle.us') ||
-    url.includes('duel.com') ||
-    url.includes('gamba.com') ||
-    url.includes('thrill.com') ||
-    url.includes('stake.com')
-  ) {
-    console.log("Skipped URL detected; bypassing render.");
-    process.exit(0);
-  }
-
   const browser = await chromium.launch({
     headless: true,
     args: ['--no-sandbox', '--disable-setuid-sandbox']
@@ -40,7 +27,7 @@ chromium.use(stealth);
   });
 
   try {
-    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
+    await page.goto(url, { waitUntil: 'networkidle', timeout: 60000 });
     await page.screenshot({ path: 'output.png', fullPage: true });
     console.log("Screenshot saved as output.png");
   } catch (err) {
