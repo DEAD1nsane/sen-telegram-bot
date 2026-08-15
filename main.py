@@ -27,6 +27,8 @@ else:
 API_TOKEN = os.getenv("BOT_TOKEN")
 WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET")  # Optional header verification
 SEARXNG_URL = os.getenv("SEARXNG_URL", "https://searxng-railway-production-3252.up.railway.app/search")
+GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+SEARCH_ENGINE_ID = os.getenv("SEARCH_ENGINE_ID")
 
 bot = telebot.TeleBot(API_TOKEN)
 app = FastAPI()
@@ -75,11 +77,7 @@ async def free_web_search(query: str) -> str:
     return ""
 
 async def fetch_real_image_bytes(query: str):
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8"
-    }
-    
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
     clean_query = re.sub(
         r'\b(send|me|a|an|real|legit|actual|image|picture|photo|of|from|show|get)\b', 
         '', query, flags=re.IGNORECASE
@@ -87,59 +85,42 @@ async def fetch_real_image_bytes(query: str):
     if not clean_query:
         clean_query = query
 
-    # 1. Try DuckDuckGo Image Search API directly
-    try:
-        async with httpx.AsyncClient(follow_redirects=True, timeout=8.0) as client:
-            res = await client.get(f"https://duckduckgo.com/?q={urllib.parse.quote(clean_query)}", headers=headers)
-            vqd_match = re.search(r'vqd=(["\']?)([\d-]+)\1', res.text)
-            
-            if vqd_match:
-                vqd = vqd_match.group(2)
-                img_api = f"https://duckduckgo.com/i.js?l=wt-wt&o=json&q={urllib.parse.quote(clean_query)}&vqd={vqd}"
-                img_res = await client.get(img_api, headers=headers)
-                
-                if img_res.status_code == 200:
-                    results = img_res.json().get("results", [])
-                    for item in results[:5]:
-                        image_url = item.get("image")
-                        if image_url:
+    # 1. Google Custom Search API
+    if GOOGLE_API_KEY and SEARCH_ENGINE_ID:
+        try:
+            url = "https://www.googleapis.com/customsearch/v1"
+            params = {
+                "key": GOOGLE_API_KEY,
+                "cx": SEARCH_ENGINE_ID,
+                "q": clean_query,
+                "searchType": "image",
+                "num": 3
+            }
+            async with httpx.AsyncClient(follow_redirects=True, timeout=8.0) as client:
+                res = await client.get(url, params=params)
+                if res.status_code == 200:
+                    items = res.json().get("items", [])
+                    for item in items:
+                        img_url = item.get("link")
+                        if img_url:
                             try:
-                                download_res = await client.get(image_url, headers=headers, timeout=6.0)
-                                if download_res.status_code == 200 and len(download_res.content) > 5000:
-                                    return download_res.content
-                            except Exception:
-                                continue
-    except Exception as e:
-        print(f"DuckDuckGo image search error ({clean_query}): {e}")
+                                img_res = await client.get(img_url, headers=headers, timeout=6.0)
+                                if img_res.status_code == 200 and len(img_res.content) > 5000:
+                                    return img_res.content
+                            except Exception as dl_err:
+                                print(f"Failed downloading image from {img_url}: {dl_err}")
+        except Exception as e:
+            print(f"Google Image API error ({clean_query}): {e}")
 
-    # 2. Wikimedia Commons API Fallback
+    # 2. Unsplash Fallback
     try:
-        url = "https://commons.wikimedia.org/w/api.php"
-        params = {
-            "action": "query",
-            "generator": "search",
-            "gsrsearch": f"file:{clean_query}",
-            "gsrnamespace": 6,
-            "gsrlimit": 5,
-            "prop": "imageinfo",
-            "iiprop": "url",
-            "format": "json"
-        }
+        fallback_url = f"https://source.unsplash.com/1600x900/?{urllib.parse.quote(clean_query)}"
         async with httpx.AsyncClient(follow_redirects=True, timeout=8.0) as client:
-            res = await client.get(url, params=params, headers=headers)
-            if res.status_code == 200:
-                data = res.json()
-                pages = data.get("query", {}).get("pages", {})
-                for page_id, page_data in pages.items():
-                    image_info = page_data.get("imageinfo", [])
-                    if image_info and "url" in image_info[0]:
-                        img_url = image_info[0]["url"]
-                        if img_url.lower().endswith(('.jpg', '.jpeg', '.png', '.webp')):
-                            img_res = await client.get(img_url, headers=headers, timeout=8.0)
-                            if img_res.status_code == 200:
-                                return img_res.content
+            fallback_res = await client.get(fallback_url, headers=headers)
+            if fallback_res.status_code == 200 and len(fallback_res.content) > 5000:
+                return fallback_res.content
     except Exception as e:
-        print(f"Wikimedia fallback error ({clean_query}): {e}")
+        print(f"Unsplash fallback error ({clean_query}): {e}")
 
     return None
 
