@@ -75,21 +75,58 @@ async def free_web_search(query: str) -> str:
     return ""
 
 async def fetch_real_image_bytes(query: str):
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8"
+    }
+    
+    clean_query = re.sub(
+        r'\b(send|me|a|an|real|legit|actual|image|picture|photo|of|from|show|get)\b', 
+        '', query, flags=re.IGNORECASE
+    ).strip()
+    if not clean_query:
+        clean_query = query
+
+    # 1. Try DuckDuckGo Image Search API directly
+    try:
+        async with httpx.AsyncClient(follow_redirects=True, timeout=8.0) as client:
+            res = await client.get(f"https://duckduckgo.com/?q={urllib.parse.quote(clean_query)}", headers=headers)
+            vqd_match = re.search(r'vqd=(["\']?)([\d-]+)\1', res.text)
+            
+            if vqd_match:
+                vqd = vqd_match.group(2)
+                img_api = f"https://duckduckgo.com/i.js?l=wt-wt&o=json&q={urllib.parse.quote(clean_query)}&vqd={vqd}"
+                img_res = await client.get(img_api, headers=headers)
+                
+                if img_res.status_code == 200:
+                    results = img_res.json().get("results", [])
+                    for item in results[:5]:
+                        image_url = item.get("image")
+                        if image_url:
+                            try:
+                                download_res = await client.get(image_url, headers=headers, timeout=6.0)
+                                if download_res.status_code == 200 and len(download_res.content) > 5000:
+                                    return download_res.content
+                            except Exception:
+                                continue
+    except Exception as e:
+        print(f"DuckDuckGo image search error ({clean_query}): {e}")
+
+    # 2. Wikimedia Commons API Fallback
     try:
         url = "https://commons.wikimedia.org/w/api.php"
         params = {
             "action": "query",
             "generator": "search",
-            "gsrsearch": f"file:{query}",
+            "gsrsearch": f"file:{clean_query}",
             "gsrnamespace": 6,
             "gsrlimit": 5,
             "prop": "imageinfo",
             "iiprop": "url",
             "format": "json"
         }
-        async with httpx.AsyncClient(follow_redirects=True) as client:
-            res = await client.get(url, params=params, headers=headers, timeout=8.0)
+        async with httpx.AsyncClient(follow_redirects=True, timeout=8.0) as client:
+            res = await client.get(url, params=params, headers=headers)
             if res.status_code == 200:
                 data = res.json()
                 pages = data.get("query", {}).get("pages", {})
@@ -98,22 +135,11 @@ async def fetch_real_image_bytes(query: str):
                     if image_info and "url" in image_info[0]:
                         img_url = image_info[0]["url"]
                         if img_url.lower().endswith(('.jpg', '.jpeg', '.png', '.webp')):
-                            # Stream download bytes directly to bypass Telegram URL blocks
-                            img_res = await client.get(img_url, headers=headers, timeout=10.0)
+                            img_res = await client.get(img_url, headers=headers, timeout=8.0)
                             if img_res.status_code == 200:
                                 return img_res.content
     except Exception as e:
-        print(f"Wikimedia image search error ({query}): {e}")
-
-    # Fallback download from Unsplash
-    try:
-        fallback_url = f"https://source.unsplash.com/1600x900/?{urllib.parse.quote(query)}"
-        async with httpx.AsyncClient(follow_redirects=True) as client:
-            img_res = await client.get(fallback_url, headers=headers, timeout=10.0)
-            if img_res.status_code == 200:
-                return img_res.content
-    except Exception as e:
-        print(f"Unsplash fallback error ({query}): {e}")
+        print(f"Wikimedia fallback error ({clean_query}): {e}")
 
     return None
 
@@ -121,14 +147,7 @@ async def send_web_image(chat_id, msg_id, prompt, is_private):
     try:
         kwargs = {"reply_to_message_id": msg_id} if not is_private else {}
         
-        clean_query = re.sub(
-            r'\b(send|me|a|an|real|legit|actual|image|picture|photo|of|from)\b', 
-            '', prompt, flags=re.IGNORECASE
-        ).strip()
-        if not clean_query:
-            clean_query = prompt
-
-        image_bytes = await fetch_real_image_bytes(clean_query)
+        image_bytes = await fetch_real_image_bytes(prompt)
         if image_bytes:
             image_stream = io.BytesIO(image_bytes)
             image_stream.name = "image.jpg"
@@ -142,7 +161,7 @@ async def send_web_image(chat_id, msg_id, prompt, is_private):
                 else:
                     raise e
         else:
-            bot.send_message(chat_id, "Couldn't find an image for that.")
+            bot.send_message(chat_id, "Couldn't find a real image for that.")
     except Exception as err:
         print(f"Error sending web image: {err}")
 
