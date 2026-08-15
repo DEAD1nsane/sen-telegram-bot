@@ -1,6 +1,7 @@
 import re
 import os
 import requests
+from datetime import datetime
 from fastapi import FastAPI, Request, Response
 import telebot
 import redis
@@ -226,11 +227,13 @@ async def handle_webhook(request: Request):
                         if context_parts:
                             final_prompt = "\n\n".join(context_parts) + f"\n\nUser Question: {clean_prompt}"
 
+                        today_str = datetime.now().strftime("%A, %B %d, %Y")
+
                         response = gemini_client.models.generate_content(
                             model='gemini-3.1-flash-lite',
                             contents=final_prompt,
                             config=types.GenerateContentConfig(
-                                system_instruction="Use the web search context and saved memories provided if relevant. Do not use markdown formatting such as bold (**), headers (#), or italics (*). Return plain text only."
+                                system_instruction=f"Today's date is {today_str}. Use the web search context and saved memories provided if relevant. Do not use markdown formatting such as bold (**), headers (#), or italics (*). Return plain text only."
                             )
                         )
                         raw_text = response.text or ""
