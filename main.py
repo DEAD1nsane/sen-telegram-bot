@@ -74,8 +74,8 @@ async def free_web_search(query: str) -> str:
 
     return ""
 
-async def fetch_real_image_url(query: str) -> str:
-    headers = {"User-Agent": "TelegramBot/1.0 (contact@example.com)"}
+async def fetch_real_image_bytes(query: str):
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
     try:
         url = "https://commons.wikimedia.org/w/api.php"
         params = {
@@ -88,7 +88,7 @@ async def fetch_real_image_url(query: str) -> str:
             "iiprop": "url",
             "format": "json"
         }
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(follow_redirects=True) as client:
             res = await client.get(url, params=params, headers=headers, timeout=8.0)
             if res.status_code == 200:
                 data = res.json()
@@ -98,11 +98,24 @@ async def fetch_real_image_url(query: str) -> str:
                     if image_info and "url" in image_info[0]:
                         img_url = image_info[0]["url"]
                         if img_url.lower().endswith(('.jpg', '.jpeg', '.png', '.webp')):
-                            return img_url
+                            # Stream download bytes directly to bypass Telegram URL blocks
+                            img_res = await client.get(img_url, headers=headers, timeout=10.0)
+                            if img_res.status_code == 200:
+                                return img_res.content
     except Exception as e:
         print(f"Wikimedia image search error ({query}): {e}")
 
-    return f"https://source.unsplash.com/1600x900/?{urllib.parse.quote(query)}"
+    # Fallback download from Unsplash
+    try:
+        fallback_url = f"https://source.unsplash.com/1600x900/?{urllib.parse.quote(query)}"
+        async with httpx.AsyncClient(follow_redirects=True) as client:
+            img_res = await client.get(fallback_url, headers=headers, timeout=10.0)
+            if img_res.status_code == 200:
+                return img_res.content
+    except Exception as e:
+        print(f"Unsplash fallback error ({query}): {e}")
+
+    return None
 
 async def send_web_image(chat_id, msg_id, prompt, is_private):
     try:
@@ -115,14 +128,17 @@ async def send_web_image(chat_id, msg_id, prompt, is_private):
         if not clean_query:
             clean_query = prompt
 
-        image_url = await fetch_real_image_url(clean_query)
-        if image_url:
+        image_bytes = await fetch_real_image_bytes(clean_query)
+        if image_bytes:
+            image_stream = io.BytesIO(image_bytes)
+            image_stream.name = "image.jpg"
             try:
-                bot.send_photo(chat_id, image_url, **kwargs)
+                bot.send_photo(chat_id, image_stream, **kwargs)
             except telebot.apihelper.ApiTelegramException as e:
                 if "message to be replied not found" in str(e).lower():
                     kwargs.pop("reply_to_message_id", None)
-                    bot.send_photo(chat_id, image_url, **kwargs)
+                    image_stream.seek(0)
+                    bot.send_photo(chat_id, image_stream, **kwargs)
                 else:
                     raise e
         else:
