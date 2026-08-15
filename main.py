@@ -191,8 +191,8 @@ async def handle_webhook(
                 bot.send_message(chat_id, msg_text) if is_private else bot.reply_to(update.message, msg_text)
                 return Response(status_code=200)
 
-            # Image generation trigger
-            if clean_prompt.lower().startswith(("image of ", "picture of ", "draw ", "generate ")):
+            # Flexible regex image trigger
+            if re.search(r'\b(image|picture|photo|draw|generate)\b', clean_prompt, re.IGNORECASE):
                 background_tasks.add_task(generate_and_send_image, chat_id, msg_id, clean_prompt, is_private)
                 return Response(status_code=200)
 
