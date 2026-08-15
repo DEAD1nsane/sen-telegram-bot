@@ -1,7 +1,7 @@
 import os
 import re
 from datetime import datetime
-from fastapi import FastAPI, Request, Response, Header, HTTPException
+from fastapi import FastAPI, Request, Response, Header, HTTPException, BackgroundTasks
 import telebot
 import redis
 import httpx
@@ -23,7 +23,7 @@ else:
     redis_client = redis.from_url(redis_url)
 
 API_TOKEN = os.getenv("BOT_TOKEN")
-WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "super-secret-token")
+WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET")  # Optional header verification
 SEARXNG_URL = os.getenv("SEARXNG_URL", "https://searxng-railway-production-3252.up.railway.app/search")
 
 bot = telebot.TeleBot(API_TOKEN)
@@ -77,7 +77,11 @@ def home_check():
     return {"status": "ok", "message": "Bot webhook server is running."}
 
 @app.post("/webhook")
-async def handle_webhook(request: Request, x_telegram_bot_api_secret_token: str = Header(None)):
+async def handle_webhook(
+    request: Request, 
+    background_tasks: BackgroundTasks, 
+    x_telegram_bot_api_secret_token: str = Header(None)
+):
     if WEBHOOK_SECRET and x_telegram_bot_api_secret_token != WEBHOOK_SECRET:
         raise HTTPException(status_code=403, detail="Unauthorized webhook source")
 
@@ -191,11 +195,11 @@ async def handle_webhook(request: Request, x_telegram_bot_api_secret_token: str 
                     bot.send_message(chat_id, error_text) if is_private else bot.send_message(chat_id, error_text, reply_to_message_id=msg_id)
             return Response(status_code=200)
 
-        # Audio Track Trigger Logic
+        # Audio Track Trigger Logic via Background Tasks
         if re.search(r'\bsen\b', text, re.IGNORECASE):
-            send_audio_track(chat_id, msg_id, "sen", "Devin_The_Dude_Anythang.mp3", "Anythang", "Devin The Dude", is_private)
+            background_tasks.add_task(send_audio_track, chat_id, msg_id, "sen", "Devin_The_Dude_Anythang.mp3", "Anythang", "Devin The Dude", is_private)
         if re.search(r'\bmagic(?:al)?\b', text, re.IGNORECASE):
-            send_audio_track(chat_id, msg_id, "magic", "Do You Believe In Magic.mp3", "Do You Believe In Magic", "The Lovin' Spoonful", is_private)
+            background_tasks.add_task(send_audio_track, chat_id, msg_id, "magic", "Do You Believe In Magic.mp3", "Do You Believe In Magic", "The Lovin' Spoonful", is_private)
 
         return Response(status_code=200)
     except Exception as e:
@@ -231,4 +235,5 @@ def send_audio_track(chat_id, msg_id, key, file_path, title, performer, is_priva
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))
+    port = int(os.environ.get("PORT", 8080))
+    uvicorn.run("main:app", host="0.0.0.0", port=port)
