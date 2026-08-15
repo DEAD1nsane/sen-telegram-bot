@@ -1,7 +1,5 @@
 import os
 import re
-import io
-import urllib.parse
 from datetime import datetime
 from fastapi import FastAPI, Request, Response, Header, HTTPException, BackgroundTasks
 import telebot
@@ -27,8 +25,6 @@ else:
 API_TOKEN = os.getenv("BOT_TOKEN")
 WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET")  # Optional header verification
 SEARXNG_URL = os.getenv("SEARXNG_URL", "https://searxng-railway-production-3252.up.railway.app/search")
-GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
-SEARCH_ENGINE_ID = os.getenv("SEARCH_ENGINE_ID")
 
 bot = telebot.TeleBot(API_TOKEN)
 app = FastAPI()
@@ -75,119 +71,6 @@ async def free_web_search(query: str) -> str:
         print(f"DuckDuckGo fallback search error: {e}")
 
     return ""
-
-async def fetch_real_image_bytes(query: str):
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
-    }
-    clean_query = re.sub(
-        r'\b(send|me|a|an|real|legit|actual|image|picture|photo|of|from|show|get)\b', 
-        '', query, flags=re.IGNORECASE
-    ).strip()
-    if not clean_query:
-        clean_query = query
-
-    # 1. Google Custom Search API (If variables set)
-    if GOOGLE_API_KEY and SEARCH_ENGINE_ID:
-        try:
-            url = "https://www.googleapis.com/customsearch/v1"
-            params = {
-                "key": GOOGLE_API_KEY,
-                "cx": SEARCH_ENGINE_ID,
-                "q": clean_query,
-                "searchType": "image",
-                "num": 3
-            }
-            async with httpx.AsyncClient(follow_redirects=True, timeout=8.0) as client:
-                res = await client.get(url, params=params)
-                if res.status_code == 200:
-                    items = res.json().get("items", [])
-                    for item in items:
-                        img_url = item.get("link")
-                        if img_url:
-                            try:
-                                img_res = await client.get(img_url, headers=headers, timeout=6.0)
-                                if img_res.status_code == 200 and len(img_res.content) > 5000:
-                                    return img_res.content
-                            except Exception as dl_err:
-                                print(f"Failed downloading image from {img_url}: {dl_err}")
-        except Exception as e:
-            print(f"Google Image API error ({clean_query}): {e}")
-
-    # 2. Resilient Direct DDG Image Search Scraper
-    try:
-        async with httpx.AsyncClient(follow_redirects=True, timeout=10.0) as client:
-            res = await client.post("https://html.duckduckgo.com/html/", data={"q": clean_query}, headers=headers)
-            vqd_match = re.search(r'vqd=["\']?([\d-]+)', res.text)
-            
-            if vqd_match:
-                vqd = vqd_match.group(1)
-                img_url = f"https://duckduckgo.com/i.js?l=wt-wt&o=json&q={urllib.parse.quote(clean_query)}&vqd={vqd}"
-                img_res = await client.get(img_url, headers=headers)
-                if img_res.status_code == 200:
-                    results = img_res.json().get("results", [])
-                    for target in results[:5]:
-                        direct_link = target.get("image")
-                        if direct_link:
-                            try:
-                                dl = await client.get(direct_link, headers=headers, timeout=6.0)
-                                if dl.status_code == 200 and len(dl.content) > 5000:
-                                    return dl.content
-                            except Exception:
-                                continue
-    except Exception as e:
-        print(f"DDG scraping failed ({clean_query}): {e}")
-
-    # 3. Direct Wikimedia Search Stream Fallback
-    try:
-        url = "https://commons.wikimedia.org/w/api.php"
-        params = {
-            "action": "query",
-            "generator": "search",
-            "gsrsearch": f"{clean_query}",
-            "gsrlimit": 5,
-            "prop": "imageinfo",
-            "iiprop": "url",
-            "format": "json"
-        }
-        async with httpx.AsyncClient(follow_redirects=True, timeout=8.0) as client:
-            res = await client.get(url, params=params, headers=headers)
-            if res.status_code == 200:
-                pages = res.json().get("query", {}).get("pages", {})
-                for p in pages.values():
-                    info = p.get("imageinfo", [])
-                    if info and "url" in info[0]:
-                        target_url = info[0]["url"]
-                        if target_url.lower().endswith(('.jpg', '.jpeg', '.png', '.webp')):
-                            dl = await client.get(target_url, headers=headers, timeout=6.0)
-                            if dl.status_code == 200:
-                                return dl.content
-    except Exception as e:
-        print(f"Wikimedia fallback error ({clean_query}): {e}")
-
-    return None
-
-async def send_web_image(chat_id, msg_id, prompt, is_private):
-    try:
-        kwargs = {"reply_to_message_id": msg_id} if not is_private else {}
-        
-        image_bytes = await fetch_real_image_bytes(prompt)
-        if image_bytes:
-            image_stream = io.BytesIO(image_bytes)
-            image_stream.name = "image.jpg"
-            try:
-                bot.send_photo(chat_id, image_stream, **kwargs)
-            except telebot.apihelper.ApiTelegramException as e:
-                if "message to be replied not found" in str(e).lower():
-                    kwargs.pop("reply_to_message_id", None)
-                    image_stream.seek(0)
-                    bot.send_photo(chat_id, image_stream, **kwargs)
-                else:
-                    raise e
-        else:
-            bot.send_message(chat_id, "Couldn't find a real image for that.")
-    except Exception as err:
-        print(f"Error sending web image: {err}")
 
 @app.get("/")
 def home_check():
@@ -272,11 +155,6 @@ async def handle_webhook(
                             print(f"Redis memory save error: {r_err}")
                 msg_text = "Got it, I've added those items to your memory list."
                 bot.send_message(chat_id, msg_text) if is_private else bot.reply_to(update.message, msg_text)
-                return Response(status_code=200)
-
-            # Real Image Web Search Trigger
-            if re.search(r'\b(image|picture|photo)\b', clean_prompt, re.IGNORECASE):
-                background_tasks.add_task(send_web_image, chat_id, msg_id, clean_prompt, is_private)
                 return Response(status_code=200)
 
             if clean_prompt:
