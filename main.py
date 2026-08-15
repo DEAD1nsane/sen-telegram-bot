@@ -1,7 +1,6 @@
 import re
 import os
 import requests
-import subprocess
 from fastapi import FastAPI, Request, Response
 import telebot
 import redis
@@ -51,27 +50,6 @@ def free_web_search(query: str) -> str:
         print(f"Search fetch error: {e}")
     return ""
 
-def trigger_win_screenshot(url: str, chat_id: int, msg_id: int, is_private: bool):
-    try:
-        result = subprocess.run(
-            ["node", "render.js", url],
-            capture_output=True,
-            text=True,
-            timeout=60
-        )
-        if result.returncode != 0:
-            print(f"Node script error: {result.stderr}")
-
-        if os.path.exists("win.png"):
-            kwargs = {"timeout": 60}
-            if not is_private:
-                kwargs["reply_to_message_id"] = msg_id
-
-            with open("win.png", "rb") as photo:
-                bot.send_photo(chat_id, photo, **kwargs)
-    except Exception as e:
-        print(f"Error capturing/sending win screenshot: {e}")
-
 
 @app.get("/")
 def home_check():
@@ -92,21 +70,6 @@ async def handle_webhook(request: Request):
         
         if update and update.message:
             text = update.message.text or ""
-            
-            target_domains = ['stake.us', 'stake.com', 'shuffle.us', 'shuffle.com', 'gamba.com', 'thrill.com', 'duel.com']
-            is_match = any(domain in text.lower() for domain in target_domains) and any(kw in text.lower() for kw in ['modal=', 'bet', 'ref='])
-            
-            if is_match:
-                print(f"Matched win URL: {text}")
-                chat_id = update.message.chat.id
-                msg_id = update.message.message_id
-                is_private = update.message.chat.type == "private"
-                url_match = re.search(r'https?://[^\s]+', text)
-                if url_match:
-                    target_url = url_match.group(0)
-                    trigger_win_screenshot(target_url, chat_id, msg_id, is_private)
-                    return Response(status_code=200)
-
             user_id = update.message.from_user.id
             user_id_str = str(user_id)
             chat_id = update.message.chat.id

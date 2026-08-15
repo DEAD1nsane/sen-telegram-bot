@@ -29,5 +29,3 @@ uvicorn==0.51.0
 yarl==1.24.5
 google-genai
 redis
-playwright
-

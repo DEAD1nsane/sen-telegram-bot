@@ -1,7 +1,25 @@
+# Byte-compiled / optimized / DLL files
 __pycache__/
-*.pyc
-.env
+*.py[cod]
+*$py.class
+
+# Virtual environments
 venv/
+env/
+ENV/
+
+# Environment variables & secrets
+.env
+.env.*
+
+# Database files
 *.db
 *.sqlite3
-.env
+
+# Node / JS artifacts (if any remain)
+node_modules/
+npm-debug.log*
+
+# OS specific files
+.DS_Store
+Thumbs.db
