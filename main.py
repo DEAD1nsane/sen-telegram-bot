@@ -75,32 +75,43 @@ async def free_web_search(query: str) -> str:
     return ""
 
 async def fetch_real_image_url(query: str) -> str:
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+    headers = {"User-Agent": "TelegramBot/1.0 (contact@example.com)"}
     try:
+        url = "https://commons.wikimedia.org/w/api.php"
+        params = {
+            "action": "query",
+            "generator": "search",
+            "gsrsearch": f"file:{query}",
+            "gsrnamespace": 6,
+            "gsrlimit": 5,
+            "prop": "imageinfo",
+            "iiprop": "url",
+            "format": "json"
+        }
         async with httpx.AsyncClient() as client:
-            # Step 1: Obtain vqd token from DDG
-            res = await client.post("https://html.duckduckgo.com/html/", data={"q": query}, headers=headers, timeout=5.0)
-            vqd = re.search(r'vqd=([\d-]+)', res.text)
-            if not vqd:
-                return ""
-            
-            # Step 2: Fetch real image results JSON
-            img_url = f"https://duckduckgo.com/i.js?l=us-en&o=json&q={urllib.parse.quote(query)}&vqd={vqd.group(1)}"
-            res_img = await client.get(img_url, headers=headers, timeout=5.0)
-            data = res_img.json()
-            results = data.get("results", [])
-            if results and "image" in results[0]:
-                return results[0]["image"]
+            res = await client.get(url, params=params, headers=headers, timeout=8.0)
+            if res.status_code == 200:
+                data = res.json()
+                pages = data.get("query", {}).get("pages", {})
+                for page_id, page_data in pages.items():
+                    image_info = page_data.get("imageinfo", [])
+                    if image_info and "url" in image_info[0]:
+                        img_url = image_info[0]["url"]
+                        if img_url.lower().endswith(('.jpg', '.jpeg', '.png', '.webp')):
+                            return img_url
     except Exception as e:
-        print(f"Image search error ({query}): {e}")
-    return ""
+        print(f"Wikimedia image search error ({query}): {e}")
+
+    return f"https://source.unsplash.com/1600x900/?{urllib.parse.quote(query)}"
 
 async def send_web_image(chat_id, msg_id, prompt, is_private):
     try:
         kwargs = {"reply_to_message_id": msg_id} if not is_private else {}
         
-        # Clean filler words to extract core query
-        clean_query = re.sub(r'\b(send|me|a|real|legit|actual|image|picture|photo|of|from)\b', '', prompt, flags=re.IGNORECASE).strip()
+        clean_query = re.sub(
+            r'\b(send|me|a|an|real|legit|actual|image|picture|photo|of|from)\b', 
+            '', prompt, flags=re.IGNORECASE
+        ).strip()
         if not clean_query:
             clean_query = prompt
 
@@ -115,7 +126,7 @@ async def send_web_image(chat_id, msg_id, prompt, is_private):
                 else:
                     raise e
         else:
-            bot.send_message(chat_id, "Couldn't find a real image for that.")
+            bot.send_message(chat_id, "Couldn't find an image for that.")
     except Exception as err:
         print(f"Error sending web image: {err}")
 
