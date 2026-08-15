@@ -16,10 +16,16 @@ if not redis_url:
     password = os.environ.get("REDISPASSWORD", "")
     redis_url = f"redis://default:{password}@{host}:{port}" if password else f"redis://{host}:{port}"
 
-redis_client = redis.from_url(redis_url)
+# Handle SSL for Upstash rediss:// URLs
+if redis_url.startswith("rediss://"):
+    redis_client = redis.from_url(redis_url, ssl_cert_reqs=None)
+else:
+    redis_client = redis.from_url(redis_url)
 
 API_TOKEN = os.getenv("BOT_TOKEN")
 WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "super-secret-token")
+SEARXNG_URL = os.getenv("SEARXNG_URL", "https://searxng-railway-production-3252.up.railway.app/search")
+
 bot = telebot.TeleBot(API_TOKEN)
 app = FastAPI()
 
@@ -33,17 +39,37 @@ gemini_client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 OWNER_ID = int(os.getenv("OWNER_ID", "0"))
 
 async def free_web_search(query: str) -> str:
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+    
+    # 1. Try SearXNG Primary
     try:
-        url = "https://html.duckduckgo.com/html/"
-        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+        params = {"q": query, "format": "json"}
         async with httpx.AsyncClient() as client:
-            res = await client.post(url, data={"q": query}, headers=headers, timeout=10.0)
-            snippets = re.findall(r'<a class="result__snippet[^">]*>(.*?)</a>', res.text, re.DOTALL)
-            clean_snippets = [re.sub(r'<[^>]+>', '', s).strip() for s in snippets[:3]]
+            res = await client.get(SEARXNG_URL, params=params, headers=headers, timeout=8.0)
+            if res.status_code == 200:
+                data = res.json()
+                results = data.get("results", [])[:3]
+                snippets = [
+                    f"{item.get('title', '').strip()}: {item.get('content', '').strip()}"
+                    for item in results if item.get('title') or item.get('content')
+                ]
+                if snippets:
+                    return "\n".join(snippets)
+    except Exception as e:
+        print(f"SearXNG search error, trying fallback: {e}")
+
+    # 2. Fallback to DuckDuckGo HTML
+    try:
+        ddg_url = "https://html.duckduckgo.com/html/"
+        async with httpx.AsyncClient() as client:
+            res = await client.post(ddg_url, data={"q": query}, headers=headers, timeout=8.0)
+            raw_snippets = re.findall(r'<a class="result__snippet[^">]*>(.*?)</a>', res.text, re.DOTALL)
+            clean_snippets = [re.sub(r'<[^>]+>', '', s).strip() for s in raw_snippets[:3] if s.strip()]
             if clean_snippets:
                 return "\n".join(clean_snippets)
     except Exception as e:
-        print(f"Search fetch error: {e}")
+        print(f"DuckDuckGo fallback search error: {e}")
+
     return ""
 
 @app.get("/")
@@ -99,7 +125,6 @@ async def handle_webhook(request: Request, x_telegram_bot_api_secret_token: str 
 
             normalized_prompt = clean_prompt.rstrip("?").lower()
             if normalized_prompt in ["help", "how do you remember", "commands"]:
-                bot_uname_str = BOT_INFO.username if BOT_INFO else "SenAnythangBot"
                 help_text = (
                     "Remember rule:\n"
                     "  remember [item, item2] - adds items to memory list.\n\n"
@@ -120,15 +145,24 @@ async def handle_webhook(request: Request, x_telegram_bot_api_secret_token: str 
                 if raw_content:
                     parts = [p.strip()[:200] for p in raw_content.split(",") if p.strip()]
                     for part in parts[:10]:
-                        redis_client.rpush(f"memory_list:{user_id_str}", part)
+                        try:
+                            redis_client.rpush(f"memory_list:{user_id_str}", part)
+                        except Exception as r_err:
+                            print(f"Redis memory save error: {r_err}")
                 msg_text = "Got it, I've added those items to your memory list."
                 bot.send_message(chat_id, msg_text) if is_private else bot.reply_to(update.message, msg_text)
                 return Response(status_code=200)
 
             if clean_prompt:
                 try:
-                    raw_items = redis_client.lrange(f"memory_list:{user_id_str}", 0, -1)
-                    saved_facts = [item.decode('utf-8') for item in raw_items] if raw_items else []
+                    saved_facts = []
+                    try:
+                        raw_items = redis_client.lrange(f"memory_list:{user_id_str}", 0, -1)
+                        if raw_items:
+                            saved_facts = [item.decode('utf-8') for item in raw_items]
+                    except Exception as r_err:
+                        print(f"Redis memory fetch error: {r_err}")
+
                     search_context = await free_web_search(clean_prompt)
                     
                     context_parts = []
@@ -174,14 +208,24 @@ def send_audio_track(chat_id, msg_id, key, file_path, title, performer, is_priva
         if not is_private:
             kwargs["reply_to_message_id"] = msg_id
             
-        cached_id = redis_client.get(f"audio_cache:{key}")
+        cached_id = None
+        try:
+            cached_id = redis_client.get(f"audio_cache:{key}")
+        except Exception as cache_err:
+            print(f"Redis cache fetch error ({key}): {cache_err}")
+
         if cached_id:
             bot.send_audio(chat_id, cached_id.decode('utf-8'), **kwargs)
         else:
             if os.path.exists(file_path):
                 with open(file_path, "rb") as audio:
                     msg = bot.send_audio(chat_id, audio, **kwargs)
-                    redis_client.set(f"audio_cache:{key}", msg.audio.file_id)
+                    try:
+                        redis_client.set(f"audio_cache:{key}", msg.audio.file_id)
+                    except Exception as set_err:
+                        print(f"Redis cache set error ({key}): {set_err}")
+            else:
+                print(f"Audio file not found at path: {file_path}")
     except Exception as send_err:
         print(f"Error sending audio ({key}): {send_err}")
 
