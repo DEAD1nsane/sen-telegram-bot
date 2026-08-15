@@ -72,6 +72,18 @@ async def free_web_search(query: str) -> str:
 
     return ""
 
+def get_formatted_memories(user_id_str: str) -> str:
+    try:
+        raw_items = redis_client.lrange(f"memory_list:{user_id_str}", 0, -1)
+        if not raw_items:
+            return "Your memory list is currently empty."
+        memories = [item.decode('utf-8') for item in raw_items]
+        formatted_list = "\n".join(f"{i+1}. {mem}" for i, mem in enumerate(memories))
+        return f"Here is what I remember for you:\n\n{formatted_list}"
+    except Exception as e:
+        print(f"Error fetching memory list format: {e}")
+        return "Could not retrieve memory list."
+
 @app.get("/")
 def home_check():
     return {"status": "ok", "message": "Bot webhook server is running."}
@@ -146,17 +158,7 @@ async def handle_webhook(
 
             # 1. Display Memories
             if normalized_prompt in ["what do you remember", "how do you remember"]:
-                try:
-                    raw_items = redis_client.lrange(f"memory_list:{user_id_str}", 0, -1)
-                    if not raw_items:
-                        msg_text = "I don't have any saved memories for you right now."
-                    else:
-                        memories = [item.decode('utf-8') for item in raw_items]
-                        formatted_list = "\n".join(f"{i+1}. {mem}" for i, mem in enumerate(memories))
-                        msg_text = f"Here is what I remember for you:\n\n{formatted_list}"
-                except Exception as r_err:
-                    print(f"Redis memory read error: {r_err}")
-                    msg_text = "Sorry, I couldn't access memory storage right now."
+                msg_text = get_formatted_memories(user_id_str)
                 bot.send_message(chat_id, msg_text) if is_private else bot.reply_to(update.message, msg_text)
                 return Response(status_code=200)
 
@@ -170,7 +172,7 @@ async def handle_webhook(
                             redis_client.rpush(f"memory_list:{user_id_str}", part)
                         except Exception as r_err:
                             print(f"Redis memory save error: {r_err}")
-                msg_text = "Got it, I've added those items to your memory list."
+                msg_text = get_formatted_memories(user_id_str)
                 bot.send_message(chat_id, msg_text) if is_private else bot.reply_to(update.message, msg_text)
                 return Response(status_code=200)
 
@@ -184,9 +186,9 @@ async def handle_webhook(
                         raw_items = redis_client.lrange(f"memory_list:{user_id_str}", 0, -1)
                         if 0 <= idx < len(raw_items):
                             redis_client.lset(f"memory_list:{user_id_str}", idx, new_val)
-                            msg_text = f"Updated memory #{idx+1}."
+                            msg_text = get_formatted_memories(user_id_str)
                         else:
-                            msg_text = "Invalid memory number."
+                            msg_text = "Invalid memory number.\n\n" + get_formatted_memories(user_id_str)
                     except Exception as r_err:
                         print(f"Redis edit error: {r_err}")
                         msg_text = "Error updating memory."
@@ -214,16 +216,15 @@ async def handle_webhook(
                     raw_items = redis_client.lrange(f"memory_list:{user_id_str}", 0, -1)
                     if raw_items and indices:
                         memories = [item.decode('utf-8') for item in raw_items]
-                        # Remove specified indices safely from highest to lowest
                         for i in sorted(set(indices), reverse=True):
                             if 0 <= i < len(memories):
                                 memories.pop(i)
                         redis_client.delete(f"memory_list:{user_id_str}")
                         for m in memories:
                             redis_client.rpush(f"memory_list:{user_id_str}", m)
-                        msg_text = "Updated memory list."
+                        msg_text = get_formatted_memories(user_id_str)
                     else:
-                        msg_text = "No valid memory numbers specified."
+                        msg_text = "No valid memory numbers specified.\n\n" + get_formatted_memories(user_id_str)
                 except Exception as r_err:
                     print(f"Redis forget error: {r_err}")
                     msg_text = "Error removing memory."
