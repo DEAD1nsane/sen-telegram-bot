@@ -1,6 +1,7 @@
 import os
 import re
 import io
+import urllib.parse
 from datetime import datetime
 from fastapi import FastAPI, Request, Response, Header, HTTPException, BackgroundTasks
 import telebot
@@ -77,32 +78,45 @@ def generate_and_send_image(chat_id, msg_id, prompt, is_private):
     try:
         kwargs = {"reply_to_message_id": msg_id} if not is_private else {}
         
-        result = gemini_client.models.generate_images(
-            model='imagen-3.0-generate-002',
-            prompt=prompt,
-            config=types.GenerateImagesConfig(
-                number_of_images=1,
-                aspect_ratio="1:1"
-            )
-        )
-        
-        for generated_image in result.generated_images:
-            image_bytes = generated_image.image.image_bytes
-            image_stream = io.BytesIO(image_bytes)
-            image_stream.name = "generated_image.png"
-            
+        # Helper to execute photo send with reply fallback
+        def attempt_send_photo(photo_payload):
             try:
-                bot.send_photo(chat_id, image_stream, **kwargs)
+                return bot.send_photo(chat_id, photo_payload, **kwargs)
             except telebot.apihelper.ApiTelegramException as e:
                 if "message to be replied not found" in str(e).lower():
                     kwargs.pop("reply_to_message_id", None)
-                    image_stream.seek(0)
-                    bot.send_photo(chat_id, image_stream, **kwargs)
-                else:
-                    raise e
-            return
+                    if isinstance(photo_payload, io.BytesIO):
+                        photo_payload.seek(0)
+                    return bot.send_photo(chat_id, photo_payload, **kwargs)
+                raise e
+
+        # 1. Try Imagen 3
+        try:
+            result = gemini_client.models.generate_images(
+                model='imagen-3.0-generate-001',
+                prompt=prompt,
+                config=types.GenerateImagesConfig(
+                    number_of_images=1,
+                    aspect_ratio="1:1"
+                )
+            )
+            
+            for generated_image in result.generated_images:
+                image_bytes = generated_image.image.image_bytes
+                image_stream = io.BytesIO(image_bytes)
+                image_stream.name = "generated_image.png"
+                attempt_send_photo(image_stream)
+                return
+        except Exception as gen_err:
+            print(f"Gemini image generation failed, using fallback: {gen_err}")
+
+        # 2. Free Fallback Image Generation API
+        encoded_prompt = urllib.parse.quote(prompt)
+        image_url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?width=1024&height=1024&nologo=true"
+        attempt_send_photo(image_url)
+
     except Exception as img_err:
-        print(f"Error generating image ({prompt}): {img_err}")
+        print(f"Error generating/sending image ({prompt}): {img_err}")
         err_msg = "Sorry, I couldn't generate that image right now."
         bot.send_message(chat_id, err_msg) if is_private else bot.reply_to(msg_id, err_msg)
 
