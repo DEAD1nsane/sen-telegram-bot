@@ -1,5 +1,6 @@
 import os
 import re
+import io
 from datetime import datetime
 from fastapi import FastAPI, Request, Response, Header, HTTPException, BackgroundTasks
 import telebot
@@ -71,6 +72,39 @@ async def free_web_search(query: str) -> str:
         print(f"DuckDuckGo fallback search error: {e}")
 
     return ""
+
+def generate_and_send_image(chat_id, msg_id, prompt, is_private):
+    try:
+        kwargs = {"reply_to_message_id": msg_id} if not is_private else {}
+        
+        result = gemini_client.models.generate_images(
+            model='imagen-3.0-generate-002',
+            prompt=prompt,
+            config=types.GenerateImagesConfig(
+                number_of_images=1,
+                aspect_ratio="1:1"
+            )
+        )
+        
+        for generated_image in result.generated_images:
+            image_bytes = generated_image.image.image_bytes
+            image_stream = io.BytesIO(image_bytes)
+            image_stream.name = "generated_image.png"
+            
+            try:
+                bot.send_photo(chat_id, image_stream, **kwargs)
+            except telebot.apihelper.ApiTelegramException as e:
+                if "message to be replied not found" in str(e).lower():
+                    kwargs.pop("reply_to_message_id", None)
+                    image_stream.seek(0)
+                    bot.send_photo(chat_id, image_stream, **kwargs)
+                else:
+                    raise e
+            return
+    except Exception as img_err:
+        print(f"Error generating image ({prompt}): {img_err}")
+        err_msg = "Sorry, I couldn't generate that image right now."
+        bot.send_message(chat_id, err_msg) if is_private else bot.reply_to(msg_id, err_msg)
 
 @app.get("/")
 def home_check():
@@ -157,6 +191,11 @@ async def handle_webhook(
                 bot.send_message(chat_id, msg_text) if is_private else bot.reply_to(update.message, msg_text)
                 return Response(status_code=200)
 
+            # Image generation trigger
+            if clean_prompt.lower().startswith(("image of ", "picture of ", "draw ", "generate ")):
+                background_tasks.add_task(generate_and_send_image, chat_id, msg_id, clean_prompt, is_private)
+                return Response(status_code=200)
+
             if clean_prompt:
                 try:
                     saved_facts = []
@@ -218,12 +257,21 @@ def send_audio_track(chat_id, msg_id, key, file_path, title, performer, is_priva
         except Exception as cache_err:
             print(f"Redis cache fetch error ({key}): {cache_err}")
 
+        def attempt_send(audio_payload):
+            try:
+                return bot.send_audio(chat_id, audio_payload, **kwargs)
+            except telebot.apihelper.ApiTelegramException as e:
+                if "message to be replied not found" in str(e).lower():
+                    kwargs.pop("reply_to_message_id", None)
+                    return bot.send_audio(chat_id, audio_payload, **kwargs)
+                raise e
+
         if cached_id:
-            bot.send_audio(chat_id, cached_id.decode('utf-8'), **kwargs)
+            attempt_send(cached_id.decode('utf-8'))
         else:
             if os.path.exists(file_path):
                 with open(file_path, "rb") as audio:
-                    msg = bot.send_audio(chat_id, audio, **kwargs)
+                    msg = attempt_send(audio)
                     try:
                         redis_client.set(f"audio_cache:{key}", msg.audio.file_id)
                     except Exception as set_err:
