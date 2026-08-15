@@ -74,51 +74,50 @@ async def free_web_search(query: str) -> str:
 
     return ""
 
-def generate_and_send_image(chat_id, msg_id, prompt, is_private):
+async def fetch_real_image_url(query: str) -> str:
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+    try:
+        async with httpx.AsyncClient() as client:
+            # Step 1: Obtain vqd token from DDG
+            res = await client.post("https://html.duckduckgo.com/html/", data={"q": query}, headers=headers, timeout=5.0)
+            vqd = re.search(r'vqd=([\d-]+)', res.text)
+            if not vqd:
+                return ""
+            
+            # Step 2: Fetch real image results JSON
+            img_url = f"https://duckduckgo.com/i.js?l=us-en&o=json&q={urllib.parse.quote(query)}&vqd={vqd.group(1)}"
+            res_img = await client.get(img_url, headers=headers, timeout=5.0)
+            data = res_img.json()
+            results = data.get("results", [])
+            if results and "image" in results[0]:
+                return results[0]["image"]
+    except Exception as e:
+        print(f"Image search error ({query}): {e}")
+    return ""
+
+async def send_web_image(chat_id, msg_id, prompt, is_private):
     try:
         kwargs = {"reply_to_message_id": msg_id} if not is_private else {}
         
-        # Helper to execute photo send with reply fallback
-        def attempt_send_photo(photo_payload):
+        # Clean filler words to extract core query
+        clean_query = re.sub(r'\b(send|me|a|real|legit|actual|image|picture|photo|of|from)\b', '', prompt, flags=re.IGNORECASE).strip()
+        if not clean_query:
+            clean_query = prompt
+
+        image_url = await fetch_real_image_url(clean_query)
+        if image_url:
             try:
-                return bot.send_photo(chat_id, photo_payload, **kwargs)
+                bot.send_photo(chat_id, image_url, **kwargs)
             except telebot.apihelper.ApiTelegramException as e:
                 if "message to be replied not found" in str(e).lower():
                     kwargs.pop("reply_to_message_id", None)
-                    if isinstance(photo_payload, io.BytesIO):
-                        photo_payload.seek(0)
-                    return bot.send_photo(chat_id, photo_payload, **kwargs)
-                raise e
-
-        # 1. Try Imagen 3
-        try:
-            result = gemini_client.models.generate_images(
-                model='imagen-3.0-generate-001',
-                prompt=prompt,
-                config=types.GenerateImagesConfig(
-                    number_of_images=1,
-                    aspect_ratio="1:1"
-                )
-            )
-            
-            for generated_image in result.generated_images:
-                image_bytes = generated_image.image.image_bytes
-                image_stream = io.BytesIO(image_bytes)
-                image_stream.name = "generated_image.png"
-                attempt_send_photo(image_stream)
-                return
-        except Exception as gen_err:
-            print(f"Gemini image generation failed, using fallback: {gen_err}")
-
-        # 2. Free Fallback Image Generation API
-        encoded_prompt = urllib.parse.quote(prompt)
-        image_url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?width=1024&height=1024&nologo=true"
-        attempt_send_photo(image_url)
-
-    except Exception as img_err:
-        print(f"Error generating/sending image ({prompt}): {img_err}")
-        err_msg = "Sorry, I couldn't generate that image right now."
-        bot.send_message(chat_id, err_msg) if is_private else bot.reply_to(msg_id, err_msg)
+                    bot.send_photo(chat_id, image_url, **kwargs)
+                else:
+                    raise e
+        else:
+            bot.send_message(chat_id, "Couldn't find a real image for that.")
+    except Exception as err:
+        print(f"Error sending web image: {err}")
 
 @app.get("/")
 def home_check():
@@ -205,9 +204,9 @@ async def handle_webhook(
                 bot.send_message(chat_id, msg_text) if is_private else bot.reply_to(update.message, msg_text)
                 return Response(status_code=200)
 
-            # Flexible regex image trigger
-            if re.search(r'\b(image|picture|photo|draw|generate)\b', clean_prompt, re.IGNORECASE):
-                background_tasks.add_task(generate_and_send_image, chat_id, msg_id, clean_prompt, is_private)
+            # Real Image Web Search Trigger
+            if re.search(r'\b(image|picture|photo)\b', clean_prompt, re.IGNORECASE):
+                background_tasks.add_task(send_web_image, chat_id, msg_id, clean_prompt, is_private)
                 return Response(status_code=200)
 
             if clean_prompt:
