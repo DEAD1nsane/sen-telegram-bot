@@ -128,7 +128,7 @@ async def handle_webhook(
             clean_prompt = clean_prompt.replace("@gemini", "").replace("@Gemini", "").strip()
 
             normalized_prompt = clean_prompt.rstrip("?").lower()
-            if normalized_prompt in ["help", "how do you remember", "commands"]:
+            if normalized_prompt in ["help", "commands"]:
                 help_text = (
                     "Remember rule:\n"
                     "  remember [item, item2] - adds items to memory list.\n\n"
@@ -144,6 +144,23 @@ async def handle_webhook(
                 bot.send_message(chat_id, help_text) if is_private else bot.reply_to(update.message, help_text)
                 return Response(status_code=200)
 
+            # 1. Display Memories
+            if normalized_prompt in ["what do you remember", "how do you remember"]:
+                try:
+                    raw_items = redis_client.lrange(f"memory_list:{user_id_str}", 0, -1)
+                    if not raw_items:
+                        msg_text = "I don't have any saved memories for you right now."
+                    else:
+                        memories = [item.decode('utf-8') for item in raw_items]
+                        formatted_list = "\n".join(f"{i+1}. {mem}" for i, mem in enumerate(memories))
+                        msg_text = f"Here is what I remember for you:\n\n{formatted_list}"
+                except Exception as r_err:
+                    print(f"Redis memory read error: {r_err}")
+                    msg_text = "Sorry, I couldn't access memory storage right now."
+                bot.send_message(chat_id, msg_text) if is_private else bot.reply_to(update.message, msg_text)
+                return Response(status_code=200)
+
+            # 2. Add Memories
             if clean_prompt.lower().startswith("remember "):
                 raw_content = clean_prompt[9:].strip()
                 if raw_content:
@@ -154,6 +171,62 @@ async def handle_webhook(
                         except Exception as r_err:
                             print(f"Redis memory save error: {r_err}")
                 msg_text = "Got it, I've added those items to your memory list."
+                bot.send_message(chat_id, msg_text) if is_private else bot.reply_to(update.message, msg_text)
+                return Response(status_code=200)
+
+            # 3. Edit Memory
+            if clean_prompt.lower().startswith("edit "):
+                parts = clean_prompt[5:].strip().split(" ", 1)
+                if len(parts) == 2 and parts[0].isdigit():
+                    idx = int(parts[0]) - 1
+                    new_val = parts[1].strip()
+                    try:
+                        raw_items = redis_client.lrange(f"memory_list:{user_id_str}", 0, -1)
+                        if 0 <= idx < len(raw_items):
+                            redis_client.lset(f"memory_list:{user_id_str}", idx, new_val)
+                            msg_text = f"Updated memory #{idx+1}."
+                        else:
+                            msg_text = "Invalid memory number."
+                    except Exception as r_err:
+                        print(f"Redis edit error: {r_err}")
+                        msg_text = "Error updating memory."
+                else:
+                    msg_text = "Usage: edit [number] [new text]"
+                bot.send_message(chat_id, msg_text) if is_private else bot.reply_to(update.message, msg_text)
+                return Response(status_code=200)
+
+            # 4. Clear All Memories
+            if normalized_prompt == "forget all":
+                try:
+                    redis_client.delete(f"memory_list:{user_id_str}")
+                    msg_text = "Cleared all your saved memories."
+                except Exception as r_err:
+                    print(f"Redis forget all error: {r_err}")
+                    msg_text = "Error clearing memories."
+                bot.send_message(chat_id, msg_text) if is_private else bot.reply_to(update.message, msg_text)
+                return Response(status_code=200)
+
+            # 5. Forget Specific Index/Indices
+            if clean_prompt.lower().startswith("forget "):
+                raw_nums = clean_prompt[7:].strip()
+                try:
+                    indices = [int(n.strip()) - 1 for n in raw_nums.split(",") if n.strip().isdigit()]
+                    raw_items = redis_client.lrange(f"memory_list:{user_id_str}", 0, -1)
+                    if raw_items and indices:
+                        memories = [item.decode('utf-8') for item in raw_items]
+                        # Remove specified indices safely from highest to lowest
+                        for i in sorted(set(indices), reverse=True):
+                            if 0 <= i < len(memories):
+                                memories.pop(i)
+                        redis_client.delete(f"memory_list:{user_id_str}")
+                        for m in memories:
+                            redis_client.rpush(f"memory_list:{user_id_str}", m)
+                        msg_text = "Updated memory list."
+                    else:
+                        msg_text = "No valid memory numbers specified."
+                except Exception as r_err:
+                    print(f"Redis forget error: {r_err}")
+                    msg_text = "Error removing memory."
                 bot.send_message(chat_id, msg_text) if is_private else bot.reply_to(update.message, msg_text)
                 return Response(status_code=200)
 
