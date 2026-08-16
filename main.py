@@ -16,7 +16,11 @@ if not redis_url:
     password = os.environ.get("REDISPASSWORD", "")
     redis_url = f"redis://default:{password}@{host}:{port}" if password else f"redis://{host}:{port}"
 
-# Handle SSL for Upstash rediss:// URLs
+# Force secure SSL for Upstash even if REDIS_URL was set as standard redis://
+if "upstash" in redis_url.lower() and redis_url.startswith("redis://"):
+    redis_url = redis_url.replace("redis://", "rediss://", 1)
+
+# Handle SSL context for Upstash / secure rediss:// URLs
 if redis_url.startswith("rediss://"):
     redis_client = redis.from_url(redis_url, ssl_cert_reqs=None)
 else:
@@ -41,7 +45,6 @@ OWNER_ID = int(os.getenv("OWNER_ID", "0"))
 async def free_web_search(query: str) -> str:
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
     
-    # 1. Try SearXNG Primary
     try:
         params = {"q": query, "format": "json"}
         async with httpx.AsyncClient() as client:
@@ -58,7 +61,6 @@ async def free_web_search(query: str) -> str:
     except Exception as e:
         print(f"SearXNG search error, trying fallback: {e}")
 
-    # 2. Fallback to DuckDuckGo HTML
     try:
         ddg_url = "https://html.duckduckgo.com/html/"
         async with httpx.AsyncClient() as client:
@@ -156,13 +158,11 @@ async def handle_webhook(
                 bot.send_message(chat_id, help_text) if is_private else bot.reply_to(update.message, help_text)
                 return Response(status_code=200)
 
-            # 1. Display Memories
             if normalized_prompt in ["what do you remember", "how do you remember"]:
                 msg_text = get_formatted_memories(user_id_str)
                 bot.send_message(chat_id, msg_text) if is_private else bot.reply_to(update.message, msg_text)
                 return Response(status_code=200)
 
-            # 2. Add Memories
             if clean_prompt.lower().startswith("remember "):
                 raw_content = clean_prompt[9:].strip()
                 if raw_content:
@@ -176,7 +176,6 @@ async def handle_webhook(
                 bot.send_message(chat_id, msg_text) if is_private else bot.reply_to(update.message, msg_text)
                 return Response(status_code=200)
 
-            # 3. Edit Memory
             if clean_prompt.lower().startswith("edit "):
                 parts = clean_prompt[5:].strip().split(" ", 1)
                 if len(parts) == 2 and parts[0].isdigit():
@@ -197,7 +196,6 @@ async def handle_webhook(
                 bot.send_message(chat_id, msg_text) if is_private else bot.reply_to(update.message, msg_text)
                 return Response(status_code=200)
 
-            # 4. Clear All Memories
             if normalized_prompt == "forget all":
                 try:
                     redis_client.delete(f"memory_list:{user_id_str}")
@@ -208,7 +206,6 @@ async def handle_webhook(
                 bot.send_message(chat_id, msg_text) if is_private else bot.reply_to(update.message, msg_text)
                 return Response(status_code=200)
 
-            # 5. Forget Specific Index/Indices
             if clean_prompt.lower().startswith("forget "):
                 raw_nums = clean_prompt[7:].strip()
                 try:
@@ -231,9 +228,19 @@ async def handle_webhook(
                 bot.send_message(chat_id, msg_text) if is_private else bot.reply_to(update.message, msg_text)
                 return Response(status_code=200)
 
-            if clean_prompt:
+            # Extract Replied-to Message Text
+            replied_context = ""
+            if update.message.reply_to_message and update.message.reply_to_message.text:
+                replied_context = update.message.reply_to_message.text
+
+            # Run Gemini if there is a prompt or a message being replied to
+            if clean_prompt or replied_context:
+                
+                # If they only tagged the bot but didn't type anything, assign a default prompt
+                if not clean_prompt and replied_context:
+                    clean_prompt = "What are your thoughts on this?"
+
                 try:
-                    # Fetch Static Memory Rules
                     saved_facts = []
                     try:
                         raw_items = redis_client.lrange(f"memory_list:{user_id_str}", 0, -1)
@@ -242,7 +249,6 @@ async def handle_webhook(
                     except Exception as r_err:
                         print(f"Redis memory fetch error: {r_err}")
 
-                    # Fetch Rolling Chat History
                     history_key = f"chat_history:{chat_id}"
                     chat_history = []
                     try:
@@ -251,11 +257,6 @@ async def handle_webhook(
                             chat_history = [h.decode('utf-8') for h in raw_hist]
                     except Exception as r_err:
                         print(f"Redis history fetch error: {r_err}")
-
-                    # Extract Replied-to Message Text
-                    replied_context = ""
-                    if update.message.reply_to_message and update.message.reply_to_message.text:
-                        replied_context = update.message.reply_to_message.text
 
                     search_context = await free_web_search(clean_prompt)
                     
@@ -284,11 +285,10 @@ async def handle_webhook(
                     clean_text = re.sub(r'[*_#`]', '', response.text or "")
                     bot.send_message(chat_id, clean_text) if is_private else bot.send_message(chat_id, clean_text, reply_to_message_id=msg_id)
 
-                    # Save Exchange to Rolling Chat History
                     try:
                         redis_client.rpush(history_key, f"User: {clean_prompt}")
                         redis_client.rpush(history_key, f"Bot: {clean_text}")
-                        redis_client.ltrim(history_key, -10, -1) # Keep the last 10 messages
+                        redis_client.ltrim(history_key, -10, -1)
                     except Exception as r_err:
                         print(f"Redis history save error: {r_err}")
 
@@ -298,7 +298,6 @@ async def handle_webhook(
                     bot.send_message(chat_id, error_text) if is_private else bot.send_message(chat_id, error_text, reply_to_message_id=msg_id)
             return Response(status_code=200)
 
-        # Audio Track Trigger Logic via Background Tasks
         if re.search(r'\bsen\b', text, re.IGNORECASE):
             background_tasks.add_task(send_audio_track, chat_id, msg_id, "sen", "Devin_The_Dude_Anythang.mp3", "Anythang", "Devin The Dude", is_private)
         if re.search(r'\bmagic(?:al)?\b', text, re.IGNORECASE):
