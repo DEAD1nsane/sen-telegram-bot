@@ -233,6 +233,7 @@ async def handle_webhook(
 
             if clean_prompt:
                 try:
+                    # Fetch Static Memory Rules
                     saved_facts = []
                     try:
                         raw_items = redis_client.lrange(f"memory_list:{user_id_str}", 0, -1)
@@ -241,11 +242,30 @@ async def handle_webhook(
                     except Exception as r_err:
                         print(f"Redis memory fetch error: {r_err}")
 
+                    # Fetch Rolling Chat History
+                    history_key = f"chat_history:{chat_id}"
+                    chat_history = []
+                    try:
+                        raw_hist = redis_client.lrange(history_key, 0, -1)
+                        if raw_hist:
+                            chat_history = [h.decode('utf-8') for h in raw_hist]
+                    except Exception as r_err:
+                        print(f"Redis history fetch error: {r_err}")
+
+                    # Extract Replied-to Message Text
+                    replied_context = ""
+                    if update.message.reply_to_message and update.message.reply_to_message.text:
+                        replied_context = update.message.reply_to_message.text
+
                     search_context = await free_web_search(clean_prompt)
                     
                     context_parts = []
                     if saved_facts:
-                        context_parts.append("Saved Memories:\n" + "\n".join(f"  {f}" for f in saved_facts))
+                        context_parts.append("Saved Instructions:\n" + "\n".join(f"  {f}" for f in saved_facts))
+                    if replied_context:
+                        context_parts.append(f"Message User is Replying To:\n\"{replied_context}\"")
+                    if chat_history:
+                        context_parts.append("Recent Conversation Context:\n" + "\n".join(chat_history))
                     if search_context:
                         context_parts.append(f"Web Search Context:\n{search_context}")
                     
@@ -263,6 +283,15 @@ async def handle_webhook(
                     )
                     clean_text = re.sub(r'[*_#`]', '', response.text or "")
                     bot.send_message(chat_id, clean_text) if is_private else bot.send_message(chat_id, clean_text, reply_to_message_id=msg_id)
+
+                    # Save Exchange to Rolling Chat History
+                    try:
+                        redis_client.rpush(history_key, f"User: {clean_prompt}")
+                        redis_client.rpush(history_key, f"Bot: {clean_text}")
+                        redis_client.ltrim(history_key, -10, -1) # Keep the last 10 messages
+                    except Exception as r_err:
+                        print(f"Redis history save error: {r_err}")
+
                 except Exception as ai_err:
                     print(f"Gemini API error: {ai_err}")
                     error_text = "Sorry, I had trouble processing that request."
