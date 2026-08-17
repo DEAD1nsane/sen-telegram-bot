@@ -177,7 +177,7 @@ async def handle_webhook(request: Request, background_tasks: BackgroundTasks, x_
                 return Response(status_code=200)
 
             if normalized_prompt == "forget all":
-                await redis_client.delete(f"memory_list:{user_id_str}", f"chat_history:{chat_id}")
+                await redis_client.delete(f"memory_list:{user_id_str}", f"chat_history:{chat_id}:{user_id_str}")
                 msg_text = "Cleared all your saved memories."
                 if is_private:
                     await bot.send_message(chat_id, msg_text)
@@ -216,7 +216,7 @@ async def handle_webhook(request: Request, background_tasks: BackgroundTasks, x_
                     raw_mem = await redis_client.lrange(f"memory_list:{user_id_str}", 0, -1)
                     saved_facts = [i.decode('utf-8') if isinstance(i, bytes) else i for i in raw_mem]
 
-                    history_key = f"chat_history:{chat_id}"
+                    history_key = f"chat_history:{chat_id}:{user_id_str}"
                     raw_hist = await redis_client.lrange(history_key, 0, -1)
                     chat_history = [h.decode('utf-8') if isinstance(h, bytes) else h for h in raw_hist]
 
