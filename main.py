@@ -39,7 +39,8 @@ try:
 except Exception as e:
     print(f"Failed to fetch bot info: {e}")
 
-gemini_client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+gemini_api_key = (os.getenv("GEMINI_API_KEY") or "").strip()
+gemini_client = genai.Client(api_key=gemini_api_key) if gemini_api_key else None
 OWNER_ID = int(os.getenv("OWNER_ID", "0"))
 
 async def free_web_search(query: str) -> str:
@@ -105,7 +106,6 @@ async def handle_webhook(
         if not update or not update.message:
             return Response(status_code=200)
 
-        # Pull text from standard message or image captions
         text = update.message.text or update.message.caption or ""
         user_id = update.message.from_user.id
         user_id_str = str(user_id)
@@ -250,6 +250,9 @@ async def handle_webhook(
                     clean_prompt = "What are your thoughts on this?"
 
                 try:
+                    if not gemini_client:
+                        raise ValueError("GEMINI_API_KEY environment variable is missing or invalid.")
+
                     saved_facts = []
                     try:
                         raw_items = redis_client.lrange(f"memory_list:{user_id_str}", 0, -1)
@@ -285,7 +288,7 @@ async def handle_webhook(
                         
                     today_str = datetime.now().strftime("%A, %B %d, %Y")
                     response = gemini_client.models.generate_content(
-                        model='gemini-3.1-flash-lite',
+                        model='gemini-2.5-flash',
                         contents=final_prompt,
                         config=types.GenerateContentConfig(
                             system_instruction=f"Today's date is {today_str}. Return plain text only without markdown formatting."
