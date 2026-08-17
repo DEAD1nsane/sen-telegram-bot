@@ -131,12 +131,18 @@ async def handle_webhook(request: Request, background_tasks: BackgroundTasks, x_
                     "Forget #:\n  forget [number] - removes specific memories.\n\n"
                     "Forget all:\n  clears all memory."
                 )
-                await bot.send_message(chat_id, help_text) if is_private else await bot.reply_to(update.message, help_text)
+                if is_private:
+                    await bot.send_message(chat_id, help_text)
+                else:
+                    await bot.reply_to(update.message, help_text)
                 return Response(status_code=200)
 
             if normalized_prompt in ["what do you remember", "how do you remember"]:
                 msg_text = await get_formatted_memories(user_id_str)
-                await bot.send_message(chat_id, msg_text) if is_private else await bot.reply_to(update.message, msg_text)
+                if is_private:
+                    await bot.send_message(chat_id, msg_text)
+                else:
+                    await bot.reply_to(update.message, msg_text)
                 return Response(status_code=200)
 
             if clean_prompt.lower().startswith("remember "):
@@ -145,7 +151,10 @@ async def handle_webhook(request: Request, background_tasks: BackgroundTasks, x_
                     try: await redis_client.rpush(f"memory_list:{user_id_str}", part)
                     except Exception: pass
                 msg_text = await get_formatted_memories(user_id_str)
-                await bot.send_message(chat_id, msg_text) if is_private else await bot.reply_to(update.message, msg_text)
+                if is_private:
+                    await bot.send_message(chat_id, msg_text)
+                else:
+                    await bot.reply_to(update.message, msg_text)
                 return Response(status_code=200)
 
             if clean_prompt.lower().startswith("edit "):
@@ -160,13 +169,20 @@ async def handle_webhook(request: Request, background_tasks: BackgroundTasks, x_
                         msg_text = "Invalid memory number.\n\n" + await get_formatted_memories(user_id_str)
                 else:
                     msg_text = "Usage: edit [number] [new text]"
-                await bot.send_message(chat_id, msg_text) if is_private else await bot.reply_to(update.message, msg_text)
+                
+                if is_private:
+                    await bot.send_message(chat_id, msg_text)
+                else:
+                    await bot.reply_to(update.message, msg_text)
                 return Response(status_code=200)
 
             if normalized_prompt == "forget all":
                 await redis_client.delete(f"memory_list:{user_id_str}", f"chat_history:{chat_id}")
                 msg_text = "Cleared all your saved memories."
-                await bot.send_message(chat_id, msg_text) if is_private else await bot.reply_to(update.message, msg_text)
+                if is_private:
+                    await bot.send_message(chat_id, msg_text)
+                else:
+                    await bot.reply_to(update.message, msg_text)
                 return Response(status_code=200)
 
             if clean_prompt.lower().startswith("forget "):
@@ -184,7 +200,11 @@ async def handle_webhook(request: Request, background_tasks: BackgroundTasks, x_
                         msg_text = "No valid memory numbers specified.\n\n" + await get_formatted_memories(user_id_str)
                 except Exception:
                     msg_text = "Error removing memory."
-                await bot.send_message(chat_id, msg_text) if is_private else await bot.reply_to(update.message, msg_text)
+                
+                if is_private:
+                    await bot.send_message(chat_id, msg_text)
+                else:
+                    await bot.reply_to(update.message, msg_text)
                 return Response(status_code=200)
 
             replied = update.message.reply_to_message
