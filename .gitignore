@@ -5,3 +5,4 @@ sa.json
 gdrive-credentials.json
 secure-gdrive.json
 sa-key.json
+.env
