@@ -16,11 +16,10 @@ if not redis_url:
     password = os.environ.get("REDISPASSWORD", "")
     redis_url = f"redis://default:{password}@{host}:{port}" if password else f"redis://{host}:{port}"
 
-# Force secure SSL for Upstash even if REDIS_URL was set as standard redis://
+# Force secure SSL for Upstash rediss:// URLs
 if "upstash" in redis_url.lower() and redis_url.startswith("redis://"):
     redis_url = redis_url.replace("redis://", "rediss://", 1)
 
-# Handle SSL context for Upstash / secure rediss:// URLs
 if redis_url.startswith("rediss://"):
     redis_client = redis.from_url(redis_url, ssl_cert_reqs=None)
 else:
@@ -288,10 +287,15 @@ async def handle_webhook(
                         
                     today_str = datetime.now().strftime("%A, %B %d, %Y")
                     response = gemini_client.models.generate_content(
-                        model='gemini-2.5-flash',
+                        model='gemini-3.1-flash-lite',
                         contents=final_prompt,
                         config=types.GenerateContentConfig(
-                            system_instruction=f"Today's date is {today_str}. Return plain text only without markdown formatting."
+                            system_instruction=f"Today's date is {today_str}. Return plain text only without markdown formatting.",
+                            tool_config=types.ToolConfig(
+                                function_calling_config=types.FunctionCallingConfig(
+                                    mode=types.FunctionCallingConfigMode.NONE
+                                )
+                            )
                         )
                     )
                     clean_text = re.sub(r'[*_#`]', '', response.text or "")
