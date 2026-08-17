@@ -16,11 +16,7 @@ if not redis_url:
     password = os.environ.get("REDISPASSWORD", "")
     redis_url = f"redis://default:{password}@{host}:{port}" if password else f"redis://{host}:{port}"
 
-# Force secure SSL for Upstash even if REDIS_URL was set as standard redis://
-if "upstash" in redis_url.lower() and redis_url.startswith("redis://"):
-    redis_url = redis_url.replace("redis://", "rediss://", 1)
-
-# Handle SSL context for Upstash / secure rediss:// URLs
+# Handle SSL for Upstash rediss:// URLs
 if redis_url.startswith("rediss://"):
     redis_client = redis.from_url(redis_url, ssl_cert_reqs=None)
 else:
@@ -45,6 +41,7 @@ OWNER_ID = int(os.getenv("OWNER_ID", "0"))
 async def free_web_search(query: str) -> str:
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
     
+    # 1. Try SearXNG Primary
     try:
         params = {"q": query, "format": "json"}
         async with httpx.AsyncClient() as client:
@@ -61,6 +58,7 @@ async def free_web_search(query: str) -> str:
     except Exception as e:
         print(f"SearXNG search error, trying fallback: {e}")
 
+    # 2. Fallback to DuckDuckGo HTML
     try:
         ddg_url = "https://html.duckduckgo.com/html/"
         async with httpx.AsyncClient() as client:
@@ -105,7 +103,7 @@ async def handle_webhook(
         if not update or not update.message:
             return Response(status_code=200)
 
-        # Pull text from caption if it's an image
+        # Handle text from standard message or image captions
         text = update.message.text or update.message.caption or ""
         user_id = update.message.from_user.id
         user_id_str = str(user_id)
@@ -231,7 +229,6 @@ async def handle_webhook(
 
             replied_context = ""
             if update.message.reply_to_message:
-                # Catch captions on replied-to images too
                 replied_context = update.message.reply_to_message.text or update.message.reply_to_message.caption or ""
 
             if clean_prompt or replied_context:
@@ -296,6 +293,7 @@ async def handle_webhook(
                     bot.send_message(chat_id, error_text) if is_private else bot.send_message(chat_id, error_text, reply_to_message_id=msg_id)
             return Response(status_code=200)
 
+        # Audio Track Trigger Logic via Background Tasks
         if re.search(r'\bsen\b', text, re.IGNORECASE):
             background_tasks.add_task(send_audio_track, chat_id, msg_id, "sen", "Devin_The_Dude_Anythang.mp3", "Anythang", "Devin The Dude", is_private)
         if re.search(r'\bmagic(?:al|ally)?\b', text, re.IGNORECASE):
