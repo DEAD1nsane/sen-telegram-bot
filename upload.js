@@ -42,19 +42,45 @@ async function uploadFile(localName, driveName) {
   const mimeType = MIME_TYPES[ext] || 'application/octet-stream';
   
   try {
-    const response = await drive.files.create({
-      requestBody: {
-        name: driveName,
-        parents: [FOLDER_ID],
-      },
-      media: {
-        mimeType: mimeType,
-        body: fs.createReadStream(filePath),
-      },
-      fields: 'id, name',
+    // 1. Search if a file with the same name already exists in your target Google Drive folder
+    const listResponse = await drive.files.list({
+      q: `name = '${driveName}' and '${FOLDER_ID}' in parents and trashed = false`,
+      fields: 'files(id, name)',
+      spaces: 'drive',
     });
     
-    console.log(`Uploaded ${response.data.name} (ID: ${response.data.id})`);
+    const existingFiles = listResponse.data.files || [];
+    
+    if (existingFiles.length > 0) {
+      // 2. If it exists, UPDATE the file contents instead of creating a duplicate
+      const fileId = existingFiles[0].id;
+      
+      const response = await drive.files.update({
+        fileId: fileId,
+        media: {
+          mimeType: mimeType,
+          body: fs.createReadStream(filePath),
+        },
+        fields: 'id, name',
+      });
+      
+      console.log(`Updated existing: ${response.data.name} (ID: ${response.data.id})`);
+    } else {
+      // 3. If it does not exist, CREATE a new file
+      const response = await drive.files.create({
+        requestBody: {
+          name: driveName,
+          parents: [FOLDER_ID],
+        },
+        media: {
+          mimeType: mimeType,
+          body: fs.createReadStream(filePath),
+        },
+        fields: 'id, name',
+      });
+      
+      console.log(`Created new: ${response.data.name} (ID: ${response.data.id})`);
+    }
   } catch (error) {
     console.error(`Failed to upload ${localName}:`, error.message);
   }
