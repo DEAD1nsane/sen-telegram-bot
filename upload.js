@@ -10,6 +10,7 @@ const auth = new google.auth.GoogleAuth({
 
 const drive = google.drive({ version: 'v3', auth });
 const FOLDER_ID = '1MbCNI0XeURT4z8w62zKwdlYllbRkeocq';
+const YOUR_PERSONAL_EMAIL = 'turbolaceup@gmail.com'; // Replace with your actual Google account email
 
 // Files to sync
 const FILES_TO_UPLOAD = [
@@ -49,6 +50,18 @@ async function uploadFile(fileName) {
       },
       fields: 'id, name',
     });
+    
+    // Transfer ownership/writer access to your personal account to bypass service account quota limits
+    await drive.permissions.create({
+      fileId: response.data.id,
+      supportsAllDrives: true,
+      requestBody: {
+        role: 'writer',
+        type: 'user',
+        emailAddress: YOUR_PERSONAL_EMAIL,
+      },
+    });
+    
     console.log(`Uploaded ${response.data.name} (ID: ${response.data.id})`);
   } catch (error) {
     console.error(`Failed to upload ${fileName}:`, error.message);
