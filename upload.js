@@ -36,25 +36,22 @@ async function uploadFile(fileName) {
   const ext = path.extname(fileName).toLowerCase();
   const mimeType = MIME_TYPES[ext] || 'application/octet-stream';
   
-  const fileMetaData = {
-    name: fileName,
-    parents: [FOLDER_ID],
-  };
-  
-  const media = {
-    mimeType: mimeType,
-    body: fs.createReadStream(filePath),
-  };
-  
   try {
     const response = await drive.files.create({
-      resource: fileMetaData,
-      media: media,
+      supportsAllDrives: true,
+      requestBody: {
+        name: fileName,
+        parents: [FOLDER_ID],
+      },
+      media: {
+        mimeType: mimeType,
+        body: fs.createReadStream(filePath),
+      },
       fields: 'id, name',
     });
     console.log(`Uploaded ${response.data.name} (ID: ${response.data.id})`);
   } catch (error) {
-    console.error(`Failed to upload ${fileName}:`, error);
+    console.error(`Failed to upload ${fileName}:`, error.message);
   }
 }
 
