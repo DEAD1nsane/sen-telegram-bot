@@ -20,14 +20,11 @@ const FOLDER_ID = '1MbCNI0XeURT4z8w62zKwdlYllbRkeocq';
 const FILES_TO_UPLOAD = [
   { local: 'main.py', drive: 'main.py.txt' },
   { local: 'requirements.txt', drive: 'requirements.txt' },
-  { local: 'Devin_The_Dude_Anythang.mp3', drive: 'Devin_The_Dude_Anythang.mp3' },
-  { local: 'Do You Believe In Magic.mp3', drive: 'Do You Believe In Magic.mp3' },
 ];
 
 const MIME_TYPES = {
   '.py': 'text/plain',
   '.txt': 'text/plain',
-  '.mp3': 'audio/mpeg',
 };
 
 async function uploadFile(localName, driveName) {
