@@ -16,10 +16,11 @@ if not redis_url:
     password = os.environ.get("REDISPASSWORD", "")
     redis_url = f"redis://default:{password}@{host}:{port}" if password else f"redis://{host}:{port}"
 
-# Force secure SSL for Upstash rediss:// URLs
+# Force secure SSL for Upstash even if REDIS_URL was set as standard redis://
 if "upstash" in redis_url.lower() and redis_url.startswith("redis://"):
     redis_url = redis_url.replace("redis://", "rediss://", 1)
 
+# Handle SSL context for Upstash / secure rediss:// URLs
 if redis_url.startswith("rediss://"):
     redis_client = redis.from_url(redis_url, ssl_cert_reqs=None)
 else:
@@ -105,6 +106,7 @@ async def handle_webhook(
         if not update or not update.message:
             return Response(status_code=200)
 
+        # Pull text from standard message or image captions
         text = update.message.text or update.message.caption or ""
         user_id = update.message.from_user.id
         user_id_str = str(user_id)
@@ -287,15 +289,10 @@ async def handle_webhook(
                         
                     today_str = datetime.now().strftime("%A, %B %d, %Y")
                     response = gemini_client.models.generate_content(
-                        model='gemini-3.1-flash-lite',
+                        model='gemini-2.0-flash',
                         contents=final_prompt,
                         config=types.GenerateContentConfig(
-                            system_instruction=f"Today's date is {today_str}. Return plain text only without markdown formatting.",
-                            tool_config=types.ToolConfig(
-                                function_calling_config=types.FunctionCallingConfig(
-                                    mode=types.FunctionCallingConfigMode.NONE
-                                )
-                            )
+                            system_instruction=f"Today's date is {today_str}. Return plain text only without markdown formatting."
                         )
                     )
                     clean_text = re.sub(r'[*_#`]', '', response.text or "")
