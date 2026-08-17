@@ -228,15 +228,11 @@ async def handle_webhook(
                 bot.send_message(chat_id, msg_text) if is_private else bot.reply_to(update.message, msg_text)
                 return Response(status_code=200)
 
-            # Extract Replied-to Message Text
             replied_context = ""
             if update.message.reply_to_message and update.message.reply_to_message.text:
                 replied_context = update.message.reply_to_message.text
 
-            # Run Gemini if there is a prompt or a message being replied to
             if clean_prompt or replied_context:
-                
-                # If they only tagged the bot but didn't type anything, assign a default prompt
                 if not clean_prompt and replied_context:
                     clean_prompt = "What are your thoughts on this?"
 
@@ -300,7 +296,7 @@ async def handle_webhook(
 
         if re.search(r'\bsen\b', text, re.IGNORECASE):
             background_tasks.add_task(send_audio_track, chat_id, msg_id, "sen", "Devin_The_Dude_Anythang.mp3", "Anythang", "Devin The Dude", is_private)
-        if re.search(r'\bmagic(?:al)?\b', text, re.IGNORECASE):
+        if re.search(r'\bmagic(?:al|ally)?\b', text, re.IGNORECASE):
             background_tasks.add_task(send_audio_track, chat_id, msg_id, "magic", "Do You Believe In Magic.mp3", "Do You Believe In Magic", "The Lovin' Spoonful", is_private)
 
         return Response(status_code=200)
