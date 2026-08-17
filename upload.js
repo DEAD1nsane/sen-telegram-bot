@@ -2,9 +2,10 @@ const { google } = require('googleapis');
 const fs = require('fs');
 const path = require('path');
 
+const credentialsJson = Buffer.from(process.env.GOOGLE_CREDENTIALS, 'base64').toString('utf-8');
 const auth = new google.auth.GoogleAuth({
-  credentials: JSON.parse(process.env.GOOGLE_CREDENTIALS),
-  scopes: ['[https://www.googleapis.com/auth/drive](https://www.googleapis.com/auth/drive)'],
+  credentials: JSON.parse(credentialsJson),
+  scopes: ['https://www.googleapis.com/auth/drive'],
 });
 
 const drive = google.drive({ version: 'v3', auth });
