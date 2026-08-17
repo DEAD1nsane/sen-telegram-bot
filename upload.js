@@ -2,15 +2,19 @@ const { google } = require('googleapis');
 const fs = require('fs');
 const path = require('path');
 
-const credentialsJson = Buffer.from(process.env.GOOGLE_CREDENTIALS, 'base64').toString('utf-8');
-const auth = new google.auth.GoogleAuth({
-  credentials: JSON.parse(credentialsJson),
-  scopes: ['https://www.googleapis.com/auth/drive'],
+// Set up OAuth2 authentication
+const oauth2Client = new google.auth.OAuth2(
+  process.env.GDRIVE_CLIENT_ID,
+  process.env.GDRIVE_CLIENT_SECRET,
+  'https://developers.google.com/oauthplayground'
+);
+
+oauth2Client.setCredentials({
+  refresh_token: process.env.GDRIVE_REFRESH_TOKEN,
 });
 
-const drive = google.drive({ version: 'v3', auth });
+const drive = google.drive({ version: 'v3', auth: oauth2Client });
 const FOLDER_ID = '1MbCNI0XeURT4z8w62zKwdlYllbRkeocq';
-const YOUR_PERSONAL_EMAIL = 'turbolaceup@gmail.com'; // Replace with your actual Google account email
 
 // Files to sync
 const FILES_TO_UPLOAD = [
@@ -39,7 +43,6 @@ async function uploadFile(fileName) {
   
   try {
     const response = await drive.files.create({
-      supportsAllDrives: true,
       requestBody: {
         name: fileName,
         parents: [FOLDER_ID],
@@ -49,17 +52,6 @@ async function uploadFile(fileName) {
         body: fs.createReadStream(filePath),
       },
       fields: 'id, name',
-    });
-    
-    // Transfer ownership/writer access to your personal account to bypass service account quota limits
-    await drive.permissions.create({
-      fileId: response.data.id,
-      supportsAllDrives: true,
-      requestBody: {
-        role: 'writer',
-        type: 'user',
-        emailAddress: YOUR_PERSONAL_EMAIL,
-      },
     });
     
     console.log(`Uploaded ${response.data.name} (ID: ${response.data.id})`);
