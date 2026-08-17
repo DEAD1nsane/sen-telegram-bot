@@ -217,13 +217,13 @@ async def handle_webhook(request: Request, background_tasks: BackgroundTasks, x_
                         "Never ask follow-up questions. Never give suggestions unless explicitly requested. "
                         "Always respond short and brief. Talk like a degenerate."
                     )
-                    
+
                     response = await gemini_client.aio.models.generate_content(
                         model='gemini-2.5-flash',
                         contents=final_prompt,
                         config=types.GenerateContentConfig(system_instruction=bot_instructions)
                     )
-                    
+
                     clean_text = re.sub(r'[*_#`]', '', response.text or "")
                     if is_private:
                         await bot.send_message(chat_id, clean_text)
