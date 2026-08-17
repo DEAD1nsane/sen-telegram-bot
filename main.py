@@ -39,13 +39,12 @@ try:
 except Exception as e:
     print(f"Failed to fetch bot info: {e}")
 
-gemini_api_key = (os.getenv("GEMINI_API_KEY") or "").strip()
-gemini_client = genai.Client(api_key=gemini_api_key) if gemini_api_key else None
+gemini_client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 OWNER_ID = int(os.getenv("OWNER_ID", "0"))
 
 async def free_web_search(query: str) -> str:
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
-    
+
     try:
         params = {"q": query, "format": "json"}
         async with httpx.AsyncClient() as client:
@@ -93,8 +92,8 @@ def home_check():
 
 @app.post("/webhook")
 async def handle_webhook(
-    request: Request, 
-    background_tasks: BackgroundTasks, 
+    request: Request,
+    background_tasks: BackgroundTasks,
     x_telegram_bot_api_secret_token: str = Header(None)
 ):
     if WEBHOOK_SECRET and x_telegram_bot_api_secret_token != WEBHOOK_SECRET:
@@ -106,7 +105,7 @@ async def handle_webhook(
         if not update or not update.message:
             return Response(status_code=200)
 
-        # Pull text from standard message or image captions
+        # Pull text from caption if it's an image
         text = update.message.text or update.message.caption or ""
         user_id = update.message.from_user.id
         user_id_str = str(user_id)
@@ -122,28 +121,16 @@ async def handle_webhook(
                         bot.delete_message(chat_id, reply_msg.message_id)
                     except Exception as del_err:
                         print(f"Error deleting bot message: {del_err}")
-                    
-                    try:
-                        bot.delete_message(chat_id, msg_id)
-                    except Exception:
-                        pass
-            return Response(status_code=200)
 
-        # 1. Check Audio Triggers FIRST and return early
-        is_sen = bool(re.search(r'\bsen\b', text, re.IGNORECASE))
-        is_magic = bool(re.search(r'\bmagic(?:al|ally)?\b', text, re.IGNORECASE))
-
-        if is_sen:
-            background_tasks.add_task(send_audio_track, chat_id, msg_id, "sen", "Devin_The_Dude_Anythang.mp3", "Anythang", "Devin The Dude", is_private)
-            return Response(status_code=200)
-
-        if is_magic:
-            background_tasks.add_task(send_audio_track, chat_id, msg_id, "magic", "Do You Believe In Magic.mp3", "Do You Believe In Magic", "The Lovin' Spoonful", is_private)
+                try:
+                    bot.delete_message(chat_id, msg_id)
+                except Exception:
+                    pass
             return Response(status_code=200)
 
         bot_username = f"@{BOT_INFO.username}" if BOT_INFO else ""
         is_tagged = (bot_username and bot_username.lower() in text.lower()) or "@gemini" in text.lower()
-        
+
         is_reply_to_bot = False
         if update.message.reply_to_message and update.message.reply_to_message.from_user and BOT_INFO:
             if update.message.reply_to_message.from_user.id == BOT_INFO.id:
@@ -193,6 +180,7 @@ async def handle_webhook(
             if clean_prompt.lower().startswith("edit "):
                 parts = clean_prompt[5:].strip().split(" ", 1)
                 if len(parts) == 2 and parts[0].isdigit():
+
                     idx = int(parts[0]) - 1
                     new_val = parts[1].strip()
                     try:
@@ -213,6 +201,7 @@ async def handle_webhook(
             if normalized_prompt == "forget all":
                 try:
                     redis_client.delete(f"memory_list:{user_id_str}")
+                    redis_client.delete(f"chat_history:{chat_id}")
                     msg_text = "Cleared all your saved memories."
                 except Exception as r_err:
                     print(f"Redis forget all error: {r_err}")
@@ -244,6 +233,7 @@ async def handle_webhook(
 
             replied_context = ""
             if update.message.reply_to_message:
+                # Catch captions on replied-to images too
                 replied_context = update.message.reply_to_message.text or update.message.reply_to_message.caption or ""
 
             if clean_prompt or replied_context:
@@ -251,9 +241,6 @@ async def handle_webhook(
                     clean_prompt = "What are your thoughts on this?"
 
                 try:
-                    if not gemini_client:
-                        raise ValueError("GEMINI_API_KEY environment variable is missing or invalid.")
-
                     saved_facts = []
                     try:
                         raw_items = redis_client.lrange(f"memory_list:{user_id_str}", 0, -1)
@@ -272,7 +259,7 @@ async def handle_webhook(
                         print(f"Redis history fetch error: {r_err}")
 
                     search_context = await free_web_search(clean_prompt)
-                    
+
                     context_parts = []
                     if saved_facts:
                         context_parts.append("Saved Instructions:\n" + "\n".join(f"  {f}" for f in saved_facts))
@@ -282,17 +269,25 @@ async def handle_webhook(
                         context_parts.append("Recent Conversation Context:\n" + "\n".join(chat_history))
                     if search_context:
                         context_parts.append(f"Web Search Context:\n{search_context}")
-                    
+
                     final_prompt = clean_prompt
                     if context_parts:
                         final_prompt = "\n\n".join(context_parts) + f"\n\nUser Question: {clean_prompt}"
-                        
+
                     today_str = datetime.now().strftime("%A, %B %d, %Y")
+                    
+                    # HARDCODED BOT PERSONALITY HERE
+                    bot_instructions = (
+                        f"Today's date is {today_str}. Return plain text only without markdown formatting. "
+                        "Never ask follow-up questions. Never give suggestions unless explicitly requested. "
+                        "Always respond short and brief. Talk like a degenerate."
+                    )
+                    
                     response = gemini_client.models.generate_content(
-                        model='gemini-2.0-flash',
+                        model='gemini-3.1-flash-lite',
                         contents=final_prompt,
                         config=types.GenerateContentConfig(
-                            system_instruction=f"Today's date is {today_str}. Return plain text only without markdown formatting."
+                            system_instruction=bot_instructions
                         )
                     )
                     clean_text = re.sub(r'[*_#`]', '', response.text or "")
@@ -311,6 +306,11 @@ async def handle_webhook(
                     bot.send_message(chat_id, error_text) if is_private else bot.send_message(chat_id, error_text, reply_to_message_id=msg_id)
             return Response(status_code=200)
 
+        if re.search(r'\bsen\b', text, re.IGNORECASE):
+            background_tasks.add_task(send_audio_track, chat_id, msg_id, "sen", "Devin_The_Dude_Anythang.mp3", "Anythang", "Devin The Dude", is_private)
+        if re.search(r'\bmagic(?:al|ally)?\b', text, re.IGNORECASE):
+            background_tasks.add_task(send_audio_track, chat_id, msg_id, "magic", "Do You Believe In Magic.mp3", "Do You Believe In Magic", "The Lovin' Spoonful", is_private)
+
         return Response(status_code=200)
     except Exception as e:
         print(f"Webhook error: {e}")
@@ -321,7 +321,7 @@ def send_audio_track(chat_id, msg_id, key, file_path, title, performer, is_priva
         kwargs = {"title": title, "performer": performer, "timeout": 60}
         if not is_private:
             kwargs["reply_to_message_id"] = msg_id
-            
+
         cached_id = None
         try:
             cached_id = redis_client.get(f"audio_cache:{key}")
