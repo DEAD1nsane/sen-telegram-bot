@@ -2,7 +2,6 @@ const { google } = require('googleapis');
 const fs = require('fs');
 const path = require('path');
 
-// 1. Authenticate using the Service Account JSON from your GitHub Secret
 const auth = new google.auth.GoogleAuth({
   credentials: JSON.parse(process.env.GOOGLE_CREDENTIALS),
   scopes: ['https://www.googleapis.com/auth/drive.file'],
@@ -11,33 +10,57 @@ const auth = new google.auth.GoogleAuth({
 const drive = google.drive({ version: 'v3', auth });
 const FOLDER_ID = '1MbCNI0XeURT4z8w62zKwdlYllbRkeocq';
 
-// 2. Define the file you want to upload and your target Drive Folder ID
-const FILE_PATH = path.join(__dirname, 'your-file.txt'); // Change to your target file
-const FOLDER_ID = 'YOUR_GOOGLE_DRIVE_FOLDER_ID'; // Change to your Google Drive folder ID
+// Files to sync
+const FILES_TO_UPLOAD = [
+  'main.py',
+  'requirements.txt',
+  'Devin_The_Dude_Anythang.mp3',
+  'Do You Believe In Magic.mp3',
+];
 
-async function uploadFile() {
+const MIME_TYPES = {
+  '.py': 'text/x-python',
+  '.txt': 'text/plain',
+  '.mp3': 'audio/mpeg',
+};
+
+async function uploadFile(fileName) {
+  const filePath = path.join(__dirname, fileName);
+  
+  if (!fs.existsSync(filePath)) {
+    console.error(`File not found: ${filePath}`);
+    return;
+  }
+  
+  const ext = path.extname(fileName).toLowerCase();
+  const mimeType = MIME_TYPES[ext] || 'application/octet-stream';
+  
+  const fileMetaData = {
+    name: fileName,
+    parents: [FOLDER_ID],
+  };
+  
+  const media = {
+    mimeType: mimeType,
+    body: fs.createReadStream(filePath),
+  };
+  
   try {
-    const fileMetaData = {
-      name: path.basename(FILE_PATH),
-      parents: [FOLDER_ID],
-    };
-    
-    const media = {
-      mimeType: 'text/plain', // Change to match your file's mime type
-      body: fs.createReadStream(FILE_PATH),
-    };
-    
     const response = await drive.files.create({
       resource: fileMetaData,
       media: media,
-      fields: 'id',
+      fields: 'id, name',
     });
-    
-    console.log('File uploaded successfully. File ID:', response.data.id);
+    console.log(`Uploaded ${response.data.name} (ID: ${response.data.id})`);
   } catch (error) {
-    console.error('Error uploading file:', error);
-    process.exit(1);
+    console.error(`Failed to upload ${fileName}:`, error);
   }
 }
 
-uploadFile();
+async function syncAll() {
+  for (const file of FILES_TO_UPLOAD) {
+    await uploadFile(file);
+  }
+}
+
+syncAll();
