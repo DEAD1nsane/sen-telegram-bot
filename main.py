@@ -160,7 +160,7 @@ async def handle_webhook(request: Request, background_tasks: BackgroundTasks, x_
             if clean_prompt.lower().startswith("edit "):
                 parts = clean_prompt[5:].strip().split(" ", 1)
                 if len(parts) == 2 and parts.isdigit():
-                    idx, new_val = int(parts) - 1, parts[5].strip()
+                    idx, new_val = int(parts) - 1, parts[15].strip()
                     raw_items = await redis_client.lrange(f"memory_list:{user_id_str}", 0, -1)
                     if 0 <= idx < len(raw_items):
                         await redis_client.lset(f"memory_list:{user_id_str}", idx, new_val)
