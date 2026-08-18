@@ -270,7 +270,7 @@ async def handle_webhook(request: Request, background_tasks: BackgroundTasks, x_
                         bot_instructions += "\n\nYou must strictly follow these User Instructions:\n" + "\n".join(f"- {f}" for f in saved_facts)
 
                     chat = gemini_client.aio.chats.create(
-                        model='gemini-2.5-flash',
+                        model='gemini-2.5-flash-lite',
                         config=types.GenerateContentConfig(system_instruction=bot_instructions)
                     )
                     
