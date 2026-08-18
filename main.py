@@ -107,8 +107,13 @@ async def handle_webhook(request: Request, background_tasks: BackgroundTasks, x_
     try:
         update = telebot.types.Update.de_json(json_data)
         if not update or not update.message: return Response(status_code=200)
+        
+        # Ignore system service messages (pinned messages, user joined, etc.)
+        if update.message.content_type not in ["text", "photo", "audio", "video", "document"]:
+            return Response(status_code=200)
 
         text = update.message.text or update.message.caption or ""
+
         user_id = update.message.from_user.id
         user_id_str = str(user_id)
         chat_id = update.message.chat.id
