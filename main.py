@@ -239,7 +239,7 @@ async def handle_webhook(request: Request, background_tasks: BackgroundTasks, x_
                     )
 
                     response = await gemini_client.aio.models.generate_content(
-                        model='gemini-1.5-flash',
+                        model='gemini-1.5-flash-latest', # or 'gemini-1.5-flash-002'
                         contents=final_prompt,
                         config=types.GenerateContentConfig(system_instruction=bot_instructions)
                     )
