@@ -292,7 +292,7 @@ async def handle_webhook(request: Request, background_tasks: BackgroundTasks, x_
 
                 except Exception as ai_err:
                     print(f"Gemini API error: {ai_err}")
-                    error_text = "Sorry, I had trouble processing that request."
+                    error_text = "I am currently broken right now, the owner needs to fix me."
                     if "429" in str(ai_err):
                         error_text = "Whoa, I'm getting a little overwhelmed! Let me catch my breath for a minute."
                     if is_private:
