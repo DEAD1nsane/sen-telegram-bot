@@ -159,8 +159,8 @@ async def handle_webhook(request: Request, background_tasks: BackgroundTasks, x_
 
             if clean_prompt.lower().startswith("edit "):
                 parts = clean_prompt[5:].strip().split(" ", 1)
-                if len(parts) == 2 and parts[0].isdigit():
-                    idx, new_val = int(parts[0]) - 1, parts[1].strip()
+                if len(parts) == 2 and parts.isdigit():
+                    idx, new_val = int(parts) - 1, parts[5].strip()
                     raw_items = await redis_client.lrange(f"memory_list:{user_id_str}", 0, -1)
                     if 0 <= idx < len(raw_items):
                         await redis_client.lset(f"memory_list:{user_id_str}", idx, new_val)
@@ -239,7 +239,7 @@ async def handle_webhook(request: Request, background_tasks: BackgroundTasks, x_
                     )
 
                     response = await gemini_client.aio.models.generate_content(
-                        model='gemini-1.5-flash-8b',
+                        model='gemini-1.5-flash',
                         contents=final_prompt,
                         config=types.GenerateContentConfig(system_instruction=bot_instructions)
                     )
