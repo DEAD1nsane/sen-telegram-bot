@@ -231,7 +231,7 @@ async def handle_webhook(request: Request, background_tasks: BackgroundTasks, x_
 
                     # FIX 1 & 3: Chat session with valid model name 
                     chat = await gemini_client.aio.chats.create(
-                        model='gemini-1.5-flash',
+                        model='gemini-2.5-flash',
                         config=types.GenerateContentConfig(system_instruction=bot_instructions)
                     )
                     
