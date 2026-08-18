@@ -164,7 +164,7 @@ async def handle_webhook(request: Request, background_tasks: BackgroundTasks, x_
                 msg_text = await get_formatted_memories(user_id_str)
                 if is_private: await bot.send_message(chat_id, msg_text)
                 else: await bot.reply_to(update.message, msg_text)
-                return Response(status_code=200)
+                return Response(status_code=200) 
 
             if clean_prompt.lower().startswith("edit "):
                 parts = clean_prompt[5:].strip().split(" ", 1)
