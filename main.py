@@ -160,6 +160,14 @@ async def handle_webhook(request: Request, background_tasks: BackgroundTasks, x_
                     "Forget #:\n  forget [number] - removes specific memories.\n\n"
                     "Forget all:\n  clears all memory."
                 )
+                if is_private:
+                    await bot.send_message(chat_id, help_text)
+                else:
+                    await bot.reply_to(update.message, help_text)
+                return Response(status_code=200)
+
+            if normalized_prompt in ["what do you remember", "how do you remember"]:
+
 
 
             if normalized_prompt in ["what do you remember", "how do you remember"]:
