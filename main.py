@@ -154,17 +154,13 @@ async def handle_webhook(request: Request, background_tasks: BackgroundTasks, x_
 
             if normalized_prompt in ["help", "commands"]:
                 help_text = (
-                    "Remember rule:\n  remember [item] - adds items to memory list.\n\n"
+                    "Remember rule:\n  remember [item], [item2] - adds items to memory list (separate multiple with commas).\n\n"
                     "What do you remember:\n  displays your rules in a numbered list format.\n\n"
                     "Edit #:\n  edit [number] [new fact] - edits a specific rule.\n\n"
                     "Forget #:\n  forget [number] - removes specific memories.\n\n"
                     "Forget all:\n  clears all memory."
                 )
-                if is_private:
-                    await bot.send_message(chat_id, help_text)
-                else:
-                    await bot.reply_to(update.message, help_text)
-                return Response(status_code=200)
+
 
             if normalized_prompt in ["what do you remember", "how do you remember"]:
                 msg_text = await get_formatted_memories(user_id_str)
