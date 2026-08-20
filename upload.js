@@ -23,8 +23,8 @@ const expandHome = (filepath) =>
 const FILES_TO_UPLOAD = [
   { local: 'main.py', drive: 'main.py.txt' },
   { local: 'requirements.txt', drive: 'requirements.txt' },
-  { local: expandHome('~/storage/shared/Backups/Termux/.termux.properties.txt' },
-  { local: expandHome('~/storage/shared/Backups/Termux/.zshrc.txt'), drive: 'zshrc.txt' }
+  { local: expandHome('/storage/emulated/0/Backups/Termux/.termux.properties.txt' },
+  { local: expandHome('/storage/emulated/0/Backups/Termux/.zshrc.txt'), drive: 'zshrc.txt' }
 ]; 10
 
 const MIME_TYPES = {
