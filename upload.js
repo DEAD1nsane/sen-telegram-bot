@@ -16,10 +16,15 @@ oauth2Client.setCredentials({
 const drive = google.drive({ version: 'v3', auth: oauth2Client });
 const FOLDER_ID = '1MbCNI0XeURT4z8w62zKwdlYllbRkeocq';
 
-// Map local file path to remote Drive file name
+// Helper to translate '~' into the actual Termux home path
+const expandHome = (filepath) => 
+  filepath.startsWith('~') ? filepath.replace('~', process.env.HOME) : filepath;
+
 const FILES_TO_UPLOAD = [
   { local: 'main.py', drive: 'main.py.txt' },
   { local: 'requirements.txt', drive: 'requirements.txt' },
+  { local: expandHome('~/storage/shared/Backups/Termux/.termux.properties.txt'), drive: 'termux.properties.txt' },
+  { local: expandHome('~/storage/shared/Backups/Termux/.zshrc.txt'), drive: 'zshrc.txt' }
 ];
 
 const MIME_TYPES = {
@@ -28,7 +33,7 @@ const MIME_TYPES = {
 };
 
 async function uploadFile(localName, driveName) {
-  const filePath = path.join(__dirname, localName);
+  const filePath = path.resolve(__dirname, localName);
   
   if (!fs.existsSync(filePath)) {
     console.error(`File not found: ${filePath}`);
