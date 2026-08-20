@@ -23,8 +23,8 @@ const expandHome = (filepath) =>
 const FILES_TO_UPLOAD = [
   { local: 'main.py', drive: 'main.py.txt' },
   { local: 'requirements.txt', drive: 'requirements.txt' },
-  { local: expandHome('/storage/emulated/0/Backups/Termux/.termux.properties.txt'), drive: 'termux.properties.txt' },
-  { local: expandHome('/storage/emulated/0/Backups/Termux/.zshrc.txt'), drive: 'zshrc.txt' }
+  { local: expandHome('~/storage/shared/backups/Termux/.termux.properties.txt'), drive: 'termux.properties.txt' },
+  { local: expandHome('~/storage/shared/backups/Termux/.zshrc.txt'), drive: 'zshrc.txt' }
 ];
 
 const MIME_TYPES = {
@@ -32,8 +32,8 @@ const MIME_TYPES = {
   '.txt': 'text/plain',
 };
 
-async function uploadFile(localName, driveName) {
-  const filePath = path.resolve(__dirname, localName);
+async function uploadFile(localPath, driveName) {
+  const filePath = path.resolve(__dirname, localPath);
   
   if (!fs.existsSync(filePath)) {
     console.error(`File not found: ${filePath}`);
@@ -84,7 +84,7 @@ async function uploadFile(localName, driveName) {
       console.log(`Created new: ${response.data.name} (ID: ${response.data.id})`);
     }
   } catch (error) {
-    console.error(`Failed to upload ${localName}:`, error.message);
+    console.error(`Failed to upload ${localPath}:`, error.message);
   }
 }
 
