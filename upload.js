@@ -2,13 +2,24 @@ const { google } = require('googleapis');
 const fs = require('fs');
 const path = require('path');
 
-// 1. Initialize auth using the Service Account JSON
-const auth = new google.auth.GoogleAuth({
-  credentials: JSON.parse(process.env.GDRIVE_CREDENTIALS),
-  scopes: ['https://www.googleapis.com/auth/drive'],
-});
+let auth;
+
+// 1. If the environment variable exists, we are in GitHub Actions
+if (process.env.GDRIVE_CREDENTIALS) {
+  auth = new google.auth.GoogleAuth({
+    credentials: JSON.parse(process.env.GDRIVE_CREDENTIALS),
+    scopes: ['https://www.googleapis.com/auth/drive'],
+  });
+} else {
+  // 2. If it is undefined, we are running locally in Termux, so use the file
+  auth = new google.auth.GoogleAuth({
+    keyFile: 'turbo-gemini-5f0464294562.json',
+    scopes: ['https://www.googleapis.com/auth/drive'],
+  });
+}
 
 const drive = google.drive({ version: 'v3', auth: auth });
+
 const FOLDER_ID = '1MbCNI0XeURT4z8w62zKwdlYllbRkeocq';
 
 // Helper to translate '~' into the actual Termux home path
