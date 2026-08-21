@@ -2,18 +2,13 @@ const { google } = require('googleapis');
 const fs = require('fs');
 const path = require('path');
 
-// Set up OAuth2 authentication
-const oauth2Client = new google.auth.OAuth2(
-  process.env.GDRIVE_CLIENT_ID,
-  process.env.GDRIVE_CLIENT_SECRET,
-  'https://developers.google.com/oauthplayground'
-);
-
-oauth2Client.setCredentials({
-  refresh_token: process.env.GDRIVE_REFRESH_TOKEN,
+// 1. Initialize auth using the Service Account JSON
+const auth = new google.auth.GoogleAuth({
+  keyFile: 'turbo-gemini-5f0464294562.json', 
+  scopes: ['https://www.googleapis.com/auth/drive'],
 });
 
-const drive = google.drive({ version: 'v3', auth: oauth2Client });
+const drive = google.drive({ version: 'v3', auth: auth });
 const FOLDER_ID = '1MbCNI0XeURT4z8w62zKwdlYllbRkeocq';
 
 // Helper to translate '~' into the actual Termux home path
