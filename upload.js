@@ -20,11 +20,12 @@ const FOLDER_ID = '1MbCNI0XeURT4z8w62zKwdlYllbRkeocq';
 const expandHome = (filepath) => 
   filepath.startsWith('~') ? filepath.replace('~', process.env.HOME) : filepath;
 
+// FIXED: Standardized the keys to `localPath` and `driveName`
 const FILES_TO_UPLOAD = [
-  { local: 'main.py', drive: 'main.py.txt' },
-  { local: 'requirements.txt', drive: 'requirements.txt' },
-  { localPath: expandHome('/storage/emulated/0/Backups/Termux/.termux.properties.txt'), driveName: 'termux.properties.txt', mimeType: 'text/plain' },
-  { localPath: expandHome('/storage/emulated/0/Backups/Termux/.zshrc.txt'), driveName: 'zshrc.txt', mimeType: 'text/plain' }
+  { localPath: 'main.py', driveName: 'main.py.txt' },
+  { localPath: 'requirements.txt', driveName: 'requirements.txt' },
+  { localPath: expandHome('/storage/emulated/0/Backups/Termux/.termux.properties.txt'), driveName: 'termux.properties.txt' },
+  { localPath: expandHome('/storage/emulated/0/Backups/Termux/.zshrc.txt'), driveName: 'zshrc.txt' }
 ];
 
 const MIME_TYPES = {
@@ -33,6 +34,7 @@ const MIME_TYPES = {
 };
 
 async function uploadFile(localPath, driveName) {
+  // path.resolve automatically handles absolute paths properly if expandHome returns one
   const filePath = path.resolve(__dirname, localPath);
   
   if (!fs.existsSync(filePath)) {
@@ -90,7 +92,8 @@ async function uploadFile(localPath, driveName) {
 
 async function syncAll() {
   for (const item of FILES_TO_UPLOAD) {
-    await uploadFile(item.local, item.drive);
+    // FIXED: Now accurately targeting the standardized property keys
+    await uploadFile(item.localPath, item.driveName);
   }
 }
 
