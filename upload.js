@@ -17,15 +17,18 @@ const drive = google.drive({ version: 'v3', auth: oauth2Client });
 const FOLDER_ID = '1MbCNI0XeURT4z8w62zKwdlYllbRkeocq';
 
 // Helper to translate '~' into the actual Termux home path
-const expandHome = (filepath) => 
+const expandHome = (filepath) =>
   filepath.startsWith('~') ? filepath.replace('~', process.env.HOME) : filepath;
 
 // FIXED: Standardized the keys to `localPath` and `driveName`
+// 1. Specify exact local paths, Drive names, and MIME types here
 const FILES_TO_UPLOAD = [
   { localPath: 'main.py', driveName: 'main.py.txt' },
   { localPath: 'requirements.txt', driveName: 'requirements.txt' },
-  { localPath: expandHome('/storage/emulated/0/Backups/Termux/.termux.properties.txt'), driveName: 'termux.properties.txt' },
-  { localPath: expandHome('/storage/emulated/0/Backups/Termux/.zshrc.txt'), driveName: 'zshrc.txt' }
+  { localPath: expandHome('~/storage/shared/Backups/Termux/.termux.properties.txt'), driveName: 'termux.properties.txt', mimeType: 'text/plain' },
+  { localPath: expandHome('~/storage/shared/Backups/Termux/.zshrc.txt'), driveName: 'zshrc.txt', mimeType: 'text/plain' },
+  { localPath: expandHome('~/storage/shared/Backups/Termux/init.lua.txt'), driveName: 'init.lua.txt', mimeType: 'text/plain' },
+  { localPath: expandHome('~/storage/shared/Backups/Termux/darkblood.zsh-theme.txt'), driveName: 'darkblood.zsh-theme.txt', mimeType: 'text/plain' }
 ];
 
 const MIME_TYPES = {

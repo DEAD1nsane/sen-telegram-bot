@@ -1,8 +1,4 @@
 node_modules/
 google-cloud-sdk/
 google-cloud-cli-linux-arm.tar.gz
-sa.json
-gdrive-credentials.json
-secure-gdrive.json
-sa-key.json
 .env
