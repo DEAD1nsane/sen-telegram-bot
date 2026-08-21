@@ -4,7 +4,7 @@ const path = require('path');
 
 // 1. Initialize auth using the Service Account JSON
 const auth = new google.auth.GoogleAuth({
-  keyFile: 'turbo-gemini-5f0464294562.json', 
+  credentials: JSON.parse(process.env.GDRIVE_CREDENTIALS),
   scopes: ['https://www.googleapis.com/auth/drive'],
 });
 
