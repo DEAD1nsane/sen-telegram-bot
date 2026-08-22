@@ -24,8 +24,8 @@ const FILES_TO_UPLOAD = [
   { localPath: 'requirements.txt', driveName: 'requirements.txt' },
   { localPath: expandHome('~/storage/shared/Backups/Termux/.termux.properties.txt'), driveName: 'termux.properties.txt' },
   { localPath: expandHome('~/storage/shared/Backups/Termux/.zshrc.txt'), driveName: 'zshrc.txt' },
-  { localPath: expandHome('~/storage/shared/Backups/Termux/init.lua.txt'), driveName: 'init.lua.txt' },
-  { localPath: expandHome('~/storage/shared/Backups/Termux/darkblood.zsh-theme.txt'), driveName: 'darkblood.zsh-theme.txt' }
+  { localPath: expandHome('~/storage/shared/Backups/Termux/.init.lua.txt'), driveName: 'init.lua.txt' },
+  { localPath: expandHome('~/storage/shared/Backups/Termux/.darkblood.zsh-theme.txt'), driveName: 'darkblood.zsh-theme.txt' }
 ];
 
 const MIME_TYPES = {
