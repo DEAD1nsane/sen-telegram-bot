@@ -88,8 +88,8 @@ async def get_formatted_memories(user_id_str: str) -> str:
         raw_items = await redis_client.lrange(f"memory_list:{user_id_str}", 0, -1)
         if not raw_items: return "Your memory list is currently empty."
         memories = [item.decode('utf-8') if isinstance(item, bytes) else item for item in raw_items]
-        formatted_list = "\n".join(f"{i+1}. {mem}" for i, mem in enumerate(memories))
-        return f"Here is what I remember for you:\n\n{formatted_list}"
+        formatted_list = "\n\n".join(f"[{i+1}] {mem}" for i, mem in enumerate(memories))
+        return f"**Active Memory Directives:**\n──────────────────────────\n\n{formatted_list}"
     except Exception as e:
         print(f"Error fetching memory list format: {e}")
         return "Could not retrieve memory list."
