@@ -258,20 +258,38 @@ async def handle_webhook(request: Request, background_tasks: BackgroundTasks, x_
                     final_prompt = clean_prompt
                     if context_parts: final_prompt = "\n\n".join(context_parts) + f"\n\nUser Question: {clean_prompt}"
 
-                    # Give it the date, plain text rule, and your exact behavioral constraints
+                    # Core identity, date, and formatting lockdown
                     today_str = datetime.now().strftime("%A, %B %d, %Y")
                     bot_instructions = (
                         f"Today's date is {today_str}. Return plain text only without markdown formatting. "
-                        "Provide short, clear, concise, fact-based responses. "
-                        "Never ask follow-up questions. Never give suggestions. "
+                        "Do not use bullet points, bolding, or asterisks natively. "
+                        "Never use standard AI pleasantries. Do not start responses with 'As an AI' or end with generic offers for help. "
                     )
                     
-                    if search_context:
-                        bot_instructions += "Use the provided 'Web Search Context' to accurately answer questions about current events. "
+                    # Conversational flow and adaptive length
+                    bot_instructions += (
+                        "Keep casual replies brief, but dynamically expand your response length when explicitly asked for details or when playing interactive games. "
+                        "If the user changes the subject abruptly, drop the previous topic immediately and adapt to the new flow. "
+                        "If the user is clearly joking or sarcastic, match their energy rather than taking the prompt literally. "
+                    )
 
-                    # Only append extra rules if the user used the 'remember' command
+                    # Guardrails and Anti-Hallucination
+                    bot_instructions += (
+                        "If you do not know the answer or the provided context is insufficient, state 'I do not know' directly without guessing. "
+                        "Do not assume personal details about the user unless they are explicitly provided in your memory list. "
+                    )
+
+                    # Context integration rules
+                    if search_context:
+                        bot_instructions += "When referencing 'Web Search Context', state the information directly without saying 'According to my search' or 'I found this online'. "
+
+                    if chat_history:
+                        bot_instructions += "Use the 'Recent Conversation Context' to track pronouns and subjects, but never summarize or repeat the history back to the user. "
+
+                    # The absolute highest priority: User Memories
                     if saved_facts:
-                        bot_instructions += "\n\nYou must strictly follow these User Instructions:\n" + "\n".join(f"- {f}" for f in saved_facts)
+                        bot_instructions += "\n\nYou must strictly follow these User Instructions. They override any baseline behavior and are your absolute highest priority:\n" + "\n".join(f"- {f}" for f in saved_facts)
+
 
                     chat = gemini_client.aio.chats.create(
                         model='gemini-3.5-flash-lite',
