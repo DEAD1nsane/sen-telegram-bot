@@ -80,4 +80,39 @@ async def free_web_search(query: str) -> str:
             clean = [re.sub(r'<[^>]+>', '', s).strip() for s in raw[:3] if s.strip()]
             if clean: return "\n".join(clean)
     except Exception as e:
-        print(
+        print(f"DuckDuckGo error: {e}")
+    return ""
+
+async def get_formatted_memories(user_id_str: str) -> str:
+    try:
+        raw_items = await redis_client.lrange(f"memory_list:{user_id_str}", 0, -1)
+        if not raw_items: return "Your memory list is currently empty."
+        memories = [item.decode('utf-8') if isinstance(item, bytes) else item for item in raw_items]
+        formatted_list = "\n".join(f"{i+1}. {mem}" for i, mem in enumerate(memories))
+        return f"Here is what I remember for you:\n\n{formatted_list}"
+    except Exception as e:
+        print(f"Error fetching memory list format: {e}")
+        return "Could not retrieve memory list."
+
+@app.get("/")
+def home_check():
+    return {"status": "ok", "message": "Bot webhook server is running."}
+
+@app.post("/webhook")
+async def handle_webhook(request: Request, background_tasks: BackgroundTasks, x_telegram_bot_api_secret_token: str = Header(None)):
+    if WEBHOOK_SECRET and x_telegram_bot_api_secret_token != WEBHOOK_SECRET:
+        raise HTTPException(status_code=403, detail="Unauthorized")
+
+    json_data = await request.json()
+    try:
+        update = telebot.types.Update.de_json(json_data)
+        if not update or not update.message: return Response(status_code=200)
+
+        # Ignore system service messages (pinned messages, user joined, etc.)
+        if update.message.content_type not in ["text", "photo", "audio", "video", "document"]:
+            return Response(status_code=200)
+
+        text = update.message.text or update.message.caption or ""
+        
+        # Scrub out all inline and multiline code blocks to prevent accidental triggers
+        text_no_code = re.sub(r'(?s)```.*?
