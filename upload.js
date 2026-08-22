@@ -1,40 +1,31 @@
+require('dotenv').config();
 const { google } = require('googleapis');
 const fs = require('fs');
 const path = require('path');
 
-let auth;
+const oauth2Client = new google.auth.OAuth2(
+  process.env.GDRIVE_CLIENT_ID,
+  process.env.GDRIVE_CLIENT_SECRET,
+  'https://developers.google.com/oauthplayground'
+);
 
-// 1. If the environment variable exists, we are in GitHub Actions
-if (process.env.GDRIVE_CREDENTIALS) {
-  auth = new google.auth.GoogleAuth({
-    credentials: JSON.parse(process.env.GDRIVE_CREDENTIALS),
-    scopes: ['https://www.googleapis.com/auth/drive'],
-  });
-} else {
-  // 2. If it is undefined, we are running locally in Termux, so use the file
-  auth = new google.auth.GoogleAuth({
-    keyFile: 'turbo-gemini-5f0464294562.json',
-    scopes: ['https://www.googleapis.com/auth/drive'],
-  });
-}
+oauth2Client.setCredentials({
+  refresh_token: process.env.GDRIVE_REFRESH_TOKEN,
+});
 
-const drive = google.drive({ version: 'v3', auth: auth });
-
+const drive = google.drive({ version: 'v3', auth: oauth2Client });
 const FOLDER_ID = '1MbCNI0XeURT4z8w62zKwdlYllbRkeocq';
 
-// Helper to translate '~' into the actual Termux home path
 const expandHome = (filepath) =>
   filepath.startsWith('~') ? filepath.replace('~', process.env.HOME) : filepath;
 
-// FIXED: Standardized the keys to `localPath` and `driveName`
-// 1. Specify exact local paths, Drive names, and MIME types here
 const FILES_TO_UPLOAD = [
   { localPath: 'main.py', driveName: 'main.py.txt' },
   { localPath: 'requirements.txt', driveName: 'requirements.txt' },
-  { localPath: expandHome('~/storage/shared/Backups/Termux/.termux.properties.txt'), driveName: 'termux.properties.txt', mimeType: 'text/plain' },
-  { localPath: expandHome('~/storage/shared/Backups/Termux/.zshrc.txt'), driveName: 'zshrc.txt', mimeType: 'text/plain' },
-  { localPath: expandHome('~/storage/shared/Backups/Termux/init.lua.txt'), driveName: 'init.lua.txt', mimeType: 'text/plain' },
-  { localPath: expandHome('~/storage/shared/Backups/Termux/darkblood.zsh-theme.txt'), driveName: 'darkblood.zsh-theme.txt', mimeType: 'text/plain' }
+  { localPath: expandHome('~/storage/shared/Backups/Termux/.termux.properties.txt'), driveName: 'termux.properties.txt' },
+  { localPath: expandHome('~/storage/shared/Backups/Termux/.zshrc.txt'), driveName: 'zshrc.txt' },
+  { localPath: expandHome('~/storage/shared/Backups/Termux/init.lua.txt'), driveName: 'init.lua.txt' },
+  { localPath: expandHome('~/storage/shared/Backups/Termux/darkblood.zsh-theme.txt'), driveName: 'darkblood.zsh-theme.txt' }
 ];
 
 const MIME_TYPES = {
@@ -43,8 +34,7 @@ const MIME_TYPES = {
 };
 
 async function uploadFile(localPath, driveName) {
-  // path.resolve automatically handles absolute paths properly if expandHome returns one
-  const filePath = path.resolve(__dirname, localPath);
+  let filePath = path.isAbsolute(localPath) ? localPath : path.join(__dirname, localPath);
   
   if (!fs.existsSync(filePath)) {
     console.error(`File not found: ${filePath}`);
@@ -52,10 +42,9 @@ async function uploadFile(localPath, driveName) {
   }
   
   const ext = path.extname(driveName).toLowerCase();
-  const mimeType = MIME_TYPES[ext] || 'application/octet-stream';
+  const mimeType = MIME_TYPES[ext] || 'text/plain';
   
   try {
-    // 1. Search if a file with the same name already exists in your target Google Drive folder
     const listResponse = await drive.files.list({
       q: `name = '${driveName}' and '${FOLDER_ID}' in parents and trashed = false`,
       fields: 'files(id, name)',
@@ -65,7 +54,6 @@ async function uploadFile(localPath, driveName) {
     const existingFiles = listResponse.data.files || [];
     
     if (existingFiles.length > 0) {
-      // 2. If it exists, UPDATE the file contents instead of creating a duplicate
       const fileId = existingFiles[0].id;
       
       const response = await drive.files.update({
@@ -79,7 +67,6 @@ async function uploadFile(localPath, driveName) {
       
       console.log(`Updated existing: ${response.data.name} (ID: ${response.data.id})`);
     } else {
-      // 3. If it does not exist, CREATE a new file
       const response = await drive.files.create({
         requestBody: {
           name: driveName,
@@ -101,7 +88,6 @@ async function uploadFile(localPath, driveName) {
 
 async function syncAll() {
   for (const item of FILES_TO_UPLOAD) {
-    // FIXED: Now accurately targeting the standardized property keys
     await uploadFile(item.localPath, item.driveName);
   }
 }
