@@ -31,7 +31,9 @@ else:
 
 API_TOKEN = os.getenv("BOT_TOKEN")
 WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET")
-SEARXNG_URL = os.getenv("SEARXNG_URL", "https://searxng-railway-production-3252.up.railway.app/search")
+SEARXNG_URL = os.getenv("SEARXNG_URL")
+if SEARXNG_URL and not SEARXNG_URL.startswith("http"):
+    SEARXNG_URL = f"http://{SEARXNG_URL}"
 
 bot = AsyncTeleBot(API_TOKEN)
 BOT_INFO = None
