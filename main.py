@@ -12,6 +12,7 @@ import httpx
 from google import genai
 from google.genai import types
 from telegramify_markdown import convert
+from markdownify import markdownify
 
 # Environment & Config
 redis_url = os.environ.get("REDIS_URL")
