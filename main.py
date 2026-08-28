@@ -51,13 +51,10 @@ if not gemini_api_key:
     raise ValueError("CRITICAL CONFIGURATION ERROR: 'GEMINI_API_KEY' missing.")
 
 gemini_client = genai.Client(api_key=gemini_api_key)
-OWNER_ID = int(os.getenv("OWNER_ID", "0"))
-
-def balance_codeblocks(text: str) -> str:
-    """Auto-closes unclosed codeblocks to prevent broken Telegram formatting."""
-    if text.count("```") % 2 != 0:
-        return text + "\n```"
-    return text
+oses unclosed codeblocks to prevent broken Telegram formatting."""
+    if text.count("") % 2 != 0:
+                return text + "\n"
+                return textWNER_ID = int(os.getenv("OWNER_ID", "0"))
 
 async def free_web_search(query: str) -> str:
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
