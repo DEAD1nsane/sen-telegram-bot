@@ -11,8 +11,6 @@ import redis.asyncio as redis
 import httpx
 from google import genai
 from google.genai import types
-from md2tgmd import escape
-from markdownify import markdownify
 
 # Environment & Config
 redis_url = os.environ.get("REDIS_URL")
@@ -387,15 +385,23 @@ async def handle_webhook(
                 except Exception:
                     msg_text = "Error removing memory."
 
-                clean_text, text_entities = convert(msg_text)
-                if is_private:
-                    sent_msg = await bot.send_message(
-                        chat_id, clean_text, entities=text_entities
-                    )
-                else:
-                    sent_msg = await bot.reply_to(
-                        update.message, clean_text, entities=text_entities
-                    )
+                    # Keep clean_text defined so line 404 doesn't break
+                    clean_text = msg_text
+                    rich_payload = telebot.types.InputRichMessage(markdown=msg_text)
+
+                    if is_private:
+                        sent_msg = await bot.send_rich_message(
+                            chat_id=chat_id, rich_message=rich_payload
+                        )
+                    else:
+                        # For replies, pass the rich payload directly to the API client layer
+                        sent_msg = await bot.send_rich_message(
+                            chat_id=update.message.chat.id,
+                            rich_message=rich_payload,
+                            reply_parameters=telebot.types.ReplyParameters(
+                                message_id=update.message.message_id
+                            ),
+                        )
 
                 if sent_msg and "Active Memory Directives" in clean_text:
                     background_tasks.add_task(
