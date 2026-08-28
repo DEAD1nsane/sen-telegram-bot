@@ -428,20 +428,22 @@ async def handle_webhook(request: Request, background_tasks: BackgroundTasks, x_
         print(f"Webhook error: {e}")
     return Response(status_code=200)
 
+
 async def collapse_message(chat_id: int, message_id: int, delay: int):
     """Waits for the delay (in seconds), then edits the message to a collapsed state."""
     await asyncio.sleep(delay)
     collapsed_text = "> Active Memories Collapsed"
-    clean_text = markdownify(collapsed_text)
+    clean_text, text_entities = convert(collapsed_text)
     try:
         await bot.edit_message_text(
             chat_id=chat_id, 
             message_id=message_id, 
             text=clean_text, 
-            parse_mode="MarkdownV2"
+            entities=text_entities
         )
     except Exception as e:
         print(f"Error collapsing memory list: {e}")
+
 
 async def send_audio_track(chat_id, msg_id, key, file_path, title, performer, is_private):
     try:
