@@ -22,7 +22,7 @@
   },
   "homepage": "https://github.com",
   "dependencies": {
-    "@railway/cli": "^5.45.7",
+    "@railway/cli": "^0.3.1",
     "dotenv": "^16.4.5",
     "googleapis": "^176.0.0"
   },
@@ -34,8 +34,5 @@
   "lint-staged": {
     "*.{js,json,md}": "prettier --write",
     "*.py": "black"
-  },
-  "allowScripts": {
-    "@railway/cli@5.45.7": true
   }
 }
