@@ -11,7 +11,7 @@ import redis.asyncio as redis
 import httpx
 from google import genai
 from google.genai import types
-from telegramify_markdown import convert # Imported for entity-based formatting
+from telegramify_markdown import convert
 
 ### Environment & Config
 redis_url = os.environ.get("REDIS_URL")
@@ -83,7 +83,7 @@ async def get_formatted_memories(user_id_str: str) -> str:
             return "Your memory list is currently empty."
         memories = [item.decode('utf-8') if isinstance(item, bytes) else item for item in raw_items]
         formatted_list = "\n".join(f"{i+1}. {mem}" for i, mem in enumerate(memories))
-        return f"<b>Active Memory Directives:</b>\n──────────────────────────\n\n{formatted_list}"
+        return f"<b>Active Memory Directives:</b>\n──────────────────────────\n{formatted_list}"
     except Exception as e:
         print(f"Error fetching memory list format: {e}")
         return "Could not retrieve memory list."
@@ -93,7 +93,7 @@ async def send_gemini_formatted_response(chat_id: int, prompt: str):
     try:
         # 1. Fetch raw Markdown response from Gemini
         response = gemini_client.models.generate_content(
-            model="gemini-2.5-flash",
+            model="gemini-3.5-flash-lite",
             contents=prompt
         )
         raw_markdown = response.text
