@@ -89,13 +89,22 @@ def parse_text_to_blocks(text: str) -> list:
         elif part.startswith("$$") and part.endswith("$$"):
             clean_math = part.strip("$").strip()
             blocks.append(InputRichBlockMathematicalExpression(expression=clean_math))
-        elif part.startswith("- ") or part.startswith("* "):
+        elif (
+            part.startswith("- ")
+            or part.startswith("* ")
+            or re.match(r"^\d+\.\s", part)
+        ):
             items = []
             for line in part.split("\n"):
-                if line.startswith("- ") or line.startswith("* "):
+                if (
+                    line.startswith("- ")
+                    or line.startswith("* ")
+                    or re.match(r"^\d+\.\s", line)
+                ):
+                    clean_line = re.sub(r"^(-\s|\*\s|\d+\.\s)", "", line).strip()
                     items.append(
                         InputRichBlockListItem(
-                            blocks=[InputRichBlockParagraph(text=line[2:].strip())]
+                            blocks=[InputRichBlockParagraph(text=clean_line)]
                         )
                     )
             if items:
@@ -157,33 +166,23 @@ async def free_web_search(query: str) -> str:
     return ""
 
 
-async def get_formatted_memories_blocks(user_id_str: str) -> list:
-    """Returns the memory list structured securely as an API 10.2 List Block."""
+async def get_formatted_memories(user_id_str: str) -> str:
+    """Returns the memory list as a raw markdown string to be parsed into blocks."""
     try:
         raw_items = await redis_client.lrange(f"memory_list:{user_id_str}", 0, -1)
         if not raw_items:
-            return [
-                InputRichBlockParagraph(text="Your memory list is currently empty.")
-            ]
+            return "Your memory list is currently empty."
 
         memories = [
             item.decode("utf-8") if isinstance(item, bytes) else item
             for item in raw_items
         ]
+        formatted_list = "\n".join(f"{i+1}. {mem}" for i, mem in enumerate(memories))
 
-        list_items = []
-        for mem in memories:
-            list_items.append(
-                InputRichBlockListItem(blocks=[InputRichBlockParagraph(text=mem)])
-            )
-
-        return [
-            InputRichBlockHeading(text="Active Memory Directives", level=2),
-            InputRichBlockList(items=list_items),
-        ]
+        return f"## Active Memory Directives\n\n{formatted_list}"
     except Exception as e:
         print(f"Error fetching memory list format: {e}")
-        return [InputRichBlockParagraph(text="Could not retrieve memory list.")]
+        return "Could not retrieve memory list."
 
 
 async def collapse_message(chat_id: int, message_id: int, delay: int):
@@ -372,7 +371,8 @@ def text_startswith(prefix: str):
 @router.message(text_in({"what do you remember", "how do you remember"}))
 async def handle_what_remember(message: Message):
     user_id_str = str(message.from_user.id)
-    blocks = await get_formatted_memories_blocks(user_id_str)
+    msg_text = await get_formatted_memories(user_id_str)
+    blocks = parse_text_to_blocks(msg_text)
 
     if message.chat.type == "private":
         sent_msg = await message.answer_rich_message(
@@ -402,7 +402,9 @@ async def handle_remember(message: Message):
             pass
     await redis_client.ltrim(f"memory_list:{user_id_str}", -25, -1)
 
-    blocks = await get_formatted_memories_blocks(user_id_str)
+    msg_text = await get_formatted_memories(user_id_str)
+    blocks = parse_text_to_blocks(msg_text)
+
     if message.chat.type == "private":
         sent_msg = await message.answer_rich_message(
             rich_message=InputRichMessage(blocks=blocks)
@@ -428,13 +430,15 @@ async def handle_edit(message: Message):
         raw_items = await redis_client.lrange(f"memory_list:{user_id_str}", 0, -1)
         if 0 <= idx < len(raw_items):
             await redis_client.lset(f"memory_list:{user_id_str}", idx, new_val)
-            blocks = await get_formatted_memories_blocks(user_id_str)
+            msg_text = await get_formatted_memories(user_id_str)
         else:
-            blocks = [
-                InputRichBlockParagraph(text="Invalid memory number.")
-            ] + await get_formatted_memories_blocks(user_id_str)
+            msg_text = "Invalid memory number.\n\n" + await get_formatted_memories(
+                user_id_str
+            )
     else:
-        blocks = [InputRichBlockParagraph(text="Usage: edit [number] [new text]")]
+        msg_text = "Usage: edit [number] [new text]"
+
+    blocks = parse_text_to_blocks(msg_text)
 
     if message.chat.type == "private":
         sent_msg = await message.answer_rich_message(
@@ -458,7 +462,7 @@ async def handle_forget_all(message: Message):
         f"memory_list:{user_id_str}", f"chat_history:{chat_id}:{user_id_str}"
     )
 
-    blocks = [InputRichBlockParagraph(text="Cleared all your saved memories.")]
+    blocks = parse_text_to_blocks("Cleared all your saved memories.")
     if message.chat.type == "private":
         await message.answer_rich_message(rich_message=InputRichMessage(blocks=blocks))
     else:
@@ -489,13 +493,16 @@ async def handle_forget(message: Message):
             await redis_client.delete(f"memory_list:{user_id_str}")
             if memories:
                 await redis_client.rpush(f"memory_list:{user_id_str}", *memories)
-            blocks = await get_formatted_memories_blocks(user_id_str)
+            msg_text = await get_formatted_memories(user_id_str)
         else:
-            blocks = [
-                InputRichBlockParagraph(text="No valid memory numbers specified.")
-            ] + await get_formatted_memories_blocks(user_id_str)
+            msg_text = (
+                "No valid memory numbers specified.\n\n"
+                + await get_formatted_memories(user_id_str)
+            )
     except Exception:
-        blocks = [InputRichBlockParagraph(text="Error removing memory.")]
+        msg_text = "Error removing memory."
+
+    blocks = parse_text_to_blocks(msg_text)
 
     if message.chat.type == "private":
         sent_msg = await message.answer_rich_message(
