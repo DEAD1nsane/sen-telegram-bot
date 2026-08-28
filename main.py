@@ -54,12 +54,6 @@ if not gemini_api_key:
 
 gemini_client = genai.Client(api_key=gemini_api_key)
 
-def fix_unclosed_codeblocks(text: str) -> str:
-    """Fixes unclosed codeblocks to prevent broken Telegram formatting."""
-    if text.count("```") % 2 != 0:
-        return text + "\n```"
-    return text
-
 async def free_web_search(query: str) -> str:
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
     try:
@@ -93,24 +87,24 @@ async def get_formatted_memories(user_id_str: str) -> str:
         return "Could not retrieve memory list."
 
 async def send_gemini_formatted_response(chat_id: int, prompt: str):
-    """Fetches Gemini output and sends it using entity-based formatting."""
+    """Fetches Gemini output using Gemini 3.5 Flash-Lite and sends it using entity-based formatting."""
     try:
-        # 1. Fetch raw Markdown response from Gemini
         response = gemini_client.models.generate_content(
             model="gemini-3.5-flash-lite",
             contents=prompt
         )
         raw_markdown = response.text
         
-        # 2. Convert markdown and unpack the tuple directly
+        # Convert markdown and unpack clean text with layout offset entities
         clean_text, text_entities = convert(raw_markdown)
         
-        # 3. Transmit the clean string and array of message formatting elements
-        # Note: parse_mode is strictly omitted here
+        # Serialize entities to dict format required by pyTelegramBotAPI
+        serialized_entities = [e.to_dict() for e in text_entities] if text_entities else None
+        
         await bot.send_message(
             chat_id=chat_id, 
             text=clean_text, 
-            entities=text_entities
+            entities=serialized_entities
         )
     except Exception as e:
         print(f"Error generating formatted response: {e}")
@@ -120,16 +114,13 @@ async def send_gemini_formatted_response(chat_id: int, prompt: str):
 def home_check():
     return {"status": "ok", "message": "Bot webhook server is running."}
 
-
 @app.post("/webhook")
 async def handle_webhook(request: Request, background_tasks: BackgroundTasks, x_telegram_bot_api_secret_token: str = Header(None)):
     if WEBHOOK_SECRET and x_telegram_bot_api_secret_token != WEBHOOK_SECRET:
         raise HTTPException(status_code=403, detail="Unauthorized")
-
+        
     update_data = await request.json()
     update = telebot.types.Update.de_json(update_data)
-
-    # Properly pass the update back into pyTelegramBotAPI's internal handler routing
     await bot.process_new_updates([update])
     return {"status": "ok"}
 
@@ -137,7 +128,6 @@ async def handle_webhook(request: Request, background_tasks: BackgroundTasks, x_
 async def handle_all_messages(message):
     """Intercepts messages and triggers the entity-based generation."""
     asyncio.create_task(send_gemini_formatted_response(message.chat.id, message.text))
-
 
 async def collapse_message(chat_id: int, message_id: int, delay: int):
     """Waits for the delay (in seconds), then edits the message to a collapsed state."""
@@ -165,4 +155,3 @@ if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", 8000))
     uvicorn.run("main:app", host="0.0.0.0", port=port)
-
