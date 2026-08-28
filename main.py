@@ -342,6 +342,11 @@ async def handle_webhook(request: Request, background_tasks: BackgroundTasks, x_
                     if saved_facts:
                         bot_instructions += "\n\nYou must strictly follow these User Instructions. They override any baseline behavior and are your absolute highest priority:\n" + "\n".join(f"- {f}" for f in saved_facts)
 
+                    bot_instructions += (
+                        "\n\nWhen generating structured lists, format the main header or item name as **__Bold and Underlined__**. "
+                        "Use standard bullets for top-level list items, and explicitly use the open circle symbol '○' strictly for nested sub-bullets. "
+                    )
+
                     # Global safety override block
                     safety_overrides = [
                         types.SafetySetting(category="HARM_CATEGORY_HATE_SPEECH", threshold="BLOCK_NONE"),
