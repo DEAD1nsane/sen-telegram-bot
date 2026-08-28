@@ -86,6 +86,14 @@ async def get_formatted_memories(user_id_str: str) -> str:
         print(f"Error fetching memory list format: {e}")
         return "Could not retrieve memory list."
 
+def serialize_entity(entity) -> dict:
+    """Convert telegramify_markdown MessageEntity to pyTelegramBotAPI-compatible dict."""
+    return {
+        "type": entity.type,
+        "offset": entity.offset,
+        "length": entity.length
+    }
+
 async def send_gemini_formatted_response(chat_id: int, prompt: str):
     """Fetches Gemini output using Gemini 3.5 Flash-Lite and sends it using entity-based formatting."""
     try:
@@ -99,7 +107,7 @@ async def send_gemini_formatted_response(chat_id: int, prompt: str):
         clean_text, text_entities = convert(raw_markdown)
         
         # Serialize entities to dict format required by pyTelegramBotAPI
-        serialized_entities = [e.to_dict() for e in text_entities] if text_entities else None
+        serialized_entities = [serialize_entity(e) for e in text_entities] if text_entities else None
         
         await bot.send_message(
             chat_id=chat_id, 
@@ -155,3 +163,4 @@ if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", 8000))
     uvicorn.run("main:app", host="0.0.0.0", port=port)
+
