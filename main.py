@@ -11,9 +11,6 @@ from aiogram.types import (
     InputRichMessage,
     InputRichBlockHeading,
     InputRichBlockParagraph,
-    InputRichBlockTable,
-    InputRichTableRow,
-    InputRichTableCell,
     InputRichBlockCollapsibleDetails,
     InputRichBlockMathematicalExpression,
     InputRichBlockList,
@@ -52,7 +49,6 @@ SEARXNG_URL = os.getenv(
     "SEARXNG_URL", "https://searxng-railway-production-3252.up.railway.app/search"
 )
 
-# Dropping legacy ParseMode completely in favor of API 10.2 Blocks
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher()
 router = Router()
@@ -121,7 +117,7 @@ async def free_web_search(query: str) -> str:
                 SEARXNG_URL, params=params, headers=headers, timeout=8.0
             )
             if res.status_code == 200:
-                results = res.json().get("results", [])[:15]
+                results = res.json().get("results", [])[:3]
                 snippets = []
                 for item in results:
                     title = item.get("title", "")
@@ -149,7 +145,7 @@ async def free_web_search(query: str) -> str:
             )
             urls = re.findall(r'href="(https?://[^"]+)"', res.text)
             clean = []
-            for i, snippet in enumerate(raw[:15]):
+            for i, snippet in enumerate(raw[:3]):
                 text_clean = re.sub(r"<[^>]+>", "", snippet).strip()
                 link = urls[i] if i < len(urls) else ""
                 if text_clean:
@@ -162,7 +158,7 @@ async def free_web_search(query: str) -> str:
 
 
 async def get_formatted_memories_blocks(user_id_str: str) -> list:
-    """Returns the memory list structured securely as an API 10.2 Table Block."""
+    """Returns the memory list structured securely as an API 10.2 List Block."""
     try:
         raw_items = await redis_client.lrange(f"memory_list:{user_id_str}", 0, -1)
         if not raw_items:
@@ -175,32 +171,15 @@ async def get_formatted_memories_blocks(user_id_str: str) -> list:
             for item in raw_items
         ]
 
-        table_rows = [
-            InputRichTableRow(
-                cells=[
-                    InputRichTableCell(blocks=[InputRichBlockParagraph(text="Index")]),
-                    InputRichTableCell(
-                        blocks=[InputRichBlockParagraph(text="Memory Directive")]
-                    ),
-                ]
-            )
-        ]
-
-        for i, mem in enumerate(memories):
-            table_rows.append(
-                InputRichTableRow(
-                    cells=[
-                        InputRichTableCell(
-                            blocks=[InputRichBlockParagraph(text=str(i + 1))]
-                        ),
-                        InputRichTableCell(blocks=[InputRichBlockParagraph(text=mem)]),
-                    ]
-                )
+        list_items = []
+        for mem in memories:
+            list_items.append(
+                InputRichBlockListItem(blocks=[InputRichBlockParagraph(text=mem)])
             )
 
         return [
             InputRichBlockHeading(text="Active Memory Directives", level=2),
-            InputRichBlockTable(rows=table_rows),
+            InputRichBlockList(items=list_items),
         ]
     except Exception as e:
         print(f"Error fetching memory list format: {e}")
@@ -646,8 +625,13 @@ async def handle_conversation(message: Message):
                     h.decode("utf-8") if isinstance(h, bytes) else h for h in raw_hist
                 ]
 
+                # Explicit Search Filter Logic
+                search_keywords = {"search", "google", "look up", "lookup", "find"}
+                explicit_search = any(
+                    word in clean_prompt.lower() for word in search_keywords
+                )
                 search_context = (
-                    await free_web_search(clean_prompt) if clean_prompt else ""
+                    await free_web_search(clean_prompt) if explicit_search else ""
                 )
 
                 context_parts = []
@@ -811,7 +795,6 @@ async def main():
         print(f"Failed to fetch bot info: {e}")
 
     try:
-        # Long-polling lifecycle completely replacing the webhook setup
         await dp.start_polling(bot)
     finally:
         await bot.session.close()
