@@ -71,11 +71,15 @@ OWNER_ID = int(os.getenv("OWNER_ID", "0"))
 
 def convert(text: str) -> tuple[str, list]:
     """
-    Parses Markdown formatting syntax securely into a clean text string
-    and a list of native Telegram MessageEntities.
+    Safely sanitizes markdown symbols for plain text delivery
+    when native InputRichMessage parsing isn't being used.
     """
     if not text:
         return "", []
+    # Strip common markdown headings and symbols so they render as clean plain text
+    clean_text = re.sub(r"[\*\_`#\-─]+", "", text).strip()
+    return clean_text, []
+
     parsed = telebot.formatting.parse_markdown(text)
     return parsed.text, parsed.entities
 
