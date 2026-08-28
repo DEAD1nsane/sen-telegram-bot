@@ -331,6 +331,11 @@ async def handle_webhook(request: Request, background_tasks: BackgroundTasks, x_
                         "If you do not know the answer or the provided context is insufficient, state 'I don't have enough details to answer that accurately' directly without guessing. "
                    )
 
+                    bot_instructions += (
+                        "If the user asks to format existing search context into a table or list, organize the data provided in the 'Web Search Context' as best as possible. "
+                        "If no context or data is available at all to answer, state 'Cannot Do, please rephrase your request.' directly without guessing. "
+                    )
+
                     if search_context:
                         bot_instructions += (
                             "When referencing 'Web Search Context', state the information directly without saying 'According to my search' or 'I found this online'. "
