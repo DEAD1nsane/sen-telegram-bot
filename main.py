@@ -44,6 +44,7 @@ async def lifespan(app: FastAPI):
         BOT_INFO = await bot.get_me()
     except Exception as e:
         print(f"Failed to fetch bot info: {e}")
+    yield
 
 app = FastAPI(lifespan=lifespan)
 
