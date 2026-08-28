@@ -561,33 +561,29 @@ async def handle_webhook(
 
                     raw_markdown = response.text or ""
                     raw_markdown = balance_codeblocks(raw_markdown)
-                    clean_text = markdownify(raw_markdown)
 
-                    preview_opts = telebot.types.LinkPreviewOptions(
-                        is_disabled=False, prefer_small_media=True
-                    )
+                    # Define clean_text as fallback, then bundle your raw AI output into a native Rich Message
+                    clean_text = raw_markdown
+                    rich_payload = telebot.types.InputRichMessage(markdown=raw_markdown)
 
                     if is_private:
-                        await bot.send_message(
-                            chat_id,
-                            clean_text,
-                            parse_mode="MarkdownV2",
-                            link_preview_options=preview_opts,
+                        await bot.send_rich_message(
+                            chat_id=chat_id, rich_message=rich_payload
                         )
                     else:
-                        await bot.send_message(
-                            chat_id,
-                            clean_text,
-                            reply_to_message_id=msg_id,
-                            parse_mode="MarkdownV2",
-                            link_preview_options=preview_opts,
+                        await bot.send_rich_message(
+                            chat_id=chat_id,
+                            rich_message=rich_payload,
+                            reply_parameters=telebot.types.ReplyParameters(
+                                message_id=update.message.message_id
+                            ),
                         )
-
                     await redis_client.rpush(
                         history_key,
                         f"User: {clean_prompt or 'Voice Note'}",
                         f"Bot: {clean_text}",
                     )
+
                     await redis_client.ltrim(history_key, -10, -1)
 
                 except Exception as ai_err:
