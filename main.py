@@ -1,16 +1,16 @@
+import asyncio
 import os
 import re
-import asyncio
-from datetime import datetime
 from contextlib import asynccontextmanager
+from datetime import datetime
 
-from fastapi import FastAPI, Request, Response, Header, HTTPException, BackgroundTasks
-from telebot.async_telebot import AsyncTeleBot
-import telebot.types
-import redis.asyncio as redis
 import httpx
+import redis.asyncio as redis
+import telebot.types
+from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Request, Response
 from google import genai
 from google.genai import types
+from telebot.async_telebot import AsyncTeleBot
 
 # Environment & Config
 redis_url = os.environ.get("REDIS_URL")
@@ -134,7 +134,7 @@ async def get_formatted_memories(user_id_str: str) -> str:
             item.decode("utf-8") if isinstance(item, bytes) else item
             for item in raw_items
         ]
-        formatted_list = "\n".join(f"{i+1}. {mem}" for i, mem in enumerate(memories))
+        formatted_list = "\n".join(f"{i + 1}. {mem}" for i, mem in enumerate(memories))
         return f"**Active Memory Directives:**\n----------\n\n{formatted_list}"
     except Exception as e:
         print(f"Error fetching memory list format: {e}")
@@ -659,7 +659,7 @@ async def send_audio_track(
                 if "message to be replied not found" in str(e).lower():
                     kwargs.pop("reply_to_message_id", None)
                     return await bot.send_audio(chat_id, audio_payload, **kwargs)
-                raise e
+                raise
 
         if cached_id:
             await attempt_send(
