@@ -108,7 +108,7 @@ async def get_formatted_memories(user_id_str: str) -> str:
         if not raw_items: return "Your memory list is currently empty."
         memories = [item.decode('utf-8') if isinstance(item, bytes) else item for item in raw_items]
         formatted_list = "\n".join(f"{i+1}. {mem}" for i, mem in enumerate(memories))
-        return f"<b>Active Memory Directives:</b>\n──────────────────────────\n\n{formatted_list}"
+        return f"**Active Memory Directives:**\n----------\n\n{formatted_list}"
     except Exception as e:
         print(f"Error fetching memory list format: {e}")
         return "Could not retrieve memory list."
@@ -164,33 +164,35 @@ async def handle_webhook(request: Request, background_tasks: BackgroundTasks, x_
             if await redis_client.exists(cooldown_key):
                 warn_msg = "Slow the fuck down, this ain't a god damn fuck-fest"
                 if is_private:
-                    await bot.send_message(chat_id, warn_msg, parse_mode="HTML")
+                    await bot.send_message(chat_id, warn_msg)
                 else:
-                    await bot.reply_to(update.message, warn_msg, parse_mode="HTML")
+                    await bot.reply_to(update.message, warn_msg)
                 return Response(status_code=200)
             
             await redis_client.setex(cooldown_key, 4, "1")
 
             if normalized_prompt in ["help", "commands"]:
                 help_text = (
-                    "<b>Remember rule:</b>\n  remember [item],, [item2] - adds items to memory list (separate multiple with double commas).\n\n"
-                    "<b>What do you remember:</b>\n  displays your rules in a numbered list format.\n\n"
-                    "<b>Edit #:</b>\n  edit [number] [new fact] - edits a specific rule.\n\n"
-                    "<b>Forget #:</b>\n  forget [number],, [number2] - removes specific memories (separate multiple with double commas).\n\n"
-                    "<b>Forget all:</b>\n  clears all memory."
+                    "**Remember rule:**\n  remember [item],, [item2] - adds items to memory list (separate multiple with double commas).\n\n"
+                    "**What do you remember:**\n  displays your rules in a numbered list format.\n\n"
+                    "**Edit #:**\n  edit [number] [new fact] - edits a specific rule.\n\n"
+                    "**Forget #:**\n  forget [number],, [number2] - removes specific memories (separate multiple with double commas).\n\n"
+                    "**Forget all:**\n  clears all memory."
                 )
+                clean_text, text_entities = convert(help_text)
                 if is_private:
-                    await bot.send_message(chat_id, help_text, parse_mode="HTML")
+                    await bot.send_message(chat_id, clean_text, entities=text_entities)
                 else:
-                    await bot.reply_to(update.message, help_text, parse_mode="HTML")
+                    await bot.reply_to(update.message, clean_text, entities=text_entities)
                 return Response(status_code=200)
 
             if normalized_prompt in ["what do you remember", "how do you remember"]:
                 msg_text = await get_formatted_memories(user_id_str)
+                clean_text, text_entities = convert(msg_text)
                 if is_private:
-                    sent_msg = await bot.send_message(chat_id, msg_text, parse_mode="HTML")
+                    sent_msg = await bot.send_message(chat_id, clean_text, entities=text_entities)
                 else:
-                    sent_msg = await bot.reply_to(update.message, msg_text, parse_mode="HTML")
+                    sent_msg = await bot.reply_to(update.message, clean_text, entities=text_entities)
                 
                 if sent_msg:
                     background_tasks.add_task(collapse_message, chat_id, sent_msg.message_id, 60)
@@ -205,14 +207,14 @@ async def handle_webhook(request: Request, background_tasks: BackgroundTasks, x_
                         if pos is None:
                             await redis_client.rpush(f"memory_list:{user_id_str}", part)
                     except Exception: pass
-                # Enforce Redis Memory Auto-Pruning (Cap at 25 items)
                 await redis_client.ltrim(f"memory_list:{user_id_str}", -25, -1)
                 
                 msg_text = await get_formatted_memories(user_id_str)
+                clean_text, text_entities = convert(msg_text)
                 if is_private:
-                    sent_msg = await bot.send_message(chat_id, msg_text, parse_mode="HTML")
+                    sent_msg = await bot.send_message(chat_id, clean_text, entities=text_entities)
                 else:
-                    sent_msg = await bot.reply_to(update.message, msg_text, parse_mode="HTML")
+                    sent_msg = await bot.reply_to(update.message, clean_text, entities=text_entities)
                 
                 if sent_msg:
                     background_tasks.add_task(collapse_message, chat_id, sent_msg.message_id, 60)
@@ -231,22 +233,24 @@ async def handle_webhook(request: Request, background_tasks: BackgroundTasks, x_
                 else:
                     msg_text = "Usage: edit [number] [new text]"
                 
+                clean_text, text_entities = convert(msg_text)
                 if is_private:
-                    sent_msg = await bot.send_message(chat_id, msg_text, parse_mode="HTML")
+                    sent_msg = await bot.send_message(chat_id, clean_text, entities=text_entities)
                 else:
-                    sent_msg = await bot.reply_to(update.message, msg_text, parse_mode="HTML")
+                    sent_msg = await bot.reply_to(update.message, clean_text, entities=text_entities)
                 
-                if sent_msg and "Active Memory Directives" in msg_text:
+                if sent_msg and "Active Memory Directives" in clean_text:
                     background_tasks.add_task(collapse_message, chat_id, sent_msg.message_id, 60)
                 return Response(status_code=200)
 
             if normalized_prompt == "forget all":
                 await redis_client.delete(f"memory_list:{user_id_str}", f"chat_history:{chat_id}:{user_id_str}")
                 msg_text = "Cleared all your saved memories."
+                clean_text, text_entities = convert(msg_text)
                 if is_private:
-                    await bot.send_message(chat_id, msg_text, parse_mode="HTML")
+                    await bot.send_message(chat_id, clean_text, entities=text_entities)
                 else:
-                    await bot.reply_to(update.message, msg_text, parse_mode="HTML")
+                    await bot.reply_to(update.message, clean_text, entities=text_entities)
                 return Response(status_code=200)
 
             if clean_prompt.lower().startswith("forget "):
@@ -265,12 +269,13 @@ async def handle_webhook(request: Request, background_tasks: BackgroundTasks, x_
                 except Exception:
                     msg_text = "Error removing memory."
                 
+                clean_text, text_entities = convert(msg_text)
                 if is_private:
-                    sent_msg = await bot.send_message(chat_id, msg_text, parse_mode="HTML")
+                    sent_msg = await bot.send_message(chat_id, clean_text, entities=text_entities)
                 else:
-                    sent_msg = await bot.reply_to(update.message, msg_text, parse_mode="HTML")
+                    sent_msg = await bot.reply_to(update.message, clean_text, entities=text_entities)
                 
-                if sent_msg and "Active Memory Directives" in msg_text:
+                if sent_msg and "Active Memory Directives" in clean_text:
                     background_tasks.add_task(collapse_message, chat_id, sent_msg.message_id, 60)
                 return Response(status_code=200)
 
@@ -348,7 +353,6 @@ async def handle_webhook(request: Request, background_tasks: BackgroundTasks, x_
                             config=types.GenerateContentConfig(system_instruction=bot_instructions)
                         )
                     else:
-                        # Smart Model Fallback System
                         try:
                             chat = gemini_client.aio.chats.create(
                                 model='gemini-3.5-flash-lite',
@@ -401,13 +405,14 @@ async def handle_webhook(request: Request, background_tasks: BackgroundTasks, x_
 async def collapse_message(chat_id: int, message_id: int, delay: int):
     """Waits for the delay (in seconds), then edits the message to a collapsed state."""
     await asyncio.sleep(delay)
-    collapsed_text = "<blockquote>Active Memories Collapsed</blockquote>"
+    collapsed_text = "> Active Memories Collapsed"
+    clean_text, text_entities = convert(collapsed_text)
     try:
         await bot.edit_message_text(
             chat_id=chat_id, 
             message_id=message_id, 
-            text=collapsed_text, 
-            parse_mode="HTML"
+            text=clean_text, 
+            entities=text_entities
         )
     except Exception as e:
         print(f"Error collapsing memory list: {e}")
@@ -444,4 +449,3 @@ if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", 8080))
     uvicorn.run("main:app", host="0.0.0.0", port=port)
-
