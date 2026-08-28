@@ -8,7 +8,7 @@
     "start": "node upload.js",
     "format": "lint-staged",
     "test": "echo \"No tests configured yet\"",
-    "prepare": "husky || true"
+    "prepare": "husky"
   },
   "repository": {
     "type": "git",
