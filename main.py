@@ -11,8 +11,9 @@ import redis.asyncio as redis
 import httpx
 from google import genai
 from google.genai import types
+from telegramify_markdown import convert # Imported for entity-based formatting
 
-# Environment & Config
+### Environment & Config
 redis_url = os.environ.get("REDIS_URL")
 if not redis_url:
     host = os.environ.get("REDISHOST", "localhost")
@@ -42,14 +43,6 @@ async def lifespan(app: FastAPI):
         BOT_INFO = await bot.get_me()
     except Exception as e:
         print(f"Failed to fetch bot info: {e}")
-    
-    yield
-    
-    try:
-        await bot.close_session()
-        await redis_client.aclose()
-    except Exception as e:
-        print(f"Error during shutdown: {e}")
 
 app = FastAPI(lifespan=lifespan)
 
@@ -81,36 +74,46 @@ async def free_web_search(query: str) -> str:
                     url = item.get('url', '')
                     if title or content:
                         snippets.append(f"Title: {title}\nContent: {content}\nURL: {url}")
-                if snippets: return "\n\n".join(snippets)
+                if snippets:
+                    return "\n\n".join(snippets)
     except Exception as e:
         print(f"SearXNG error: {e}")
-
-    try:
-        async with httpx.AsyncClient() as client:
-            res = await client.post("https://html.duckduckgo.com/html/", data={"q": query}, headers=headers, timeout=8.0)
-            raw = re.findall(r'<a class="result__snippet[^">]*>(.*?)</a>', res.text, re.DOTALL)
-            urls = re.findall(r'href="(https?://[^"]+)"', res.text)
-            clean = []
-            for i, snippet in enumerate(raw[:3]):
-                text_clean = re.sub(r'<[^>]+>', '', snippet).strip()
-                link = urls[i] if i < len(urls) else ""
-                if text_clean:
-                    clean.append(f"Content: {text_clean}\nURL: {link}")
-            if clean: return "\n\n".join(clean)
-    except Exception as e:
-        print(f"DuckDuckGo error: {e}")
-    return ""
 
 async def get_formatted_memories(user_id_str: str) -> str:
     try:
         raw_items = await redis_client.lrange(f"memory_list:{user_id_str}", 0, -1)
-        if not raw_items: return "Your memory list is currently empty."
+        if not raw_items:
+            return "Your memory list is currently empty."
         memories = [item.decode('utf-8') if isinstance(item, bytes) else item for item in raw_items]
         formatted_list = "\n".join(f"{i+1}. {mem}" for i, mem in enumerate(memories))
         return f"<b>Active Memory Directives:</b>\n──────────────────────────\n\n{formatted_list}"
     except Exception as e:
         print(f"Error fetching memory list format: {e}")
         return "Could not retrieve memory list."
+
+async def send_gemini_formatted_response(chat_id: int, prompt: str):
+    """Fetches Gemini output and sends it using entity-based formatting."""
+    try:
+        # 1. Fetch raw Markdown response from Gemini
+        response = gemini_client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=prompt
+        )
+        raw_markdown = response.text
+        
+        # 2. Convert markdown and unpack the tuple directly
+        clean_text, text_entities = convert(raw_markdown)
+        
+        # 3. Transmit the clean string and array of message formatting elements
+        # Note: parse_mode is strictly omitted here
+        await bot.send_message(
+            chat_id=chat_id, 
+            text=clean_text, 
+            entities=text_entities
+        )
+    except Exception as e:
+        print(f"Error generating formatted response: {e}")
+        await bot.send_message(chat_id, "Sorry, I encountered an error formatting that response.")
 
 @app.get("/")
 def home_check():
@@ -120,273 +123,19 @@ def home_check():
 async def handle_webhook(request: Request, background_tasks: BackgroundTasks, x_telegram_bot_api_secret_token: str = Header(None)):
     if WEBHOOK_SECRET and x_telegram_bot_api_secret_token != WEBHOOK_SECRET:
         raise HTTPException(status_code=403, detail="Unauthorized")
-
-    json_data = await request.json()
-    try:
-        update = telebot.types.Update.de_json(json_data)
-        if not update or not update.message: return Response(status_code=200)
-
-        if update.message.content_type not in ["text", "photo", "audio", "video", "document", "voice"]:
-            return Response(status_code=200)
-
-        text = update.message.text or update.message.caption or ""
         
-        text_no_code = re.sub(r'(?s)```.*?```', '', text)
-        text_no_code = re.sub(r'(?s)`.*?`', '', text_no_code)
+    update_data = await request.json()
+    update = telebot.types.Update.de_json(update_data)
+    
+    # Properly pass the update back into pyTelegramBotAPI's internal handler routing
+    await bot.process_new_updates([update])
+    return {"status": "ok"}
 
-        user_id = update.message.from_user.id
-        user_id_str = str(user_id)
-        chat_id = update.message.chat.id
-        msg_id = update.message.message_id
-        is_private = update.message.chat.type == "private"
-
-        if text.startswith(("/delete", "/del")):
-            if user_id == OWNER_ID:
-                reply_msg = update.message.reply_to_message
-                if reply_msg and BOT_INFO and reply_msg.from_user.id == BOT_INFO.id:
-                    try: await bot.delete_message(chat_id, reply_msg.message_id)
-                    except Exception: pass
-                try: await bot.delete_message(chat_id, msg_id)
-                except Exception: pass
-            return Response(status_code=200)
-
-        bot_username = f"@{BOT_INFO.username}" if BOT_INFO else ""
-        
-        is_tagged = (bot_username and bot_username.lower() in text_no_code.lower()) or "@gemini" in text_no_code.lower()
-        is_reply_to_bot = bool(update.message.reply_to_message and BOT_INFO and update.message.reply_to_message.from_user.id == BOT_INFO.id)
-
-        if is_tagged or is_reply_to_bot or is_private or update.message.content_type in ["voice", "audio"]:
-            clean_prompt = text.replace(bot_username, "").replace(bot_username.lower(), "").replace("@gemini", "").replace("@Gemini", "").strip()
-            normalized_prompt = clean_prompt.rstrip("?").lower()
-
-            cooldown_key = f"cooldown:{user_id_str}"
-            if await redis_client.exists(cooldown_key):
-                warn_msg = "Slow the fuck down, this ain't a god damn fuck-fest"
-                if is_private:
-                    await bot.send_message(chat_id, warn_msg, parse_mode="HTML")
-                else:
-                    await bot.reply_to(update.message, warn_msg, parse_mode="HTML")
-                return Response(status_code=200)
-            
-            await redis_client.setex(cooldown_key, 4, "1")
-
-            if normalized_prompt in ["help", "commands"]:
-                help_text = (
-                    "<b>Remember rule:</b>\n  remember [item],, [item2] - adds items to memory list (separate multiple with double commas).\n\n"
-                    "<b>What do you remember:</b>\n  displays your rules in a numbered list format.\n\n"
-                    "<b>Edit #:</b>\n  edit [number] [new fact] - edits a specific rule.\n\n"
-                    "<b>Forget #:</b>\n  forget [number],, [number2] - removes specific memories (separate multiple with double commas).\n\n"
-                    "<b>Forget all:</b>\n  clears all memory."
-                )
-                if is_private:
-                    await bot.send_message(chat_id, help_text, parse_mode="HTML")
-                else:
-                    await bot.reply_to(update.message, help_text, parse_mode="HTML")
-                return Response(status_code=200)
-
-            if normalized_prompt in ["what do you remember", "how do you remember"]:
-                msg_text = await get_formatted_memories(user_id_str)
-                if is_private:
-                    sent_msg = await bot.send_message(chat_id, msg_text, parse_mode="HTML")
-                else:
-                    sent_msg = await bot.reply_to(update.message, msg_text, parse_mode="HTML")
-                
-                if sent_msg:
-                    background_tasks.add_task(collapse_message, chat_id, sent_msg.message_id, 60)
-                    
-                return Response(status_code=200)
-
-            if clean_prompt.lower().startswith("remember "):
-                parts = [p.strip()[:200] for p in clean_prompt[9:].split(",,") if p.strip()]
-                for part in parts[:10]:
-                    try:
-                        pos = await redis_client.lpos(f"memory_list:{user_id_str}", part)
-                        if pos is None:
-                            await redis_client.rpush(f"memory_list:{user_id_str}", part)
-                    except Exception: pass
-                # Enforce Redis Memory Auto-Pruning (Cap at 25 items)
-                await redis_client.ltrim(f"memory_list:{user_id_str}", -25, -1)
-                
-                msg_text = await get_formatted_memories(user_id_str)
-                if is_private:
-                    sent_msg = await bot.send_message(chat_id, msg_text, parse_mode="HTML")
-                else:
-                    sent_msg = await bot.reply_to(update.message, msg_text, parse_mode="HTML")
-                
-                if sent_msg:
-                    background_tasks.add_task(collapse_message, chat_id, sent_msg.message_id, 60)
-                return Response(status_code=200)
-
-            if clean_prompt.lower().startswith("edit "):
-                parts = clean_prompt[5:].strip().split(" ", 1)
-                if len(parts) == 2 and parts[0].isdigit():
-                    idx, new_val = int(parts[0]) - 1, parts[1].strip()
-                    raw_items = await redis_client.lrange(f"memory_list:{user_id_str}", 0, -1)
-                    if 0 <= idx < len(raw_items):
-                        await redis_client.lset(f"memory_list:{user_id_str}", idx, new_val)
-                        msg_text = await get_formatted_memories(user_id_str)
-                    else:
-                        msg_text = "Invalid memory number.\n\n" + await get_formatted_memories(user_id_str)
-                else:
-                    msg_text = "Usage: edit [number] [new text]"
-                
-                if is_private:
-                    sent_msg = await bot.send_message(chat_id, msg_text, parse_mode="HTML")
-                else:
-                    sent_msg = await bot.reply_to(update.message, msg_text, parse_mode="HTML")
-                
-                if sent_msg and "Active Memory Directives" in msg_text:
-                    background_tasks.add_task(collapse_message, chat_id, sent_msg.message_id, 60)
-                return Response(status_code=200)
-
-            if normalized_prompt == "forget all":
-                await redis_client.delete(f"memory_list:{user_id_str}", f"chat_history:{chat_id}:{user_id_str}")
-                msg_text = "Cleared all your saved memories."
-                if is_private:
-                    await bot.send_message(chat_id, msg_text, parse_mode="HTML")
-                else:
-                    await bot.reply_to(update.message, msg_text, parse_mode="HTML")
-                return Response(status_code=200)
-
-            if clean_prompt.lower().startswith("forget "):
-                try:
-                    indices = [int(n.strip()) - 1 for n in clean_prompt[7:].split(",,") if n.strip().isdigit()]
-                    raw_items = await redis_client.lrange(f"memory_list:{user_id_str}", 0, -1)
-                    if raw_items and indices:
-                        memories = [i.decode('utf-8') if isinstance(i, bytes) else i for i in raw_items]
-                        for i in sorted(set(indices), reverse=True):
-                            if 0 <= i < len(memories): memories.pop(i)
-                        await redis_client.delete(f"memory_list:{user_id_str}")
-                        if memories: await redis_client.rpush(f"memory_list:{user_id_str}", *memories)
-                        msg_text = await get_formatted_memories(user_id_str)
-                    else:
-                        msg_text = "No valid memory numbers specified.\n\n" + await get_formatted_memories(user_id_str)
-                except Exception:
-                    msg_text = "Error removing memory."
-                
-                if is_private:
-                    sent_msg = await bot.send_message(chat_id, msg_text, parse_mode="HTML")
-                else:
-                    sent_msg = await bot.reply_to(update.message, msg_text, parse_mode="HTML")
-                
-                if sent_msg and "Active Memory Directives" in msg_text:
-                    background_tasks.add_task(collapse_message, chat_id, sent_msg.message_id, 60)
-                return Response(status_code=200)
-
-            replied = update.message.reply_to_message
-            replied_context = replied.text or replied.caption or "" if replied else ""
-            
-            audio_bytes = None
-            audio_mime = "audio/ogg"
-            if update.message.content_type in ["voice", "audio"]:
-                audio_obj = update.message.voice or update.message.audio
-                if audio_obj:
-                    file_info = await bot.get_file(audio_obj.file_id)
-                    audio_bytes = await bot.download_file(file_info.file_path)
-                    if hasattr(audio_obj, 'mime_type') and audio_obj.mime_type:
-                        audio_mime = audio_obj.mime_type
-
-            if not clean_prompt and replied_context: clean_prompt = "What are your thoughts on this?"
-
-            if clean_prompt or replied_context or audio_bytes:
-                try:
-                    raw_mem = await redis_client.lrange(f"memory_list:{user_id_str}", 0, -1)
-                    saved_facts = [i.decode('utf-8') if isinstance(i, bytes) else i for i in raw_mem]
-
-                    history_key = f"chat_history:{chat_id}:{user_id_str}"
-                    raw_hist = await redis_client.lrange(history_key, 0, -1)
-                    chat_history = [h.decode('utf-8') if isinstance(h, bytes) else h for h in raw_hist]
-
-                    search_context = await free_web_search(clean_prompt) if clean_prompt else ""
-
-                    context_parts = []
-                    if replied_context: context_parts.append(f"Message User is Replying To:\n\"{replied_context}\"")
-                    if chat_history: context_parts.append("Recent Conversation Context:\n" + "\n".join(chat_history))
-                    if search_context: context_parts.append(f"Web Search Context:\n{search_context}")
-
-                    final_prompt = clean_prompt if clean_prompt else "Process and answer this voice note."
-                    if context_parts: final_prompt = "\n\n".join(context_parts) + f"\n\nUser Question: {final_prompt}"
-
-                    today_str = datetime.now().strftime("%A, %B %d, %Y")
-                    bot_instructions = (
-                        f"Today's date is {today_str}. Return plain text only without markdown formatting. "
-                        "Do not use bullet points, bolding, or asterisks natively. "
-                        "Never use standard AI pleasantries. Do not start responses with 'As an AI' or end with generic offers for help. "
-                    )
-                    
-                    bot_instructions += (
-                        "Keep casual replies brief, but dynamically expand your response length when explicitly asked for details or when playing interactive games. "
-                        "If the user changes the subject abruptly, drop the previous topic immediately and adapt to the new flow. "
-                        "If the user is clearly joking or sarcastic, match their energy rather than taking the prompt literally. "
-                    )
-
-                    bot_instructions += (
-                        "If you do not know the answer or the provided context is insufficient, state 'I don't have enough details to answer that accurately' directly without guessing. "
-                        "Do not assume personal details about the user unless they are explicitly provided in your memory list. "
-                    )
-
-                    if search_context:
-                        bot_instructions += (
-                            "When referencing 'Web Search Context', state the information directly without saying 'According to my search' or 'I found this online'. "
-                            "Never include or state URLs/links from the Web Search Context unless the user explicitly asks for links, sources, or URLs in their prompt. "
-                        )
-
-                    if chat_history:
-                        bot_instructions += "Use the 'Recent Conversation Context' to track pronouns and subjects, but never summarize or repeat the history back to the user. "
-
-                    if saved_facts:
-                        bot_instructions += "\n\nYou must strictly follow these User Instructions. They override any baseline behavior and are your absolute highest priority:\n" + "\n".join(f"- {f}" for f in saved_facts)
-
-                    if audio_bytes:
-                        contents = [
-                            types.Part.from_bytes(data=audio_bytes, mime_type=audio_mime),
-                            final_prompt
-                        ]
-                        response = await gemini_client.aio.models.generate_content(
-                            model='gemini-3.5-flash-lite',
-                            contents=contents,
-                            config=types.GenerateContentConfig(system_instruction=bot_instructions)
-                        )
-                    else:
-                        chat = gemini_client.aio.chats.create(
-                            model='gemini-3.5-flash-lite',
-                            config=types.GenerateContentConfig(system_instruction=bot_instructions)
-                        )
-                        response = await chat.send_message(final_prompt)
-
-                    clean_text = re.sub(r'[*_#`]', '', response.text or "")
-                    clean_text = balance_codeblocks(clean_text)
-                    
-                    preview_opts = telebot.types.LinkPreviewOptions(is_disabled=False, prefer_small_media=True)
-                    
-                    if is_private:
-                        await bot.send_message(chat_id, clean_text, link_preview_options=preview_opts)
-                    else:
-                        await bot.send_message(chat_id, clean_text, reply_to_message_id=msg_id, link_preview_options=preview_opts)
-
-                    await redis_client.rpush(history_key, f"User: {clean_prompt or 'Voice Note'}", f"Bot: {clean_text}")
-                    await redis_client.ltrim(history_key, -10, -1)
-
-                except Exception as ai_err:
-                    print(f"Gemini API error: {ai_err}")
-                    error_text = "I am currently broken right now, the owner needs to fix me."
-                    if "429" in str(ai_err):
-                        error_text = "Whoa, I'm getting a little overwhelmed! Let me catch my breath for a minute."
-                    if is_private:
-                        await bot.send_message(chat_id, error_text)
-                    else:
-                        await bot.send_message(chat_id, error_text, reply_to_message_id=msg_id)
-
-            return Response(status_code=200)
-
-        if re.search(r'\bsen\b', text_no_code, re.IGNORECASE):
-            background_tasks.add_task(send_audio_track, chat_id, msg_id, "sen", "Devin_The_Dude_Anythang.mp3", "Anythang", "Devin The Dude", is_private)
-        if re.search(r'\bmagic(?:al|ally)?\b', text_no_code, re.IGNORECASE):
-            background_tasks.add_task(send_audio_track, chat_id, msg_id, "magic", "Do You Believe In Magic.mp3", "Do You Believe In Magic", "The Lovin' Spoonful", is_private)
-
-    except Exception as e:
-        print(f"Webhook error: {e}")
-    return Response(status_code=200)
+@bot.message_handler(func=lambda message: True)
+async def handle_all_messages(message):
+    """Intercepts messages and triggers the entity-based generation."""
+    # Execute generation without blocking the main event loop
+    asyncio.create_task(send_gemini_formatted_response(message.chat.id, message.text))
 
 async def collapse_message(chat_id: int, message_id: int, delay: int):
     """Waits for the delay (in seconds), then edits the message to a collapsed state."""
@@ -405,30 +154,10 @@ async def collapse_message(chat_id: int, message_id: int, delay: int):
 async def send_audio_track(chat_id, msg_id, key, file_path, title, performer, is_private):
     try:
         kwargs = {"title": title, "performer": performer, "timeout": 60}
-        if not is_private: kwargs["reply_to_message_id"] = msg_id
-
-        cached_id = await redis_client.get(f"audio_cache:{key}")
-
-        async def attempt_send(audio_payload):
-            try:
-                return await bot.send_audio(chat_id, audio_payload, **kwargs)
-            except telebot.apihelper.ApiTelegramException as e:
-                if "message to be replied not found" in str(e).lower():
-                    kwargs.pop("reply_to_message_id", None)
-                    return await bot.send_audio(chat_id, audio_payload, **kwargs)
-                raise e
-
-        if cached_id:
-            await attempt_send(cached_id.decode('utf-8') if isinstance(cached_id, bytes) else cached_id)
-        elif os.path.exists(file_path):
-            with open(file_path, "rb") as audio:
-                msg = await attempt_send(audio)
-                if msg and msg.audio and msg.audio.file_id:
-                    await redis_client.set(f"audio_cache:{key}", msg.audio.file_id)
-        else:
-            print(f"Audio file not found: {file_path}")
-    except Exception as send_err:
-        print(f"Error sending audio ({key}): {send_err}")
+        if not is_private:
+            kwargs["reply_to_message_id"] = msg_id
+    except Exception as e:
+        pass
 
 if __name__ == "__main__":
     import uvicorn
