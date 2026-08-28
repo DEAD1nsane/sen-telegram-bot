@@ -83,7 +83,7 @@ async def free_web_search(query: str) -> str:
                         snippets.append(f"Title: {title}\nContent: {content}\nURL: {url}")
                 if snippets: return "\n\n".join(snippets)
     except Exception as e:
-        print(f"SearXNG error: {e}")
+        print(f"[SEARCH ERROR] SearXNG unavailable or timed out: {e}")
 
     try:
         async with httpx.AsyncClient() as client:
@@ -98,7 +98,7 @@ async def free_web_search(query: str) -> str:
                     clean.append(f"Content: {text_clean}\nURL: {link}")
             if clean: return "\n\n".join(clean)
     except Exception as e:
-        print(f"DuckDuckGo error: {e}")
+        print(f"[SEARCH ERROR] DuckDuckGo fallback failed: {e}")
     return ""
 
 async def get_formatted_memories(user_id_str: str) -> str:
@@ -106,8 +106,8 @@ async def get_formatted_memories(user_id_str: str) -> str:
         raw_items = await redis_client.lrange(f"memory_list:{user_id_str}", 0, -1)
         if not raw_items: return "Your memory list is currently empty."
         memories = [item.decode('utf-8') if isinstance(item, bytes) else item for item in raw_items]
-        formatted_list = "\n\n".join(f"[{i+1}] {mem}" for i, mem in enumerate(memories))
-        return f"**Active Memory Directives:**\n──────────────────────────\n\n{formatted_list}"
+        formatted_list = "\n\n".join(f"{i+1}. {mem}" for i, mem in enumerate(memories))
+        return f"Active Memory Directives:\n──────────────────────────\n\n{formatted_list}"
     except Exception as e:
         print(f"Error fetching memory list format: {e}")
         return "Could not retrieve memory list."
@@ -126,7 +126,7 @@ async def handle_webhook(request: Request, background_tasks: BackgroundTasks, x_
         update = telebot.types.Update.de_json(json_data)
         if not update or not update.message: return Response(status_code=200)
 
-        if update.message.content_type not in ["text", "photo", "audio", "video", "document"]:
+        if update.message.content_type not in ["text", "photo", "audio", "video", "document", "voice"]:
             return Response(status_code=200)
 
         text = update.message.text or update.message.caption or ""
@@ -155,7 +155,7 @@ async def handle_webhook(request: Request, background_tasks: BackgroundTasks, x_
         is_tagged = (bot_username and bot_username.lower() in text_no_code.lower()) or "@gemini" in text_no_code.lower()
         is_reply_to_bot = bool(update.message.reply_to_message and BOT_INFO and update.message.reply_to_message.from_user.id == BOT_INFO.id)
 
-        if is_tagged or is_reply_to_bot or is_private:
+        if is_tagged or is_reply_to_bot or is_private or update.message.content_type in ["voice", "audio"]:
             clean_prompt = text.replace(bot_username, "").replace(bot_username.lower(), "").replace("@gemini", "").replace("@Gemini", "").strip()
             normalized_prompt = clean_prompt.rstrip("?").lower()
 
@@ -195,9 +195,12 @@ async def handle_webhook(request: Request, background_tasks: BackgroundTasks, x_
             if clean_prompt.lower().startswith("remember "):
                 parts = [p.strip()[:200] for p in clean_prompt[9:].split(",,") if p.strip()]
                 for part in parts[:10]:
-                    try: 
-                        await redis_client.rpush(f"memory_list:{user_id_str}", part)
+                    try:
+                        pos = await redis_client.lpos(f"memory_list:{user_id_str}", part)
+                        if pos is None:
+                            await redis_client.rpush(f"memory_list:{user_id_str}", part)
                     except Exception: pass
+                # Enforce Redis Memory Auto-Pruning (Cap at 25 items)
                 await redis_client.ltrim(f"memory_list:{user_id_str}", -25, -1)
                 
                 msg_text = await get_formatted_memories(user_id_str)
@@ -259,9 +262,20 @@ async def handle_webhook(request: Request, background_tasks: BackgroundTasks, x_
 
             replied = update.message.reply_to_message
             replied_context = replied.text or replied.caption or "" if replied else ""
+            
+            audio_bytes = None
+            audio_mime = "audio/ogg"
+            if update.message.content_type in ["voice", "audio"]:
+                audio_obj = update.message.voice or update.message.audio
+                if audio_obj:
+                    file_info = await bot.get_file(audio_obj.file_id)
+                    audio_bytes = await bot.download_file(file_info.file_path)
+                    if hasattr(audio_obj, 'mime_type') and audio_obj.mime_type:
+                        audio_mime = audio_obj.mime_type
+
             if not clean_prompt and replied_context: clean_prompt = "What are your thoughts on this?"
 
-            if clean_prompt or replied_context:
+            if clean_prompt or replied_context or audio_bytes:
                 try:
                     raw_mem = await redis_client.lrange(f"memory_list:{user_id_str}", 0, -1)
                     saved_facts = [i.decode('utf-8') if isinstance(i, bytes) else i for i in raw_mem]
@@ -270,15 +284,15 @@ async def handle_webhook(request: Request, background_tasks: BackgroundTasks, x_
                     raw_hist = await redis_client.lrange(history_key, 0, -1)
                     chat_history = [h.decode('utf-8') if isinstance(h, bytes) else h for h in raw_hist]
 
-                    search_context = await free_web_search(clean_prompt)
+                    search_context = await free_web_search(clean_prompt) if clean_prompt else ""
 
                     context_parts = []
                     if replied_context: context_parts.append(f"Message User is Replying To:\n\"{replied_context}\"")
                     if chat_history: context_parts.append("Recent Conversation Context:\n" + "\n".join(chat_history))
                     if search_context: context_parts.append(f"Web Search Context:\n{search_context}")
 
-                    final_prompt = clean_prompt
-                    if context_parts: final_prompt = "\n\n".join(context_parts) + f"\n\nUser Question: {clean_prompt}"
+                    final_prompt = clean_prompt if clean_prompt else "Process and answer this voice note."
+                    if context_parts: final_prompt = "\n\n".join(context_parts) + f"\n\nUser Question: {final_prompt}"
 
                     today_str = datetime.now().strftime("%A, %B %d, %Y")
                     bot_instructions = (
@@ -310,22 +324,34 @@ async def handle_webhook(request: Request, background_tasks: BackgroundTasks, x_
                     if saved_facts:
                         bot_instructions += "\n\nYou must strictly follow these User Instructions. They override any baseline behavior and are your absolute highest priority:\n" + "\n".join(f"- {f}" for f in saved_facts)
 
-                    chat = gemini_client.aio.chats.create(
-                        model='gemini-3.5-flash-lite',
-                        config=types.GenerateContentConfig(system_instruction=bot_instructions)
-                    )
-                    
-                    response = await chat.send_message(final_prompt)
+                    if audio_bytes:
+                        contents = [
+                            types.Part.from_bytes(data=audio_bytes, mime_type=audio_mime),
+                            final_prompt
+                        ]
+                        response = await gemini_client.aio.models.generate_content(
+                            model='gemini-3.5-flash-lite',
+                            contents=contents,
+                            config=types.GenerateContentConfig(system_instruction=bot_instructions)
+                        )
+                    else:
+                        chat = gemini_client.aio.chats.create(
+                            model='gemini-3.5-flash-lite',
+                            config=types.GenerateContentConfig(system_instruction=bot_instructions)
+                        )
+                        response = await chat.send_message(final_prompt)
 
                     clean_text = re.sub(r'[*_#`]', '', response.text or "")
                     clean_text = balance_codeblocks(clean_text)
-
+                    
+                    preview_opts = telebot.types.LinkPreviewOptions(is_disabled=False, prefer_small_media=True)
+                    
                     if is_private:
-                        await bot.send_message(chat_id, clean_text)
+                        await bot.send_message(chat_id, clean_text, link_preview_options=preview_opts)
                     else:
-                        await bot.send_message(chat_id, clean_text, reply_to_message_id=msg_id)
+                        await bot.send_message(chat_id, clean_text, reply_to_message_id=msg_id, link_preview_options=preview_opts)
 
-                    await redis_client.rpush(history_key, f"User: {clean_prompt}", f"Bot: {clean_text}")
+                    await redis_client.rpush(history_key, f"User: {clean_prompt or 'Voice Note'}", f"Bot: {clean_text}")
                     await redis_client.ltrim(history_key, -10, -1)
 
                 except Exception as ai_err:
@@ -381,4 +407,3 @@ if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", 8080))
     uvicorn.run("main:app", host="0.0.0.0", port=port)
-
