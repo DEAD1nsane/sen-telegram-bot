@@ -344,8 +344,8 @@ async def handle_webhook(request: Request, background_tasks: BackgroundTasks, x_
                         bot_instructions += "\n\nYou must strictly follow these User Instructions. They override any baseline behavior and are your absolute highest priority:\n" + "\n".join(f"- {f}" for f in saved_facts)
 
                     bot_instructions += (
-                        "\n\nWhen generating structured lists, format the main header or item name as **__Bold and Underlined__**. "
-                        "Use standard bullets for top-level list items, and explicitly use the open circle symbol '○' strictly for nested sub-bullets. "
+                        "\n\nFor short, simple, or conversational responses (like jokes or brief answers), respond in plain text without bullet lists or headers. "
+                        "ONLY when explicitly generating a multi-item list or breakdown, format main items as **__Bold and Underlined__**, using standard bullets for top-level items and '○' strictly for nested sub-bullets."
                     )
 
                     # Global safety override block
