@@ -11,7 +11,7 @@ import redis.asyncio as redis
 import httpx
 from google import genai
 from google.genai import types
-from telegramify_markdown import convert
+from telegramify_markdown import markdownify
 
 # Environment & Config
 redis_url = os.environ.get("REDIS_URL")
@@ -179,20 +179,20 @@ async def handle_webhook(request: Request, background_tasks: BackgroundTasks, x_
                     "**Forget #:**\n  forget [number],, [number2] - removes specific memories (separate multiple with double commas).\n\n"
                     "**Forget all:**\n  clears all memory."
                 )
-                clean_text, text_entities = convert(help_text)
+                clean_text = markdownify(help_text)
                 if is_private:
-                    await bot.send_message(chat_id, clean_text, entities=text_entities)
+                    await bot.send_message(chat_id, clean_text, parse_mode="MarkdownV2")
                 else:
-                    await bot.reply_to(update.message, clean_text, entities=text_entities)
+                    await bot.reply_to(update.message, clean_text, parse_mode="MarkdownV2")
                 return Response(status_code=200)
 
             if normalized_prompt in ["what do you remember", "how do you remember"]:
                 msg_text = await get_formatted_memories(user_id_str)
-                clean_text, text_entities = convert(msg_text)
+                clean_text = markdownify(msg_text)
                 if is_private:
-                    sent_msg = await bot.send_message(chat_id, clean_text, entities=text_entities)
+                    sent_msg = await bot.send_message(chat_id, clean_text, parse_mode="MarkdownV2")
                 else:
-                    sent_msg = await bot.reply_to(update.message, clean_text, entities=text_entities)
+                    sent_msg = await bot.reply_to(update.message, clean_text, parse_mode="MarkdownV2")
                 
                 if sent_msg:
                     background_tasks.add_task(collapse_message, chat_id, sent_msg.message_id, 60)
@@ -210,11 +210,11 @@ async def handle_webhook(request: Request, background_tasks: BackgroundTasks, x_
                 await redis_client.ltrim(f"memory_list:{user_id_str}", -25, -1)
                 
                 msg_text = await get_formatted_memories(user_id_str)
-                clean_text, text_entities = convert(msg_text)
+                clean_text = markdownify(msg_text)
                 if is_private:
-                    sent_msg = await bot.send_message(chat_id, clean_text, entities=text_entities)
+                    sent_msg = await bot.send_message(chat_id, clean_text, parse_mode="MarkdownV2")
                 else:
-                    sent_msg = await bot.reply_to(update.message, clean_text, entities=text_entities)
+                    sent_msg = await bot.reply_to(update.message, clean_text, parse_mode="MarkdownV2")
                 
                 if sent_msg:
                     background_tasks.add_task(collapse_message, chat_id, sent_msg.message_id, 60)
@@ -233,11 +233,11 @@ async def handle_webhook(request: Request, background_tasks: BackgroundTasks, x_
                 else:
                     msg_text = "Usage: edit [number] [new text]"
                 
-                clean_text, text_entities = convert(msg_text)
+                clean_text = markdownify(msg_text)
                 if is_private:
-                    sent_msg = await bot.send_message(chat_id, clean_text, entities=text_entities)
+                    sent_msg = await bot.send_message(chat_id, clean_text, parse_mode="MarkdownV2")
                 else:
-                    sent_msg = await bot.reply_to(update.message, clean_text, entities=text_entities)
+                    sent_msg = await bot.reply_to(update.message, clean_text, parse_mode="MarkdownV2")
                 
                 if sent_msg and "Active Memory Directives" in clean_text:
                     background_tasks.add_task(collapse_message, chat_id, sent_msg.message_id, 60)
@@ -246,11 +246,11 @@ async def handle_webhook(request: Request, background_tasks: BackgroundTasks, x_
             if normalized_prompt == "forget all":
                 await redis_client.delete(f"memory_list:{user_id_str}", f"chat_history:{chat_id}:{user_id_str}")
                 msg_text = "Cleared all your saved memories."
-                clean_text, text_entities = convert(msg_text)
+                clean_text = markdownify(msg_text)
                 if is_private:
-                    await bot.send_message(chat_id, clean_text, entities=text_entities)
+                    await bot.send_message(chat_id, clean_text, parse_mode="MarkdownV2")
                 else:
-                    await bot.reply_to(update.message, clean_text, entities=text_entities)
+                    await bot.reply_to(update.message, clean_text, parse_mode="MarkdownV2")
                 return Response(status_code=200)
 
             if clean_prompt.lower().startswith("forget "):
@@ -269,11 +269,11 @@ async def handle_webhook(request: Request, background_tasks: BackgroundTasks, x_
                 except Exception:
                     msg_text = "Error removing memory."
                 
-                clean_text, text_entities = convert(msg_text)
+                clean_text = markdownify(msg_text)
                 if is_private:
-                    sent_msg = await bot.send_message(chat_id, clean_text, entities=text_entities)
+                    sent_msg = await bot.send_message(chat_id, clean_text, parse_mode="MarkdownV2")
                 else:
-                    sent_msg = await bot.reply_to(update.message, clean_text, entities=text_entities)
+                    sent_msg = await bot.reply_to(update.message, clean_text, parse_mode="MarkdownV2")
                 
                 if sent_msg and "Active Memory Directives" in clean_text:
                     background_tasks.add_task(collapse_message, chat_id, sent_msg.message_id, 60)
@@ -386,14 +386,14 @@ async def handle_webhook(request: Request, background_tasks: BackgroundTasks, x_
 
                     raw_markdown = response.text or ""
                     raw_markdown = balance_codeblocks(raw_markdown)
-                    clean_text, text_entities = convert(raw_markdown)
+                    clean_text = markdownify(raw_markdown)
                     
                     preview_opts = telebot.types.LinkPreviewOptions(is_disabled=False, prefer_small_media=True)
                     
                     if is_private:
-                        await bot.send_message(chat_id, clean_text, entities=text_entities, link_preview_options=preview_opts)
+                        await bot.send_message(chat_id, clean_text, parse_mode="MarkdownV2", link_preview_options=preview_opts)
                     else:
-                        await bot.send_message(chat_id, clean_text, entities=text_entities, reply_to_message_id=msg_id, link_preview_options=preview_opts)
+                        await bot.send_message(chat_id, clean_text, reply_to_message_id=msg_id, parse_mode="MarkdownV2", link_preview_options=preview_opts)
 
                     await redis_client.rpush(history_key, f"User: {clean_prompt or 'Voice Note'}", f"Bot: {clean_text}")
                     await redis_client.ltrim(history_key, -10, -1)
@@ -423,13 +423,13 @@ async def collapse_message(chat_id: int, message_id: int, delay: int):
     """Waits for the delay (in seconds), then edits the message to a collapsed state."""
     await asyncio.sleep(delay)
     collapsed_text = "> Active Memories Collapsed"
-    clean_text, text_entities = convert(collapsed_text)
+    clean_text = markdownify(collapsed_text)
     try:
         await bot.edit_message_text(
             chat_id=chat_id, 
             message_id=message_id, 
             text=clean_text, 
-            entities=text_entities
+            parse_mode="MarkdownV2"
         )
     except Exception as e:
         print(f"Error collapsing memory list: {e}")
