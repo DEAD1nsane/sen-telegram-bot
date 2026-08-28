@@ -392,16 +392,17 @@ async def handle_webhook(request: Request, background_tasks: BackgroundTasks, x_
                             )
                             response = await chat.send_message(final_prompt)
 
+
                     raw_markdown = response.text or ""
                     raw_markdown = balance_codeblocks(raw_markdown)
-                    clean_text, text_entities = convert(raw_markdown)
+                    clean_text = markdownify(raw_markdown)
                     
                     preview_opts = telebot.types.LinkPreviewOptions(is_disabled=False, prefer_small_media=True)
                     
                     if is_private:
-                        await bot.send_message(chat_id, clean_text, entities=text_entities, link_preview_options=preview_opts)
+                        await bot.send_message(chat_id, clean_text, parse_mode="MarkdownV2", link_preview_options=preview_opts)
                     else:
-                        await bot.send_message(chat_id, clean_text, entities=text_entities, reply_to_message_id=msg_id, link_preview_options=preview_opts)
+                        await bot.send_message(chat_id, clean_text, reply_to_message_id=msg_id, parse_mode="MarkdownV2", link_preview_options=preview_opts)
 
                     await redis_client.rpush(history_key, f"User: {clean_prompt or 'Voice Note'}", f"Bot: {clean_text}")
                     await redis_client.ltrim(history_key, -10, -1)
@@ -431,13 +432,13 @@ async def collapse_message(chat_id: int, message_id: int, delay: int):
     """Waits for the delay (in seconds), then edits the message to a collapsed state."""
     await asyncio.sleep(delay)
     collapsed_text = "> Active Memories Collapsed"
-    clean_text, text_entities = convert(collapsed_text)
+    clean_text = markdownify(collapsed_text)
     try:
         await bot.edit_message_text(
             chat_id=chat_id, 
             message_id=message_id, 
             text=clean_text, 
-            entities=text_entities
+            parse_mode="MarkdownV2"
         )
     except Exception as e:
         print(f"Error collapsing memory list: {e}")
