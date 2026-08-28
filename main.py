@@ -116,14 +116,15 @@ async def send_gemini_formatted_response(chat_id: int, prompt: str):
 def home_check():
     return {"status": "ok", "message": "Bot webhook server is running."}
 
+
 @app.post("/webhook")
 async def handle_webhook(request: Request, background_tasks: BackgroundTasks, x_telegram_bot_api_secret_token: str = Header(None)):
     if WEBHOOK_SECRET and x_telegram_bot_api_secret_token != WEBHOOK_SECRET:
         raise HTTPException(status_code=403, detail="Unauthorized")
-        
+
     update_data = await request.json()
     update = telebot.types.Update.de_json(update_data)
-    
+
     # Properly pass the update back into pyTelegramBotAPI's internal handler routing
     await bot.process_new_updates([update])
     return {"status": "ok"}
@@ -131,8 +132,8 @@ async def handle_webhook(request: Request, background_tasks: BackgroundTasks, x_
 @bot.message_handler(func=lambda message: True)
 async def handle_all_messages(message):
     """Intercepts messages and triggers the entity-based generation."""
-    # Execute generation without blocking the main event loop
     asyncio.create_task(send_gemini_formatted_response(message.chat.id, message.text))
+
 
 async def collapse_message(chat_id: int, message_id: int, delay: int):
     """Waits for the delay (in seconds), then edits the message to a collapsed state."""
