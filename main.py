@@ -95,7 +95,7 @@ async def free_web_search(query: str) -> str:
                 SEARXNG_URL, params=params, headers=headers, timeout=8.0
             )
             if res.status_code == 200:
-                results = res.json().get("results", [])[:3]
+                results = res.json().get("results", [])[:15]
                 snippets = []
                 for item in results:
                     title = item.get("title", "")
@@ -123,7 +123,7 @@ async def free_web_search(query: str) -> str:
             )
             urls = re.findall(r'href="(https?://[^"]+)"', res.text)
             clean = []
-            for i, snippet in enumerate(raw[:3]):
+            for i, snippet in enumerate(raw[:15]):
                 text_clean = re.sub(r"<[^>]+>", "", snippet).strip()
                 link = urls[i] if i < len(urls) else ""
                 if text_clean:
@@ -308,7 +308,6 @@ async def handle_help(message: Message):
         await message.reply(clean_text)
 
 
-# Helper filters for specific memory commands
 def text_in(options: set):
     return lambda message: message.text and message.text.lower() in options
 
@@ -668,10 +667,30 @@ async def handle_conversation(message: Message, background_tasks: BackgroundTask
                     is_disabled=False, prefer_small_media=True
                 )
 
-                if is_private:
-                    await message.answer(clean_text, link_preview_options=preview_opts)
+                # INTERCEPTOR: If telegramify_markdown panics, strip markdown and send as raw text
+                if "Cannot Do, please rephrase" in clean_text:
+                    safe_text = re.sub(r"[*_#`]", "", raw_markdown)
+                    if is_private:
+                        await message.answer(
+                            safe_text,
+                            parse_mode=None,
+                            link_preview_options=preview_opts,
+                        )
+                    else:
+                        await message.reply(
+                            safe_text,
+                            parse_mode=None,
+                            link_preview_options=preview_opts,
+                        )
                 else:
-                    await message.reply(clean_text, link_preview_options=preview_opts)
+                    if is_private:
+                        await message.answer(
+                            clean_text, link_preview_options=preview_opts
+                        )
+                    else:
+                        await message.reply(
+                            clean_text, link_preview_options=preview_opts
+                        )
 
                 await redis_client.rpush(
                     history_key,
