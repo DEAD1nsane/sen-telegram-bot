@@ -1,0 +1,37 @@
+{
+  "name": "sen-telegram-bot",
+  "version": "1.0.0",
+  "description": "Telegram backup script and reminder bot with code formatting automations",
+  "main": "upload.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node upload.js",
+    "format": "lint-staged",
+    "test": "echo \"No tests configured yet\"",
+    "prepare": "husky || true"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com"
+  },
+  "homepage": "https://github.com",
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "googleapis": "^176.0.0"
+  },
+  "devDependencies": {
+    "husky": "^9.1.5",
+    "lint-staged": "^15.2.9",
+    "prettier": "^3.3.3"
+  },
+  "lint-staged": {
+    "*.{js,json,md}": "prettier --write",
+    "*.py": "black"
+  }
+}
