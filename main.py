@@ -342,6 +342,14 @@ async def handle_webhook(request: Request, background_tasks: BackgroundTasks, x_
                     if saved_facts:
                         bot_instructions += "\n\nYou must strictly follow these User Instructions. They override any baseline behavior and are your absolute highest priority:\n" + "\n".join(f"- {f}" for f in saved_facts)
 
+                    # Global safety override block
+                    safety_overrides = [
+                        types.SafetySetting(category="HARM_CATEGORY_HATE_SPEECH", threshold="BLOCK_NONE"),
+                        types.SafetySetting(category="HARM_CATEGORY_HARASSMENT", threshold="BLOCK_NONE"),
+                        types.SafetySetting(category="HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold="BLOCK_NONE"),
+                        types.SafetySetting(category="HARM_CATEGORY_DANGEROUS_CONTENT", threshold="BLOCK_NONE")
+                    ]
+
                     if audio_bytes:
                         contents = [
                             types.Part.from_bytes(data=audio_bytes, mime_type=audio_mime),
@@ -350,20 +358,29 @@ async def handle_webhook(request: Request, background_tasks: BackgroundTasks, x_
                         response = await gemini_client.aio.models.generate_content(
                             model='gemini-3.5-flash-lite',
                             contents=contents,
-                            config=types.GenerateContentConfig(system_instruction=bot_instructions)
+                            config=types.GenerateContentConfig(
+                                system_instruction=bot_instructions,
+                                safety_settings=safety_overrides
+                            )
                         )
                     else:
                         try:
                             chat = gemini_client.aio.chats.create(
                                 model='gemini-3.5-flash-lite',
-                                config=types.GenerateContentConfig(system_instruction=bot_instructions)
+                                config=types.GenerateContentConfig(
+                                    system_instruction=bot_instructions,
+                                    safety_settings=safety_overrides
+                                )
                             )
                             response = await chat.send_message(final_prompt)
                         except Exception as primary_err:
                             print(f"Primary model failed ({primary_err}), falling back to gemini-2.5-flash...")
                             chat = gemini_client.aio.chats.create(
                                 model='gemini-2.5-flash',
-                                config=types.GenerateContentConfig(system_instruction=bot_instructions)
+                                config=types.GenerateContentConfig(
+                                    system_instruction=bot_instructions,
+                                    safety_settings=safety_overrides
+                                )
                             )
                             response = await chat.send_message(final_prompt)
 
