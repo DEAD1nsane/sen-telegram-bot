@@ -329,8 +329,7 @@ async def handle_webhook(request: Request, background_tasks: BackgroundTasks, x_
 
                     bot_instructions += (
                         "If you do not know the answer or the provided context is insufficient, state 'I don't have enough details to answer that accurately' directly without guessing. "
-                        "Do not assume personal details about the user unless they are explicitly provided in your memory list. "
-                    )
+                   )
 
                     if search_context:
                         bot_instructions += (
@@ -344,11 +343,7 @@ async def handle_webhook(request: Request, background_tasks: BackgroundTasks, x_
                     if saved_facts:
                         bot_instructions += "\n\nYou must strictly follow these User Instructions. They override any baseline behavior and are your absolute highest priority:\n" + "\n".join(f"- {f}" for f in saved_facts)
 
-                    bot_instructions += (
-                        "\n\nDefault to standard conversational prose and clean paragraphs for explanations, summaries, and detailed answers. "
-                        "Do NOT use bullet points unless the user explicitly asks for a list, or the data is naturally an itemized step-by-step breakdown. "
-                        "When a multi-item list IS explicitly required, format main headers as **__Bold and Underlined__**, using standard bullets for top-level items and '○' strictly for nested sub-bullets."
-                    )
+                   )
 
                     # Global safety override block
                     safety_overrides = [
