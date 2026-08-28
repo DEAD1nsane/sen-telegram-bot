@@ -69,6 +69,17 @@ gemini_client = genai.Client(api_key=gemini_api_key)
 OWNER_ID = int(os.getenv("OWNER_ID", "0"))
 
 
+def convert(text: str) -> tuple[str, list]:
+    """
+    Parses Markdown formatting syntax securely into a clean text string
+    and a list of native Telegram MessageEntities.
+    """
+    if not text:
+        return "", []
+    parsed = telebot.formatting.parse_markdown(text)
+    return parsed.text, parsed.entities
+
+
 def balance_codeblocks(text: str) -> str:
     """Auto-closes unclosed codeblocks to prevent broken Telegram formatting."""
     if text.count("```") % 2 != 0:
@@ -385,23 +396,21 @@ async def handle_webhook(
                 except Exception:
                     msg_text = "Error removing memory."
 
-                    # Keep clean_text defined so line 404 doesn't break
-                    clean_text = msg_text
-                    rich_payload = telebot.types.InputRichMessage(markdown=msg_text)
+                clean_text = msg_text
+                rich_payload = telebot.types.InputRichMessage(markdown=msg_text)
 
-                    if is_private:
-                        sent_msg = await bot.send_rich_message(
-                            chat_id=chat_id, rich_message=rich_payload
-                        )
-                    else:
-                        # For replies, pass the rich payload directly to the API client layer
-                        sent_msg = await bot.send_rich_message(
-                            chat_id=update.message.chat.id,
-                            rich_message=rich_payload,
-                            reply_parameters=telebot.types.ReplyParameters(
-                                message_id=update.message.message_id
-                            ),
-                        )
+                if is_private:
+                    sent_msg = await bot.send_rich_message(
+                        chat_id=chat_id, rich_message=rich_payload
+                    )
+                else:
+                    sent_msg = await bot.send_rich_message(
+                        chat_id=update.message.chat.id,
+                        rich_message=rich_payload,
+                        reply_parameters=telebot.types.ReplyParameters(
+                            message_id=update.message.message_id
+                        ),
+                    )
 
                 if sent_msg and "Active Memory Directives" in clean_text:
                     background_tasks.add_task(
@@ -503,7 +512,6 @@ async def handle_webhook(
                             + "\n".join(f"- {f}" for f in saved_facts)
                         )
 
-                    # Global safety override block
                     safety_overrides = [
                         types.SafetySetting(
                             category="HARM_CATEGORY_HATE_SPEECH", threshold="BLOCK_NONE"
@@ -562,7 +570,6 @@ async def handle_webhook(
                     raw_markdown = response.text or ""
                     raw_markdown = balance_codeblocks(raw_markdown)
 
-                    # Define clean_text as fallback, then bundle your raw AI output into a native Rich Message
                     clean_text = raw_markdown
                     rich_payload = telebot.types.InputRichMessage(markdown=raw_markdown)
 
