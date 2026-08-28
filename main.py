@@ -31,9 +31,7 @@ else:
 
 API_TOKEN = os.getenv("BOT_TOKEN")
 WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET")
-SEARXNG_URL = os.getenv("SEARXNG_URL")
-if SEARXNG_URL and not SEARXNG_URL.startswith("http"):
-    SEARXNG_URL = f"http://{SEARXNG_URL}"
+SEARXNG_URL = os.getenv("SEARXNG_URL", "https://searxng-railway-production-3252.up.railway.app/search")
 
 bot = AsyncTeleBot(API_TOKEN)
 BOT_INFO = None
@@ -209,6 +207,7 @@ async def handle_webhook(request: Request, background_tasks: BackgroundTasks, x_
                         if pos is None:
                             await redis_client.rpush(f"memory_list:{user_id_str}", part)
                     except Exception: pass
+                # Enforce Redis Memory Auto-Pruning (Cap at 25 items)
                 await redis_client.ltrim(f"memory_list:{user_id_str}", -25, -1)
                 
                 msg_text = await get_formatted_memories(user_id_str)
