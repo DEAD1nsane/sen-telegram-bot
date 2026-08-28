@@ -11,7 +11,7 @@ import redis.asyncio as redis
 import httpx
 from google import genai
 from google.genai import types
-from telegramify_markdown import convert
+from md2tgmd import escape
 from markdownify import markdownify
 
 # Environment & Config

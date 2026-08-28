@@ -16,8 +16,6 @@ httpx==0.28.1
 idna==3.18
 multidict==6.7.1
 propcache==0.5.2
-pydantic==2.13.4
-pydantic_core==2.46.4
 pyTelegramBotAPI==4.36.0
 python-telegram-bot==22.8
 requests==2.34.2
@@ -30,5 +28,5 @@ yarl==1.24.5
 google-genai
 redis
 telebot
-telegramify-markdown==1.2.0
+md2tgmd
 markdownify
