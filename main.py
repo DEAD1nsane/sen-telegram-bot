@@ -1,18 +1,17 @@
+import asyncio
 import os
 import re
-import asyncio
-from datetime import datetime
 from contextlib import asynccontextmanager
+from datetime import datetime
 
-from fastapi import FastAPI, Request, Response, Header, HTTPException, BackgroundTasks
-from aiogram import Bot, Dispatcher, Router, F
-from aiogram.enums import ContentType, ChatType
-from aiogram.filters import Command
-from aiogram.types import Message, Update, LinkPreviewOptions, FSInputFile
-from aiogram.exceptions import TelegramBadRequest, TelegramAPIError
-
-import redis.asyncio as redis
 import httpx
+import redis.asyncio as redis
+from aiogram import Bot, Dispatcher, F, Router
+from aiogram.enums import ChatType, ContentType
+from aiogram.exceptions import TelegramBadRequest
+from aiogram.filters import Command
+from aiogram.types import FSInputFile, LinkPreviewOptions, Message, Update
+from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Request, Response
 from google import genai
 from google.genai import types as genai_types
 from telegramify_markdown import convert
@@ -179,7 +178,7 @@ async def get_formatted_memories(user_id_str: str) -> str:
             item.decode("utf-8") if isinstance(item, bytes) else item
             for item in raw_items
         ]
-        formatted_list = "\n".join(f"{i+1}. {mem}" for i, mem in enumerate(memories))
+        formatted_list = "\n".join(f"{i + 1}. {mem}" for i, mem in enumerate(memories))
         return f"**Active Memory Directives:**\n----------\n\n{formatted_list}"
     except Exception as e:
         print(f"Error fetching memory list format: {e}")
@@ -237,7 +236,7 @@ async def send_audio_track(
                         performer=performer,
                         request_timeout=60,
                     )
-                raise e
+                raise
 
         if cached_id:
             audio_id = (
