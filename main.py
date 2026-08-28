@@ -130,7 +130,7 @@ async def free_web_search(query: str) -> str:
                 SEARXNG_URL, params=params, headers=headers, timeout=8.0
             )
             if res.status_code == 200:
-                results = res.json().get("results", [])[:3]
+                results = res.json().get("results", [])[:15]
                 snippets = []
                 for item in results:
                     title = item.get("title", "")
@@ -158,7 +158,7 @@ async def free_web_search(query: str) -> str:
             )
             urls = re.findall(r'href="(https?://[^"]+)"', res.text)
             clean = []
-            for i, snippet in enumerate(raw[:3]):
+            for i, snippet in enumerate(raw[:15]):
                 text_clean = re.sub(r"<[^>]+>", "", snippet).strip()
                 link = urls[i] if i < len(urls) else ""
                 if text_clean:
@@ -404,7 +404,7 @@ async def process_incoming_message(message: Message, background_tasks: Backgroun
         # Command: remember
         if clean_prompt.lower().startswith("remember "):
             parts = [p.strip()[:200] for p in clean_prompt[9:].split(",,") if p.strip()]
-            for part in parts[:10]:
+            for part in parts[:15]:
                 try:
                     pos = await redis_client.lpos(f"memory_list:{user_id_str}", part)
                     if pos is None:
