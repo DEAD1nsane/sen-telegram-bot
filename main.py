@@ -548,11 +548,18 @@ async def handle_help(message: Message):
 
 
 def text_in(options: set):
-    return lambda message: message.text and message.text.lower() in options
+    # This cleans up and strips out any leading slashes or white spaces automatically
+    return (
+        lambda message: message.text
+        and message.text.strip().lstrip("/").lower() in options
+    )
 
 
 def text_startswith(prefix: str):
-    return lambda message: message.text and message.text.lower().startswith(prefix)
+    # Ensures commands like "/remember" or "remember" track identically
+    return lambda message: message.text and message.text.strip().lstrip(
+        "/"
+    ).lower().startswith(prefix)
 
 
 @router.message(text_in({"what do you remember", "how do you remember"}))
