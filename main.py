@@ -1,6 +1,6 @@
-import asyncio
 import os
 import re
+import asyncio
 from datetime import datetime, timezone
 
 import httpx
@@ -81,6 +81,29 @@ async def free_web_search(query: str) -> str:
                     return "\n\n".join(snippets)
     except Exception as e:
         print(f"SearXNG error: {e}")
+
+    try:
+        async with httpx.AsyncClient() as client:
+            res = await client.post(
+                "https://html.duckduckgo.com/html/",
+                data={"q": query},
+                headers=headers,
+                timeout=8.0,
+            )
+            raw = re.findall(
+                r'<a class="result__snippet[^">]*>(.*?)</a>', res.text, re.DOTALL
+            )
+            urls = re.findall(r'href="(https?://[^"]+)"', res.text)
+            clean = []
+            for i, snippet in enumerate(raw[:15]):
+                text_clean = re.sub(r"<[^>]+>", "", snippet).strip()
+                link = urls[i] if i < len(urls) else ""
+                if text_clean:
+                    clean.append(f"Content: {text_clean}\nURL: {link}")
+            if clean:
+                return "\n\n".join(clean)
+    except Exception as e:
+        print(f"DuckDuckGo error: {e}")
     return ""
 
 
@@ -395,7 +418,6 @@ async def handle_conversation(message: Message):
         chat_id = message.chat.id
         msg_id = message.message_id
 
-        # Strip standard slashes here as well to protect AI logic
         clean_prompt = (
             text.replace(bot_username, "")
             .replace(bot_username.lower(), "")
@@ -488,10 +510,16 @@ async def handle_conversation(message: Message):
                 bot_instructions = (
                     f"Today's date is {today_str}. Keep responses structural using double line-breaks to separate ideas. "
                     "Never use standard AI pleasantries. Do not start responses with 'As an AI' or end with generic offers for help. "
-                    "Keep casual replies brief, but dynamically expand your response length when explicitly asked for details. "
-                    "CRITICAL formatting rule: You must wrap any important terms or headings in standard HTML bold tags like <b>text</b>. "
-                    "When providing search references, websites, or hyperlinks, you must embed them natively inside clean anchor tags "
-                    'like <a href="URL">Clickable Title</a>. Never print raw URLs on the floor.'
+                    "Keep casual replies brief, but dynamically expand your response length when explicitly asked for details.\n\n"
+                    "CRITICAL RICH TEXT HTML FORMATTING RULES:\n"
+                    "- Headings/Titles: Wrap structural headings or major titles in bold tags: <b>Section Heading</b>\n"
+                    "- Emphasis: Use italics <i>text</i> for emphasis, underlines <u>text</u> for key takeaways, and strikethroughs <s>text</s> for removed/outdated items.\n"
+                    "- Spoilers: Wrap plot twists, answers to trivia, or hidden text inside spoiler tags: <tg-spoiler>hidden content</tg-spoiler>\n"
+                    "- Technical Variables: Wrap inline variables, short configurations, or command strings inside code tags: <code>git commit</code>\n"
+                    "- Code Blocks: Wrap multi-line code snippets inside pre-formatted blocks: <pre><code>def sample():\n    return True</code></pre>\n"
+                    "- Blockquotes: Use <blockquote>Indented structural quote block text</blockquote> to visually isolate quoted definitions or references.\n"
+                    "- Expandable Pullquotes: Use <blockquote expandable>Long detailed notes, logs, or secondary explanations go here...</blockquote> to provide details that the user can expand or collapse to save space.\n"
+                    '- Hyperlinks: Embed references or web destinations inside anchor tags: <a href="URL">Clickable Description</a>. Never print raw, bare URLs on the floor.'
                 )
 
                 if saved_facts:
