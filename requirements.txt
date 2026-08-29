@@ -27,5 +27,5 @@ google-genai
 redis
 md2tgmd
 markdownify
-aiogram>=13.2.0
+aiogram>=3.30.0
 
