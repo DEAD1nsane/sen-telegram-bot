@@ -30,3 +30,4 @@ redis
 telebot
 md2tgmd
 markdownify
+aiogram
