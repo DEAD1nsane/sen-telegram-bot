@@ -110,11 +110,7 @@ def parse_text_to_blocks(text: str) -> list:
             )
         elif part.startswith("$$") and part.endswith("$$"):
             clean_math = part.strip("$").strip()
-            blocks.append(
-                RichTextMathematicalExpressionBlock(
-                    expression=TextWithEntities(text=clean_math)
-                )
-            )
+            blocks.append(RichTextMathematicalExpressionBlock(expression=clean_math))
         elif part.startswith("- ") or part.startswith("* "):
             items = []
             for line in part.split("\n"):
@@ -206,18 +202,8 @@ async def get_formatted_memories_blocks(user_id_str: str) -> list:
         table_rows = [
             RichTextTableRow(
                 cells=[
-                    RichTextTableCell(
-                        blocks=[
-                            RichTextParagraphBlock(text=TextWithEntities(text="Index"))
-                        ]
-                    ),
-                    RichTextTableCell(
-                        blocks=[
-                            RichTextParagraphBlock(
-                                text=TextWithEntities(text="Memory Directive")
-                            )
-                        ]
-                    ),
+                    RichTextTableCell(text=TextWithEntities(text="Index")),
+                    RichTextTableCell(text=TextWithEntities(text="Memory Directive")),
                 ]
             )
         ]
@@ -226,18 +212,8 @@ async def get_formatted_memories_blocks(user_id_str: str) -> list:
             table_rows.append(
                 RichTextTableRow(
                     cells=[
-                        RichTextTableCell(
-                            blocks=[
-                                RichTextParagraphBlock(
-                                    text=TextWithEntities(text=str(i + 1))
-                                )
-                            ]
-                        ),
-                        RichTextTableCell(
-                            blocks=[
-                                RichTextParagraphBlock(text=TextWithEntities(text=mem))
-                            ]
-                        ),
+                        RichTextTableCell(text=TextWithEntities(text=str(i + 1))),
+                        RichTextTableCell(text=TextWithEntities(text=mem)),
                     ]
                 )
             )
@@ -438,9 +414,12 @@ async def handle_help(message: Message):
         ),
     ]
     if message.chat.type == "private":
-        await message.answer_rich_message(rich_message=InputRichMessage(blocks=blocks))
+        await bot.send_rich_message(
+            chat_id=message.chat.id, rich_message=InputRichMessage(blocks=blocks)
+        )
     else:
-        await message.answer_rich_message(
+        await bot.send_rich_message(
+            chat_id=message.chat.id,
             rich_message=InputRichMessage(blocks=blocks),
             reply_to_message_id=message.message_id,
         )
@@ -460,11 +439,12 @@ async def handle_what_remember(message: Message):
     blocks = await get_formatted_memories_blocks(user_id_str)
 
     if message.chat.type == "private":
-        sent_msg = await message.answer_rich_message(
-            rich_message=InputRichMessage(blocks=blocks)
+        sent_msg = await bot.send_rich_message(
+            chat_id=message.chat.id, rich_message=InputRichMessage(blocks=blocks)
         )
     else:
-        sent_msg = await message.answer_rich_message(
+        sent_msg = await bot.send_rich_message(
+            chat_id=message.chat.id,
             rich_message=InputRichMessage(blocks=blocks),
             reply_to_message_id=message.message_id,
         )
@@ -489,11 +469,12 @@ async def handle_remember(message: Message):
 
     blocks = await get_formatted_memories_blocks(user_id_str)
     if message.chat.type == "private":
-        sent_msg = await message.answer_rich_message(
-            rich_message=InputRichMessage(blocks=blocks)
+        sent_msg = await bot.send_rich_message(
+            chat_id=message.chat.id, rich_message=InputRichMessage(blocks=blocks)
         )
     else:
-        sent_msg = await message.answer_rich_message(
+        sent_msg = await bot.send_rich_message(
+            chat_id=message.chat.id,
             rich_message=InputRichMessage(blocks=blocks),
             reply_to_message_id=message.message_id,
         )
@@ -528,11 +509,12 @@ async def handle_edit(message: Message):
         ]
 
     if message.chat.type == "private":
-        sent_msg = await message.answer_rich_message(
-            rich_message=InputRichMessage(blocks=blocks)
+        sent_msg = await bot.send_rich_message(
+            chat_id=message.chat.id, rich_message=InputRichMessage(blocks=blocks)
         )
     else:
-        sent_msg = await message.answer_rich_message(
+        sent_msg = await bot.send_rich_message(
+            chat_id=message.chat.id,
             rich_message=InputRichMessage(blocks=blocks),
             reply_to_message_id=message.message_id,
         )
@@ -555,9 +537,12 @@ async def handle_forget_all(message: Message):
         )
     ]
     if message.chat.type == "private":
-        await message.answer_rich_message(rich_message=InputRichMessage(blocks=blocks))
+        await bot.send_rich_message(
+            chat_id=message.chat.id, rich_message=InputRichMessage(blocks=blocks)
+        )
     else:
-        await message.answer_rich_message(
+        await bot.send_rich_message(
+            chat_id=message.chat.id,
             rich_message=InputRichMessage(blocks=blocks),
             reply_to_message_id=message.message_id,
         )
@@ -597,11 +582,12 @@ async def handle_forget(message: Message):
         ]
 
     if message.chat.type == "private":
-        sent_msg = await message.answer_rich_message(
-            rich_message=InputRichMessage(blocks=blocks)
+        sent_msg = await bot.send_rich_message(
+            chat_id=message.chat.id, rich_message=InputRichMessage(blocks=blocks)
         )
     else:
-        sent_msg = await message.answer_rich_message(
+        sent_msg = await bot.send_rich_message(
+            chat_id=message.chat.id,
             rich_message=InputRichMessage(blocks=blocks),
             reply_to_message_id=message.message_id,
         )
@@ -683,11 +669,12 @@ async def handle_conversation(message: Message):
                 )
             ]
             if is_private:
-                await message.answer_rich_message(
-                    rich_message=InputRichMessage(blocks=warn_blocks)
+                await bot.send_rich_message(
+                    chat_id=chat_id, rich_message=InputRichMessage(blocks=warn_blocks)
                 )
             else:
-                await message.answer_rich_message(
+                await bot.send_rich_message(
+                    chat_id=chat_id,
                     rich_message=InputRichMessage(blocks=warn_blocks),
                     reply_to_message_id=msg_id,
                 )
@@ -840,11 +827,13 @@ async def handle_conversation(message: Message):
                 rich_blocks = parse_text_to_blocks(raw_text)
 
                 if is_private:
-                    await message.answer_rich_message(
-                        rich_message=InputRichMessage(blocks=rich_blocks)
+                    await bot.send_rich_message(
+                        chat_id=chat_id,
+                        rich_message=InputRichMessage(blocks=rich_blocks),
                     )
                 else:
-                    await message.answer_rich_message(
+                    await bot.send_rich_message(
+                        chat_id=chat_id,
                         rich_message=InputRichMessage(blocks=rich_blocks),
                         reply_to_message_id=msg_id,
                     )
@@ -875,11 +864,13 @@ async def handle_conversation(message: Message):
                     ]
 
                 if is_private:
-                    await message.answer_rich_message(
-                        rich_message=InputRichMessage(blocks=error_blocks)
+                    await bot.send_rich_message(
+                        chat_id=chat_id,
+                        rich_message=InputRichMessage(blocks=error_blocks),
                     )
                 else:
-                    await message.answer_rich_message(
+                    await bot.send_rich_message(
+                        chat_id=chat_id,
                         rich_message=InputRichMessage(blocks=error_blocks),
                         reply_to_message_id=msg_id,
                     )
