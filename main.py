@@ -15,6 +15,9 @@ from aiogram.types import (
     InputRichBlockMathematicalExpression,
     InputRichBlockList,
     InputRichBlockListItem,
+    InputRichBlockTable,
+    InputRichTableRow,
+    InputRichTableCell,
 )
 
 import redis.asyncio as redis
@@ -64,57 +67,125 @@ gemini_client = genai.Client(api_key=gemini_api_key)
 OWNER_ID = int(os.getenv("OWNER_ID", "0"))
 
 # ==========================================
-# Helpers & Block Parsers
+# Stateful Block Parser (API 10.2)
 # ==========================================
 
 
 def parse_text_to_blocks(text: str) -> list:
-    """Dynamically chunks raw text into Telegram Bot API 10.2 Rich Blocks."""
+    """Statefully tokenizes raw text into native Telegram Bot API 10.2 Rich Blocks."""
     blocks = []
-    parts = text.split("\n\n")
-    for part in parts:
-        part = part.strip()
-        if not part:
+    lines = text.split("\n")
+
+    list_buffer = []
+    table_buffer = []
+    paragraph_buffer = []
+    in_code_block = False
+    code_buffer = []
+
+    def flush_buffers():
+        if list_buffer:
+            blocks.append(InputRichBlockList(items=list_buffer[:]))
+            list_buffer.clear()
+        if table_buffer:
+            blocks.append(InputRichBlockTable(rows=table_buffer[:]))
+            table_buffer.clear()
+        if paragraph_buffer:
+            text_content = "\n".join(paragraph_buffer).strip()
+            if text_content:
+                blocks.append(InputRichBlockParagraph(text=text_content))
+            paragraph_buffer.clear()
+
+    for line in lines:
+        # Multi-line Code Block Toggle
+        if line.strip().startswith("```"):
+            if in_code_block:
+                in_code_block = False
+                flush_buffers()
+                clean_code = "\n".join(code_buffer)
+                blocks.append(
+                    InputRichBlockParagraph(text=f"Code Snippet:\n{clean_code}")
+                )
+                code_buffer.clear()
+            else:
+                flush_buffers()
+                in_code_block = True
             continue
 
-        if part.startswith("### "):
-            blocks.append(InputRichBlockHeading(text=part[4:].strip(), level=3))
-        elif part.startswith("## "):
-            blocks.append(InputRichBlockHeading(text=part[3:].strip(), level=2))
-        elif part.startswith("# "):
-            blocks.append(InputRichBlockHeading(text=part[2:].strip(), level=1))
-        elif part.startswith("```") and part.endswith("```"):
-            clean_code = part.strip("`").strip()
-            blocks.append(InputRichBlockParagraph(text=f"Code Snippet:\n{clean_code}"))
-        elif part.startswith("$$") and part.endswith("$$"):
-            clean_math = part.strip("$").strip()
-            blocks.append(InputRichBlockMathematicalExpression(expression=clean_math))
-        elif (
-            part.startswith("- ")
-            or part.startswith("* ")
-            or re.match(r"^\d+\.\s", part)
-        ):
-            items = []
-            for line in part.split("\n"):
-                if (
-                    line.startswith("- ")
-                    or line.startswith("* ")
-                    or re.match(r"^\d+\.\s", line)
-                ):
-                    clean_line = re.sub(r"^(-\s|\*\s|\d+\.\s)", "", line).strip()
-                    items.append(
-                        InputRichBlockListItem(
-                            blocks=[InputRichBlockParagraph(text=clean_line)]
-                        )
-                    )
-            if items:
-                blocks.append(InputRichBlockList(items=items))
-        else:
-            blocks.append(InputRichBlockParagraph(text=part))
+        if in_code_block:
+            code_buffer.append(line)
+            continue
+
+        # Mathematical Expressions
+        if line.strip().startswith("$$") and line.strip().endswith("$$"):
+            flush_buffers()
+            blocks.append(
+                InputRichBlockMathematicalExpression(expression=line.strip().strip("$"))
+            )
+            continue
+
+        # Headings
+        heading_match = re.match(r"^(#{1,3})\s+(.*)", line)
+        if heading_match:
+            flush_buffers()
+            level = len(heading_match.group(1))
+            blocks.append(
+                InputRichBlockHeading(text=heading_match.group(2).strip(), level=level)
+            )
+            continue
+
+        # Table Rows
+        if line.strip().startswith("|") and line.strip().endswith("|"):
+            if list_buffer or paragraph_buffer:
+                flush_buffers()
+
+            cells = [c.strip() for c in line.strip().strip("|").split("|")]
+            # Skip structural markdown separators like |---|---|
+            if all(re.match(r"^\-+$", c) for c in cells):
+                continue
+
+            table_cells = [
+                InputRichTableCell(blocks=[InputRichBlockParagraph(text=c)])
+                for c in cells
+            ]
+            table_buffer.append(InputRichTableRow(cells=table_cells))
+            continue
+
+        # Flexible List Matching (Numbered, Dashes, Asterisks)
+        list_match = re.match(r"^(\d+\.|\-|\*)\s+(.*)", line)
+        if list_match:
+            if table_buffer or paragraph_buffer:
+                flush_buffers()
+
+            item_content = list_match.group(2).strip()
+            list_buffer.append(
+                InputRichBlockListItem(
+                    blocks=[InputRichBlockParagraph(text=item_content)]
+                )
+            )
+            continue
+
+        # Empty lines break paragraph continuity
+        if not line.strip():
+            flush_buffers()
+            continue
+
+        # Standard Paragraph Text
+        if list_buffer or table_buffer:
+            flush_buffers()
+        paragraph_buffer.append(line)
+
+    # Final flush at EOF
+    flush_buffers()
 
     if not blocks:
         blocks.append(InputRichBlockParagraph(text=" "))
+
     return blocks
+
+
+# ==========================================
+# Helpers
+# ==========================================
 
 
 async def free_web_search(query: str) -> str:
@@ -126,7 +197,7 @@ async def free_web_search(query: str) -> str:
                 SEARXNG_URL, params=params, headers=headers, timeout=8.0
             )
             if res.status_code == 200:
-                results = res.json().get("results", [])[:3]
+                results = res.json().get("results", [])[:15]
                 snippets = []
                 for item in results:
                     title = item.get("title", "")
@@ -144,7 +215,7 @@ async def free_web_search(query: str) -> str:
     try:
         async with httpx.AsyncClient() as client:
             res = await client.post(
-                "https://html.duckduckgo.com/html/",
+                "[https://html.duckduckgo.com/html/](https://html.duckduckgo.com/html/)",
                 data={"q": query},
                 headers=headers,
                 timeout=8.0,
@@ -154,7 +225,7 @@ async def free_web_search(query: str) -> str:
             )
             urls = re.findall(r'href="(https?://[^"]+)"', res.text)
             clean = []
-            for i, snippet in enumerate(raw[:3]):
+            for i, snippet in enumerate(raw[:15]):
                 text_clean = re.sub(r"<[^>]+>", "", snippet).strip()
                 link = urls[i] if i < len(urls) else ""
                 if text_clean:
@@ -167,7 +238,7 @@ async def free_web_search(query: str) -> str:
 
 
 async def get_formatted_memories(user_id_str: str) -> str:
-    """Returns the memory list as a raw markdown string to be parsed into blocks."""
+    """Returns the memory list as a raw markdown string to be natively parsed into blocks."""
     try:
         raw_items = await redis_client.lrange(f"memory_list:{user_id_str}", 0, -1)
         if not raw_items:
@@ -321,7 +392,7 @@ async def handle_help(message: Message):
                         InputRichBlockListItem(
                             blocks=[
                                 InputRichBlockParagraph(
-                                    text="what do you remember - Displays rules in a formatted matrix"
+                                    text="what do you remember - Displays rules in a formatted list"
                                 )
                             ]
                         ),
@@ -632,7 +703,6 @@ async def handle_conversation(message: Message):
                     h.decode("utf-8") if isinstance(h, bytes) else h for h in raw_hist
                 ]
 
-                # Explicit Search Filter Logic
                 search_keywords = {"search", "google", "look up", "lookup", "find"}
                 explicit_search = any(
                     word in clean_prompt.lower() for word in search_keywords
