@@ -1,5 +1,38 @@
 import os
 import re
+
+
+async def main():
+    global BOT_INFO
+    try:
+        print("Clearing conflicting webhooks from Telegram servers...")
+        await bot.delete_webhook(drop_pending_updates=True)
+        BOT_INFO = await bot.get_me()
+        print(f"Bot authenticated as {BOT_INFO.username}")
+    except Exception as e:
+        print(f"Failed to fetch bot info: {e}")
+
+    app = web.Application()
+    app.router.add_get("/", health_check)
+    app.router.add_get("/health", health_check)
+
+    # Non-blocking web server setup to pass Railway health checks instantly
+    runner = web.AppRunner(app)
+    await runner.setup()
+    port = int(os.environ.get("PORT", 8080))
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+    print(f"Healthcheck server listening on port {port}")
+
+    try:
+        # skip_updates=True kills any ghost bot instances instantly
+        await dp.start_polling(bot, skip_updates=True)
+    finally:
+        await bot.session.close()
+        await redis_client.aclose()
+        await runner.cleanup()
+
+
 import asyncio
 from datetime import datetime
 
@@ -913,9 +946,6 @@ async def on_shutdown(app_instance):
     await bot.session.close()
     await redis_client.aclose()
 
-
-app.on_startup.append(on_startup)
-app.on_shutdown.append(on_shutdown)
 
 if __name__ == "__main__":
     web.run_app(app, host="0.0.0.0", port=int(os.environ.get("PORT", "8080")))
