@@ -672,7 +672,7 @@ async def handle_conversation(message: Message):
             ]
             await transmit_rich_payload(chat_id, warn_blocks, reply_to_id)
             return
-        await redis_client.setex(cooldown_key, 4, "1")
+            await redis_client.set(cooldown_key, "1", ex=4)
         replied_context = (
             message.reply_to_message.text or message.reply_to_message.caption or ""
             if message.reply_to_message
