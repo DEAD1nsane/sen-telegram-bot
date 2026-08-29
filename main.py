@@ -673,6 +673,7 @@ app.router.add_get("/", health_check)
 app.router.add_get("/health", health_check)
 
 
+# 1. Strip the polling loop out of your on_startup hook completely
 async def on_startup(app_instance):
     global BOT_INFO
     try:
@@ -684,22 +685,32 @@ async def on_startup(app_instance):
     except Exception as e:  # noqa: BLE001
         print(f"Failed to fetch bot info: {e}")
 
-    asyncio.create_task(dp.start_polling(bot))
-
 
 async def on_shutdown(app_instance):
-    print("Shutting down bot polling engines cleanly...")
-    # 1. Stop the dispatcher polling loop first
-    await dp.stop_polling()
-
-    # 2. Close active connection pools
     await bot.session.close()
     await redis_client.aclose()
-    print("Container shutdown complete.")
 
 
 app.on_startup.append(on_startup)
 app.on_shutdown.append(on_shutdown)
 
+
+# 2. Use a unified single-runner to handle both tasks safely in one loop
+async def main():
+    # Start the web app runner in the background
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, host="0.0.0.0", port=int(os.environ.get("PORT", "8080")))
+    await site.start()
+    print(f"======== Running web app on port {os.environ.get('PORT', '8080')} ========")
+
+    # Run the SINGLE polling instance directly on the primary main context task chain
+    try:
+        await dp.start_polling(bot)
+    finally:
+        await runner.cleanup()
+
+
 if __name__ == "__main__":
-    web.run_app(app, host="0.0.0.0", port=int(os.environ.get("PORT", "8080")))
+    # Fire a single global event loop
+    asyncio.run(main())
