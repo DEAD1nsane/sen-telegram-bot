@@ -76,15 +76,11 @@ def parse_text_to_blocks(text: str) -> list:
     blocks = []
     lines = text.split("\n")
 
-    table_buffer = []
     paragraph_buffer = []
     in_code_block = False
     code_buffer = []
 
     def flush_buffers():
-        if table_buffer:
-            blocks.append(InputRichBlockTable(rows=table_buffer[:]))
-            table_buffer.clear()
         if paragraph_buffer:
             text_content = "\n".join(paragraph_buffer).strip()
             if text_content:
@@ -129,20 +125,28 @@ def parse_text_to_blocks(text: str) -> list:
             )
             continue
 
-        # Table Rows
+        # 📊 NATIVE RICH TEXT TABLE PARSER
         if line.strip().startswith("|") and line.strip().endswith("|"):
             flush_buffers()
 
             cells = [c.strip() for c in line.strip().strip("|").split("|")]
-            # Skip structural markdown separators like |---|---|
+            # Skip markdown structural row separators like |---|---|
             if all(re.match(r"^\-+$", c) for c in cells):
                 continue
 
-            table_cells = [
-                InputRichTableCell(blocks=[InputRichBlockParagraph(text=c)])
-                for c in cells
-            ]
-            table_buffer.append(InputRichTableRow(cells=table_cells))
+            # FIX: Clear out block arrays inside the cell, mapping text inputs natively
+            table_cells = [InputRichTableCell(text=c) for c in cells]
+            new_row = InputRichTableRow(cells=table_cells)
+
+            # STATEFUL FIX: Append to an existing table block if one is already active
+            if blocks and isinstance(blocks[-1], InputRichBlockTable):
+                blocks[-1].rows.append(new_row)
+            else:
+                blocks.append(
+                    InputRichBlockTable(
+                        is_bordered=True, is_striped=True, rows=[new_row]
+                    )
+                )
             continue
 
         # Flexible List Matching (Numbered, Dashes, Asterisks)
@@ -155,21 +159,18 @@ def parse_text_to_blocks(text: str) -> list:
                 blocks=[InputRichBlockParagraph(text=item_content)]
             )
 
-            # STATEFUL FIX: If the last block is already a list, append to it directly!
             if blocks and isinstance(blocks[-1], InputRichBlockList):
                 blocks[-1].items.append(new_item)
             else:
                 blocks.append(InputRichBlockList(items=[new_item]))
             continue
 
-        # Empty lines break paragraph continuity, but don't break consecutive list logic anymore
+        # Empty lines break paragraph continuity
         if not line.strip():
             flush_buffers()
             continue
 
         # Standard Paragraph Text
-        if table_buffer:
-            flush_buffers()
         paragraph_buffer.append(line)
 
     # Final flush at EOF
