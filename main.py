@@ -7,21 +7,6 @@ from aiohttp import web
 from aiogram import Bot, Dispatcher, Router, F
 from aiogram.types import Update, Message, FSInputFile
 from aiogram.filters import Command
-from aiogram.client.default import DefaultBotProperties
-from aiogram.types import (
-    InputRichMessage,
-    TextWithEntities,
-    MessageEntity,
-    RichTextHeadingBlock,
-    RichTextParagraphBlock,
-    RichTextTableBlock,
-    RichTextTableRow,
-    RichTextTableCell,
-    RichTextCollapsibleDetailsBlock,
-    RichTextMathematicalExpressionBlock,
-    RichTextListBlock,
-    RichTextListItem,
-)
 
 import redis.asyncio as redis
 import httpx
@@ -55,6 +40,7 @@ SEARXNG_URL = os.getenv(
     "SEARXNG_URL", "https://searxng-railway-production-3252.up.railway.app/search"
 )
 
+# NO parse_mode set globally. Pure unformatted strings for Telegram's Rich Text Editor.
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher()
 router = Router()
@@ -69,69 +55,10 @@ if not gemini_api_key:
 gemini_client = genai.Client(api_key=gemini_api_key)
 OWNER_ID = int(os.getenv("OWNER_ID", "0"))
 
+
 # ==========================================
-# Helpers & Native Block Parsers
+# Helpers & Formatting Parsers
 # ==========================================
-
-
-def parse_text_to_blocks(text: str) -> list:
-    """Dynamically chunks raw text into Native Telegram Bot API 10.2 Rich Blocks."""
-    blocks = []
-    parts = text.split("\n\n")
-    for part in parts:
-        part = part.strip()
-        if not part:
-            continue
-
-        if part.startswith("### "):
-            blocks.append(
-                RichTextHeadingBlock(
-                    text=TextWithEntities(text=part[4:].strip()), level=3
-                )
-            )
-        elif part.startswith("## "):
-            blocks.append(
-                RichTextHeadingBlock(
-                    text=TextWithEntities(text=part[3:].strip()), level=2
-                )
-            )
-        elif part.startswith("# "):
-            blocks.append(
-                RichTextHeadingBlock(
-                    text=TextWithEntities(text=part[2:].strip()), level=1
-                )
-            )
-        elif part.startswith("```") and part.endswith("```"):
-            clean_code = part.strip("`").strip()
-            blocks.append(
-                RichTextParagraphBlock(
-                    text=TextWithEntities(text=f"Code Snippet:\n{clean_code}")
-                )
-            )
-        elif part.startswith("$$") and part.endswith("$$"):
-            clean_math = part.strip("$").strip()
-            blocks.append(RichTextMathematicalExpressionBlock(expression=clean_math))
-        elif part.startswith("- ") or part.startswith("* "):
-            items = []
-            for line in part.split("\n"):
-                if line.startswith("- ") or line.startswith("* "):
-                    items.append(
-                        RichTextListItem(
-                            blocks=[
-                                RichTextParagraphBlock(
-                                    text=TextWithEntities(text=line[2:].strip())
-                                )
-                            ]
-                        )
-                    )
-            if items:
-                blocks.append(RichTextListBlock(items=items))
-        else:
-            blocks.append(RichTextParagraphBlock(text=TextWithEntities(text=part)))
-
-    if not blocks:
-        blocks.append(RichTextParagraphBlock(text=TextWithEntities(text=" ")))
-    return blocks
 
 
 async def free_web_search(query: str) -> str:
@@ -183,76 +110,37 @@ async def free_web_search(query: str) -> str:
     return ""
 
 
-async def get_formatted_memories_blocks(user_id_str: str) -> list:
-    """Returns the memory list structured securely as an API 10.2 Table Block."""
+async def get_formatted_memories_text(user_id_str: str) -> str:
+    """Returns memories cleanly without any markdown styling characters or formatting bullet points."""
     try:
         raw_items = await redis_client.lrange(f"memory_list:{user_id_str}", 0, -1)
         if not raw_items:
-            return [
-                RichTextParagraphBlock(
-                    text=TextWithEntities(text="Your memory list is currently empty.")
-                )
-            ]
+            return "Your memory list is currently empty."
 
         memories = [
             item.decode("utf-8") if isinstance(item, bytes) else item
             for item in raw_items
         ]
 
-        table_rows = [
-            RichTextTableRow(
-                cells=[
-                    RichTextTableCell(text=TextWithEntities(text="Index")),
-                    RichTextTableCell(text=TextWithEntities(text="Memory Directive")),
-                ]
-            )
-        ]
-
+        output = "Active Memory Directives:\n\n"
         for i, mem in enumerate(memories):
-            table_rows.append(
-                RichTextTableRow(
-                    cells=[
-                        RichTextTableCell(text=TextWithEntities(text=str(i + 1))),
-                        RichTextTableCell(text=TextWithEntities(text=mem)),
-                    ]
-                )
-            )
+            output += f"{i + 1}. {mem.strip()}\n"
 
-        return [
-            RichTextHeadingBlock(
-                text=TextWithEntities(text="Active Memory Directives"), level=2
-            ),
-            RichTextTableBlock(rows=table_rows),
-        ]
+        return output
     except Exception as e:
         print(f"Error fetching memory list format: {e}")
-        return [
-            RichTextParagraphBlock(
-                text=TextWithEntities(text="Could not retrieve memory list.")
-            )
-        ]
+        return "Could not retrieve memory list."
 
 
 async def collapse_message(chat_id: int, message_id: int, delay: int):
-    """Waits for the delay (in seconds), then dynamically edits the message into an accordion state."""
+    """Waits for the delay (in seconds), then handles editing the message to a space-conserving layout."""
     await asyncio.sleep(delay)
-    blocks = [
-        RichTextCollapsibleDetailsBlock(
-            summary=TextWithEntities(text="Active Memories Collapsed"),
-            blocks=[
-                RichTextParagraphBlock(
-                    text=TextWithEntities(
-                        text="Your memory list is hidden to conserve space."
-                    )
-                )
-            ],
-        )
-    ]
+    collapsed_text = (
+        "Active Memories Collapsed\n\nYour memory list is hidden to conserve space."
+    )
     try:
-        await bot.edit_message_rich_message(
-            chat_id=chat_id,
-            message_id=message_id,
-            rich_message=InputRichMessage(blocks=blocks),
+        await bot.edit_message_text(
+            chat_id=chat_id, message_id=message_id, text=collapsed_text
         )
     except Exception as e:
         print(f"Error collapsing memory list: {e}")
@@ -354,75 +242,19 @@ async def handle_delete(message: Message):
 
 @router.message(Command("help", "commands"))
 async def handle_help(message: Message):
-    blocks = [
-        RichTextHeadingBlock(
-            text=TextWithEntities(text="Sen Bot Command Hub"), level=1
-        ),
-        RichTextCollapsibleDetailsBlock(
-            summary=TextWithEntities(text="View Available Directives"),
-            blocks=[
-                RichTextListBlock(
-                    items=[
-                        RichTextListItem(
-                            blocks=[
-                                RichTextParagraphBlock(
-                                    text=TextWithEntities(
-                                        text="remember [item],, [item2] - Adds items to memory"
-                                    )
-                                )
-                            ]
-                        ),
-                        RichTextListItem(
-                            blocks=[
-                                RichTextParagraphBlock(
-                                    text=TextWithEntities(
-                                        text="what do you remember - Displays rules in a formatted matrix"
-                                    )
-                                )
-                            ]
-                        ),
-                        RichTextListItem(
-                            blocks=[
-                                RichTextParagraphBlock(
-                                    text=TextWithEntities(
-                                        text="edit [number] [new fact] - Edits a specific rule"
-                                    )
-                                )
-                            ]
-                        ),
-                        RichTextListItem(
-                            blocks=[
-                                RichTextParagraphBlock(
-                                    text=TextWithEntities(
-                                        text="forget [number],, [number2] - Removes memories"
-                                    )
-                                )
-                            ]
-                        ),
-                        RichTextListItem(
-                            blocks=[
-                                RichTextParagraphBlock(
-                                    text=TextWithEntities(
-                                        text="forget all - Clears all memory"
-                                    )
-                                )
-                            ]
-                        ),
-                    ]
-                )
-            ],
-        ),
-    ]
+    # Completely plain text, no bullet symbols or markdown delimiters. Fully compatible with Telegram text editors.
+    help_text = (
+        "Sen Bot Command Hub\n\n"
+        "remember [item],, [item2] - Adds items to memory\n"
+        "what do you remember - Displays rules in a formatted matrix\n"
+        "edit [number] [new fact] - Edits a specific rule\n"
+        "forget [number],, [number2] - Removes memories\n"
+        "forget all - Clears all memory"
+    )
     if message.chat.type == "private":
-        await bot.send_rich_message(
-            chat_id=message.chat.id, rich_message=InputRichMessage(blocks=blocks)
-        )
+        await message.answer(text=help_text)
     else:
-        await bot.send_rich_message(
-            chat_id=message.chat.id,
-            rich_message=InputRichMessage(blocks=blocks),
-            reply_to_message_id=message.message_id,
-        )
+        await message.reply(text=help_text)
 
 
 def text_in(options: set):
@@ -436,20 +268,14 @@ def text_startswith(prefix: str):
 @router.message(text_in({"what do you remember", "how do you remember"}))
 async def handle_what_remember(message: Message):
     user_id_str = str(message.from_user.id)
-    blocks = await get_formatted_memories_blocks(user_id_str)
+    text_content = await get_formatted_memories_text(user_id_str)
 
     if message.chat.type == "private":
-        sent_msg = await bot.send_rich_message(
-            chat_id=message.chat.id, rich_message=InputRichMessage(blocks=blocks)
-        )
+        sent_msg = await message.answer(text=text_content)
     else:
-        sent_msg = await bot.send_rich_message(
-            chat_id=message.chat.id,
-            rich_message=InputRichMessage(blocks=blocks),
-            reply_to_message_id=message.message_id,
-        )
+        sent_msg = await message.reply(text=text_content)
 
-    if sent_msg:
+    if sent_msg and "currently empty" not in text_content:
         asyncio.create_task(collapse_message(message.chat.id, sent_msg.message_id, 60))
 
 
@@ -467,17 +293,11 @@ async def handle_remember(message: Message):
             pass
     await redis_client.ltrim(f"memory_list:{user_id_str}", -25, -1)
 
-    blocks = await get_formatted_memories_blocks(user_id_str)
+    text_content = await get_formatted_memories_text(user_id_str)
     if message.chat.type == "private":
-        sent_msg = await bot.send_rich_message(
-            chat_id=message.chat.id, rich_message=InputRichMessage(blocks=blocks)
-        )
+        sent_msg = await message.answer(text=text_content)
     else:
-        sent_msg = await bot.send_rich_message(
-            chat_id=message.chat.id,
-            rich_message=InputRichMessage(blocks=blocks),
-            reply_to_message_id=message.message_id,
-        )
+        sent_msg = await message.reply(text=text_content)
 
     if sent_msg:
         asyncio.create_task(collapse_message(message.chat.id, sent_msg.message_id, 60))
@@ -494,32 +314,21 @@ async def handle_edit(message: Message):
         raw_items = await redis_client.lrange(f"memory_list:{user_id_str}", 0, -1)
         if 0 <= idx < len(raw_items):
             await redis_client.lset(f"memory_list:{user_id_str}", idx, new_val)
-            blocks = await get_formatted_memories_blocks(user_id_str)
+            text_content = await get_formatted_memories_text(user_id_str)
         else:
-            blocks = [
-                RichTextParagraphBlock(
-                    text=TextWithEntities(text="Invalid memory number.")
-                )
-            ] + await get_formatted_memories_blocks(user_id_str)
-    else:
-        blocks = [
-            RichTextParagraphBlock(
-                text=TextWithEntities(text="Usage: edit [number] [new text]")
+            text_content = (
+                "Invalid memory number.\n\n"
+                + await get_formatted_memories_text(user_id_str)
             )
-        ]
+    else:
+        text_content = "Usage: edit [number] [new text]"
 
     if message.chat.type == "private":
-        sent_msg = await bot.send_rich_message(
-            chat_id=message.chat.id, rich_message=InputRichMessage(blocks=blocks)
-        )
+        sent_msg = await message.answer(text=text_content)
     else:
-        sent_msg = await bot.send_rich_message(
-            chat_id=message.chat.id,
-            rich_message=InputRichMessage(blocks=blocks),
-            reply_to_message_id=message.message_id,
-        )
+        sent_msg = await message.reply(text=text_content)
 
-    if sent_msg and len(blocks) > 1:
+    if sent_msg and "Usage" not in text_content and "Invalid" not in text_content:
         asyncio.create_task(collapse_message(message.chat.id, sent_msg.message_id, 60))
 
 
@@ -531,21 +340,11 @@ async def handle_forget_all(message: Message):
         f"memory_list:{user_id_str}", f"chat_history:{chat_id}:{user_id_str}"
     )
 
-    blocks = [
-        RichTextParagraphBlock(
-            text=TextWithEntities(text="Cleared all your saved memories.")
-        )
-    ]
+    text_content = "Cleared all your saved memories."
     if message.chat.type == "private":
-        await bot.send_rich_message(
-            chat_id=message.chat.id, rich_message=InputRichMessage(blocks=blocks)
-        )
+        await message.answer(text=text_content)
     else:
-        await bot.send_rich_message(
-            chat_id=message.chat.id,
-            rich_message=InputRichMessage(blocks=blocks),
-            reply_to_message_id=message.message_id,
-        )
+        await message.reply(text=text_content)
 
 
 @router.message(text_startswith("forget "))
@@ -569,30 +368,21 @@ async def handle_forget(message: Message):
             await redis_client.delete(f"memory_list:{user_id_str}")
             if memories:
                 await redis_client.rpush(f"memory_list:{user_id_str}", *memories)
-            blocks = await get_formatted_memories_blocks(user_id_str)
+            text_content = await get_formatted_memories_text(user_id_str)
         else:
-            blocks = [
-                RichTextParagraphBlock(
-                    text=TextWithEntities(text="No valid memory numbers specified.")
-                )
-            ] + await get_formatted_memories_blocks(user_id_str)
+            text_content = (
+                "No valid memory numbers specified.\n\n"
+                + await get_formatted_memories_text(user_id_str)
+            )
     except Exception:
-        blocks = [
-            RichTextParagraphBlock(text=TextWithEntities(text="Error removing memory."))
-        ]
+        text_content = "Error removing memory."
 
     if message.chat.type == "private":
-        sent_msg = await bot.send_rich_message(
-            chat_id=message.chat.id, rich_message=InputRichMessage(blocks=blocks)
-        )
+        sent_msg = await message.answer(text=text_content)
     else:
-        sent_msg = await bot.send_rich_message(
-            chat_id=message.chat.id,
-            rich_message=InputRichMessage(blocks=blocks),
-            reply_to_message_id=message.message_id,
-        )
+        sent_msg = await message.reply(text=text_content)
 
-    if sent_msg and len(blocks) > 1:
+    if sent_msg and "Error" not in text_content and "No valid" not in text_content:
         asyncio.create_task(collapse_message(message.chat.id, sent_msg.message_id, 60))
 
 
@@ -663,21 +453,11 @@ async def handle_conversation(message: Message):
 
         cooldown_key = f"cooldown:{user_id_str}"
         if await redis_client.exists(cooldown_key):
-            warn_blocks = [
-                RichTextParagraphBlock(
-                    text=TextWithEntities(text="Slow down, request limit reached.")
-                )
-            ]
+            warn_text = "Slow down, request limit reached."
             if is_private:
-                await bot.send_rich_message(
-                    chat_id=chat_id, rich_message=InputRichMessage(blocks=warn_blocks)
-                )
+                await message.answer(text=warn_text)
             else:
-                await bot.send_rich_message(
-                    chat_id=chat_id,
-                    rich_message=InputRichMessage(blocks=warn_blocks),
-                    reply_to_message_id=msg_id,
-                )
+                await message.reply(text=warn_text)
             return
 
         await redis_client.setex(cooldown_key, 4, "1")
@@ -726,7 +506,6 @@ async def handle_conversation(message: Message):
                     word in clean_prompt.lower() for word in search_keywords
                 )
 
-                # Context-Aware Search Router
                 search_query = clean_prompt
                 if explicit_search and len(clean_prompt.split()) <= 4:
                     if (
@@ -773,13 +552,14 @@ async def handle_conversation(message: Message):
 
                 today_str = datetime.now().strftime("%A, %B %d, %Y")
                 bot_instructions = (
-                    f"Today's date is {today_str}. Keep responses structural using double line-breaks to separate ideas. "
+                    f"Today's date is {today_str}. Keep responses structured using double line-breaks to separate ideas. "
                     "Never use standard AI pleasantries. Do not start responses with 'As an AI' or end with generic offers for help. "
                     "Keep casual replies brief, but dynamically expand your response length when explicitly asked for details or when playing interactive games. "
                     "If the user changes the subject abruptly, drop the previous topic immediately and adapt to the new flow. "
                     "If the user is clearly joking or sarcastic, match their energy rather than taking the prompt literally. "
                     "If you do not know the answer or the provided context is insufficient, state 'I don't have enough details to answer that accurately' directly without guessing. "
                     "Do not assume personal details about the user unless they are explicitly provided in your memory list. "
+                    "Output absolute plain text. Do not generate markdown codeblocks, asterisks, headers, or bullet symbols like â€¢."
                 )
 
                 if search_context:
@@ -851,19 +631,11 @@ async def handle_conversation(message: Message):
                         response = await chat.send_message(final_prompt)
 
                 raw_text = response.text or ""
-                rich_blocks = parse_text_to_blocks(raw_text)
 
                 if is_private:
-                    await bot.send_rich_message(
-                        chat_id=chat_id,
-                        rich_message=InputRichMessage(blocks=rich_blocks),
-                    )
+                    await message.answer(text=raw_text)
                 else:
-                    await bot.send_rich_message(
-                        chat_id=chat_id,
-                        rich_message=InputRichMessage(blocks=rich_blocks),
-                        reply_to_message_id=msg_id,
-                    )
+                    await message.reply(text=raw_text)
 
                 await redis_client.rpush(
                     history_key,
@@ -873,34 +645,17 @@ async def handle_conversation(message: Message):
                 await redis_client.ltrim(history_key, -10, -1)
 
             except Exception as ai_err:
-                print(f"Gemini API error: {ai_err}")
-                error_blocks = [
-                    RichTextParagraphBlock(
-                        text=TextWithEntities(
-                            text="I am currently broken right now, the owner needs to fix me."
-                        )
-                    )
-                ]
+                print(f"Gemini API error: AI Error")
+                error_text = (
+                    "I am currently broken right now, the owner needs to fix me."
+                )
                 if "429" in str(ai_err):
-                    error_blocks = [
-                        RichTextParagraphBlock(
-                            text=TextWithEntities(
-                                text="Whoa, I'm getting a little overwhelmed! Let me catch my breath for a minute."
-                            )
-                        )
-                    ]
+                    error_text = "Whoa, I'm getting a little overwhelmed! Let me catch my breath for a minute."
 
                 if is_private:
-                    await bot.send_rich_message(
-                        chat_id=chat_id,
-                        rich_message=InputRichMessage(blocks=error_blocks),
-                    )
+                    await message.answer(text=error_text)
                 else:
-                    await bot.send_rich_message(
-                        chat_id=chat_id,
-                        rich_message=InputRichMessage(blocks=error_blocks),
-                        reply_to_message_id=msg_id,
-                    )
+                    await message.reply(text=error_text)
 
 
 # ==========================================
