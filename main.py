@@ -477,9 +477,9 @@ async def handle_conversation(message: Message):
 
                 today_str = datetime.now(timezone.utc).strftime("%A, %B %d, %Y")
                 bot_instructions = (
-                    f"Today's date is {today_str}. Keep responses structural using double line-breaks to separate ideas. "
+                    f"Today's date is {today_str}. "
                     "Never use standard AI pleasantries. Do not start responses with 'As an AI' or end with generic offers for help. "
-                    "Keep casual replies brief, but dynamically expand your response length when explicitly asked for details. "
+                    "Keep all responses brief and strictly to the point, avoiding any unnecessary fluff. "
                     "CRITICAL formatting rule: You must wrap any important terms or headings in standard HTML bold tags like <b>text</b>. "
                     "When providing search references, websites, or hyperlinks, you must embed them natively inside clean anchor tags "
                     'like <a href="URL">Clickable Title</a>. Never print raw URLs on the floor.'
