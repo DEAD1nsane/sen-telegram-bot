@@ -511,7 +511,7 @@ async def handle_conversation(message: Message):
                 )
             return
 
-        await redis_client.setex(cooldown_key, 4, "1")
+        await redis_client.set(cooldown_key, "1", ex=4)
 
         replied = message.reply_to_message
         replied_context = replied.text or replied.caption or "" if replied else ""
