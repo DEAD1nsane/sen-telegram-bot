@@ -263,7 +263,7 @@ async def send_audio_track(
                         performer=performer,
                     )
                 else:
-                    raise e
+                    raise
         elif os.path.exists(file_path):
             msg = await attempt_send(file_path)
             if msg and msg.audio and msg.audio.file_id:
