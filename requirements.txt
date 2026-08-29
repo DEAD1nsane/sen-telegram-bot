@@ -1,4 +1,3 @@
-aiohap
 aiogram
 aiohttp
 httpx
