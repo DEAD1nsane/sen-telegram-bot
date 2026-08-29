@@ -274,7 +274,8 @@ async def send_formatted_memories_as_blocks(message: Message, user_id_str: str):
             formatted_items = []
             for i, item in enumerate(raw_items):
                 mem_text = item.decode("utf-8") if isinstance(item, bytes) else item
-                formatted_items.append(Text(Bold(f"[{i+1}] "), mem_text))
+                # Swap the bold bracket format for the standard dot format natively
+                formatted_items.append(Text(f"{i+1}. ", mem_text))
 
             content = as_list(
                 Bold("Active Memory Directives:"), "", *formatted_items, sep="\n\n"
