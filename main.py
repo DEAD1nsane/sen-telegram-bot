@@ -1,14 +1,16 @@
 import os
 import re
 import asyncio
-from datetime import datetime
+from datetime import datetime, timezone
 from aiohttp import web
 
 from aiogram import Bot, Dispatcher, Router, F
 from aiogram.types import Update, Message, FSInputFile, MessageEntity
 from aiogram.filters import Command
 from aiogram.enums import MessageEntityType
+from aiogram.exceptions import TelegramAPIError
 import redis.asyncio as redis
+from redis.exceptions import RedisError
 import httpx
 from google import genai
 from google.genai import types
@@ -191,7 +193,7 @@ async def free_web_search(query: str) -> str:
                         )
                 if snippets:
                     return "\n\n".join(snippets)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         print(f"SearXNG error: {e}")
     return ""
 
@@ -202,11 +204,11 @@ async def auto_delete_message(
     await asyncio.sleep(delay)
     try:
         await bot.delete_message(chat_id=chat_id, message_id=bot_msg_id)
-    except Exception:
+    except TelegramAPIError:
         pass
     try:
         await bot.delete_message(chat_id=chat_id, message_id=user_msg_id)
-    except Exception:
+    except TelegramAPIError:
         pass
 
 
@@ -248,7 +250,7 @@ async def send_audio_track(
                     if isinstance(cached_id, bytes)
                     else cached_id
                 )
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 if "message to be replied not found" in str(e).lower():
                     await bot.send_audio(
                         chat_id=chat_id,
@@ -266,7 +268,7 @@ async def send_audio_track(
             msg = await attempt_send(file_path)
             if msg and msg.audio and msg.audio.file_id:
                 await redis_client.set(f"audio_cache:{key}", msg.audio.file_id)
-    except Exception as send_err:
+    except Exception as send_err:  # noqa: BLE001
         print(f"Error sending audio ({key}): {send_err}")
 
 
@@ -301,7 +303,7 @@ async def send_formatted_memories_as_blocks(message: Message, user_id_str: str):
                     message.chat.id, sent_msg.message_id, message.message_id, 60
                 )
             )
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         print(f"Error rendering structured memory blocks: {e}")
 
 
@@ -318,11 +320,11 @@ async def handle_delete(message: Message):
         if reply_msg and BOT_INFO and reply_msg.from_user.id == BOT_INFO.id:
             try:
                 await bot.delete_message(chat_id, reply_msg.message_id)
-            except Exception:
+            except TelegramAPIError:
                 pass
         try:
             await bot.delete_message(chat_id, message.message_id)
-        except Exception:
+        except TelegramAPIError:
             pass
 
 
@@ -377,7 +379,7 @@ async def handle_remember(message: Message):
         try:
             if await redis_client.lpos(f"memory_list:{user_id_str}", part) is None:
                 await redis_client.rpush(f"memory_list:{user_id_str}", part)
-        except Exception:
+        except RedisError:
             pass
     await redis_client.ltrim(f"memory_list:{user_id_str}", -25, -1)
     await send_formatted_memories_as_blocks(message, user_id_str)
@@ -387,8 +389,8 @@ async def handle_remember(message: Message):
 async def handle_edit(message: Message):
     user_id_str = str(message.from_user.id)
     parts = message.text.strip()[5:].strip().split(" ", 1)
-    if len(parts) == 2 and parts[0].isdigit():
-        idx, new_val = int(parts[0]) - 1, parts[1].strip()
+    if len(parts) == 2 and parts.isdigit():
+        idx, new_val = int(parts) - 1, parts.strip()
         raw_items = await redis_client.lrange(f"memory_list:{user_id_str}", 0, -1)
         if 0 <= idx < len(raw_items):
             await redis_client.lset(f"memory_list:{user_id_str}", idx, new_val)
@@ -443,7 +445,7 @@ async def handle_forget(message: Message):
             await redis_client.delete(f"memory_list:{user_id_str}")
             if memories:
                 await redis_client.rpush(f"memory_list:{user_id_str}", *memories)
-    except Exception:
+    except RedisError:
         pass
     await send_formatted_memories_as_blocks(message, user_id_str)
 
@@ -524,11 +526,13 @@ async def handle_conversation(message: Message):
             return
         await redis_client.setex(cooldown_key, 4, "1")
 
-        replied_context = (
-            message.reply_to_message.text or message.reply_to_message.caption or ""
-            if message.reply_to_message
-            else ""
-        )
+        if message.reply_to_message:
+            replied_context = (
+                message.reply_to_message.text or message.reply_to_message.caption or ""
+            )
+        else:
+            replied_context = ""
+
         audio_bytes = None
         audio_mime = "audio/ogg"
 
@@ -590,7 +594,7 @@ async def handle_conversation(message: Message):
                         + f"\n\nUser Question: {final_prompt}"
                     )
 
-                today_str = datetime.now().strftime("%A, %B %d, %Y")
+                today_str = datetime.now(timezone.utc).strftime("%A, %B %d, %Y")
                 bot_instructions = (
                     f"Today's date is {today_str}. Keep responses structural using double line-breaks to separate ideas. "
                     "Never use standard AI pleasantries. Do not start responses with 'As an AI' or end with generic offers for help. "
@@ -651,7 +655,7 @@ async def handle_conversation(message: Message):
                 )
                 await redis_client.ltrim(history_key, -10, -1)
 
-            except Exception as ai_err:
+            except RedisError:
                 await bot.send_message(
                     chat_id=chat_id,
                     text="Whoa, I'm getting a little overwhelmed! Let me catch my breath.",
@@ -680,7 +684,7 @@ async def on_startup(app_instance):
 
         BOT_INFO = await bot.get_me()
         print(f"Bot authenticated as {BOT_INFO.username}")
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         print(f"Failed to fetch bot info: {e}")
     asyncio.create_task(dp.start_polling(bot))
 
@@ -694,4 +698,4 @@ app.on_startup.append(on_startup)
 app.on_shutdown.append(on_shutdown)
 
 if __name__ == "__main__":
-    web.run_app(app, host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
+    web.run_app(app, host="0.0.0.0", port=int(os.environ.get("PORT", "8080")))
