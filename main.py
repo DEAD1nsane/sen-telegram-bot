@@ -905,7 +905,8 @@ async def on_startup(app_instance):
     except Exception as e:
         print(f"Failed to fetch bot info: {e}")
 
-    asyncio.create_task(dp.start_polling(bot))
+    # FIX: Add drop_pending_updates=True directly into the polling task wrapper
+    asyncio.create_task(dp.start_polling(bot, drop_pending_updates=True))
 
 
 async def on_shutdown(app_instance):
