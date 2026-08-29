@@ -688,8 +688,14 @@ async def on_startup(app_instance):
 
 
 async def on_shutdown(app_instance):
+    print("Shutting down bot polling engines cleanly...")
+    # 1. Stop the dispatcher polling loop first
+    await dp.stop_polling()
+
+    # 2. Close active connection pools
     await bot.session.close()
     await redis_client.aclose()
+    print("Container shutdown complete.")
 
 
 app.on_startup.append(on_startup)
