@@ -7,14 +7,6 @@ from aiohttp import web
 from aiogram import Bot, Dispatcher, Router, F
 from aiogram.types import Message, FSInputFile, LinkPreviewOptions
 from aiogram.filters import Command
-from aiogram.utils.formatting import (
-    Text,
-    Bold,
-    BlockQuote,
-    as_list,
-    as_numbered_list,
-    as_marked_section,
-)
 
 import redis.asyncio as redis
 import httpx
@@ -116,44 +108,27 @@ async def free_web_search(query: str) -> str:
     return ""
 
 
-async def get_formatted_memories(user_id_str: str):
-    """Fetches memory list and returns an aiogram formatted object."""
+async def get_formatted_memories(user_id_str: str) -> str:
     try:
         raw_items = await redis_client.lrange(f"memory_list:{user_id_str}", 0, -1)
         if not raw_items:
-            return Text("Your memory list is currently empty.")
+            return "Your memory list is currently empty."
 
         memories = [
             item.decode("utf-8") if isinstance(item, bytes) else item
             for item in raw_items
         ]
+        formatted_list = "\n".join(f"{i+1}. {mem}" for i, mem in enumerate(memories))
 
-        return as_list(
-            Bold("Active Memory Directives"),
-            Text("──────────────────────────"),
-            as_numbered_list(*memories),
-        )
+        return f"Active Memory Directives:\n\n{formatted_list}"
     except Exception as e:
         print(f"Error fetching memory list format: {e}")
-        return Text("Could not retrieve memory list.")
-
-
-async def collapse_message(chat_id: int, message_id: int, delay: int):
-    """Waits for the delay (in seconds), then dynamically edits the message into a BlockQuote."""
-    await asyncio.sleep(delay)
-    content = BlockQuote("Active Memories Collapsed")
-    try:
-        await bot.edit_message_text(
-            chat_id=chat_id, message_id=message_id, **content.as_kwargs()
-        )
-    except Exception as e:
-        print(f"Error collapsing memory list: {e}")
+        return "Could not retrieve memory list."
 
 
 async def auto_delete_message(
     chat_id: int, bot_msg_id: int, user_msg_id: int, delay: int
 ):
-    """Waits for the delay (in seconds), then silently deletes both the bot's response and user's command."""
     await asyncio.sleep(delay)
     try:
         await bot.delete_message(chat_id=chat_id, message_id=bot_msg_id)
@@ -261,21 +236,20 @@ async def handle_delete(message: Message):
 
 @router.message(Command("help", "commands"))
 async def handle_help(message: Message):
-    content = as_marked_section(
-        Bold("Sen Bot Command Hub"),
-        "remember [item],, [item2] - Adds items to memory",
-        "what do you remember - Displays rules in a formatted list",
-        "edit [number] [new fact] - Edits a specific rule",
-        "forget [number],, [number2] - Removes memories",
-        "forget all - Clears all memory",
-        marker="• ",
+    content = (
+        "Sen Bot Command Hub\n\n"
+        "remember [item],, [item2] - Adds items to memory\n"
+        "what do you remember - Displays memory list\n"
+        "edit [number] [new fact] - Edits a specific rule\n"
+        "forget [number],, [number2] - Removes memories\n"
+        "forget all - Clears all memory"
     )
 
     if message.chat.type == "private":
-        sent_msg = await message.answer(**content.as_kwargs())
+        sent_msg = await message.answer(text=content)
     else:
         sent_msg = await message.answer(
-            **content.as_kwargs(), reply_to_message_id=message.message_id
+            text=content, reply_to_message_id=message.message_id
         )
 
     if sent_msg:
@@ -300,14 +274,18 @@ async def handle_what_remember(message: Message):
     content = await get_formatted_memories(user_id_str)
 
     if message.chat.type == "private":
-        sent_msg = await message.answer(**content.as_kwargs())
+        sent_msg = await message.answer(text=content)
     else:
         sent_msg = await message.answer(
-            **content.as_kwargs(), reply_to_message_id=message.message_id
+            text=content, reply_to_message_id=message.message_id
         )
 
     if sent_msg:
-        asyncio.create_task(collapse_message(message.chat.id, sent_msg.message_id, 60))
+        asyncio.create_task(
+            auto_delete_message(
+                message.chat.id, sent_msg.message_id, message.message_id, 60
+            )
+        )
 
 
 @router.message(text_startswith("remember "))
@@ -328,14 +306,18 @@ async def handle_remember(message: Message):
     content = await get_formatted_memories(user_id_str)
 
     if message.chat.type == "private":
-        sent_msg = await message.answer(**content.as_kwargs())
+        sent_msg = await message.answer(text=content)
     else:
         sent_msg = await message.answer(
-            **content.as_kwargs(), reply_to_message_id=message.message_id
+            text=content, reply_to_message_id=message.message_id
         )
 
     if sent_msg:
-        asyncio.create_task(collapse_message(message.chat.id, sent_msg.message_id, 60))
+        asyncio.create_task(
+            auto_delete_message(
+                message.chat.id, sent_msg.message_id, message.message_id, 60
+            )
+        )
 
 
 @router.message(text_startswith("edit "))
@@ -345,27 +327,29 @@ async def handle_edit(message: Message):
     parts = clean_prompt[5:].strip().split(" ", 1)
 
     if len(parts) == 2 and parts[0].isdigit():
-        idx, int_val = int(parts[0]) - 1, parts[1].strip()
+        idx, new_val = int(parts[0]) - 1, parts[1].strip()
         raw_items = await redis_client.lrange(f"memory_list:{user_id_str}", 0, -1)
         if 0 <= idx < len(raw_items):
-            await redis_client.lset(f"memory_list:{user_id_str}", idx, int_val)
+            await redis_client.lset(f"memory_list:{user_id_str}", idx, new_val)
             content = await get_formatted_memories(user_id_str)
 
             if message.chat.type == "private":
-                sent_msg = await message.answer(**content.as_kwargs())
+                sent_msg = await message.answer(text=content)
             else:
                 sent_msg = await message.answer(
-                    **content.as_kwargs(), reply_to_message_id=message.message_id
+                    text=content, reply_to_message_id=message.message_id
                 )
 
             if sent_msg:
                 asyncio.create_task(
-                    collapse_message(message.chat.id, sent_msg.message_id, 60)
+                    auto_delete_message(
+                        message.chat.id, sent_msg.message_id, message.message_id, 60
+                    )
                 )
             return
 
-    error_content = Text("Usage: edit [number] [new text]")
-    sent_msg = await message.answer(**error_content.as_kwargs())
+    error_content = "Usage: edit [number] [new text]"
+    sent_msg = await message.answer(text=error_content)
     if sent_msg:
         asyncio.create_task(
             auto_delete_message(
@@ -382,12 +366,12 @@ async def handle_forget_all(message: Message):
         f"memory_list:{user_id_str}", f"chat_history:{chat_id}:{user_id_str}"
     )
 
-    content = Text("Cleared all your saved memories.")
+    content = "Cleared all your saved memories."
     if message.chat.type == "private":
-        sent_msg = await message.answer(**content.as_kwargs())
+        sent_msg = await message.answer(text=content)
     else:
         sent_msg = await message.answer(
-            **content.as_kwargs(), reply_to_message_id=message.message_id
+            text=content, reply_to_message_id=message.message_id
         )
 
     if sent_msg:
@@ -425,14 +409,18 @@ async def handle_forget(message: Message):
     content = await get_formatted_memories(user_id_str)
 
     if message.chat.type == "private":
-        sent_msg = await message.answer(**content.as_kwargs())
+        sent_msg = await message.answer(text=content)
     else:
         sent_msg = await message.answer(
-            **content.as_kwargs(), reply_to_message_id=message.message_id
+            text=content, reply_to_message_id=message.message_id
         )
 
     if sent_msg:
-        asyncio.create_task(collapse_message(message.chat.id, sent_msg.message_id, 60))
+        asyncio.create_task(
+            auto_delete_message(
+                message.chat.id, sent_msg.message_id, message.message_id, 60
+            )
+        )
 
 
 # ==========================================
@@ -502,13 +490,11 @@ async def handle_conversation(message: Message):
 
         cooldown_key = f"cooldown:{user_id_str}"
         if await redis_client.exists(cooldown_key):
-            warn_content = Text("Slow down, request limit reached.")
+            warn_content = "Slow down, request limit reached."
             if is_private:
-                await message.answer(**warn_content.as_kwargs())
+                await message.answer(text=warn_content)
             else:
-                await message.answer(
-                    **warn_content.as_kwargs(), reply_to_message_id=msg_id
-                )
+                await message.answer(text=warn_content, reply_to_message_id=msg_id)
             return
 
         await redis_client.set(cooldown_key, "1", ex=4)
@@ -550,13 +536,35 @@ async def handle_conversation(message: Message):
                     "look up",
                     "lookup",
                     "find",
+                    "show",
+                    "table",
+                    "send",
                     "show me",
                 }
                 explicit_search = any(
                     word in clean_prompt.lower() for word in search_keywords
                 )
+
+                # Context-Aware Search Router
+                search_query = clean_prompt
+                if explicit_search and len(clean_prompt.split()) <= 4:
+                    if (
+                        replied_context
+                        and "I don't have enough details" not in replied_context
+                        and "I am currently broken" not in replied_context
+                    ):
+                        search_query = replied_context
+                    elif chat_history:
+                        for past_msg in reversed(chat_history):
+                            if (
+                                past_msg.startswith("User: ")
+                                and len(past_msg.split()) > 2
+                            ):
+                                search_query = past_msg.replace("User: ", "").strip()
+                                break
+
                 search_context = (
-                    await free_web_search(clean_prompt) if explicit_search else ""
+                    await free_web_search(search_query) if explicit_search else ""
                 )
 
                 context_parts = []
@@ -584,7 +592,7 @@ async def handle_conversation(message: Message):
 
                 today_str = datetime.now(timezone.utc).strftime("%A, %B %d, %Y")
                 bot_instructions = (
-                    f"Today's date is {today_str}. Keep responses structural. "
+                    f"Today's date is {today_str}. Keep responses structural using double line-breaks to separate ideas. "
                     "Never use standard AI pleasantries. Do not start responses with 'As an AI' or end with generic offers for help. "
                     "Keep casual replies brief, but dynamically expand your response length when explicitly asked for details or when playing interactive games. "
                     "If the user changes the subject abruptly, drop the previous topic immediately and adapt to the new flow. "
@@ -662,7 +670,6 @@ async def handle_conversation(message: Message):
                         response = await chat.send_message(final_prompt)
 
                 clean_text = response.text or ""
-
                 preview_opts = LinkPreviewOptions(
                     is_disabled=False, prefer_small_media=True
                 )
@@ -687,20 +694,16 @@ async def handle_conversation(message: Message):
 
             except Exception as ai_err:
                 print(f"Gemini API error: {ai_err}")
-                error_content = Text(
+                error_content = (
                     "I am currently broken right now, the owner needs to fix me."
                 )
                 if "429" in str(ai_err):
-                    error_content = Text(
-                        "Whoa, I'm getting a little overwhelmed! Let me catch my breath for a minute."
-                    )
+                    error_content = "Whoa, I'm getting a little overwhelmed! Let me catch my breath for a minute."
 
                 if is_private:
-                    await message.answer(**error_content.as_kwargs())
+                    await message.answer(text=error_content)
                 else:
-                    await message.answer(
-                        **error_content.as_kwargs(), reply_to_message_id=msg_id
-                    )
+                    await message.answer(text=error_content, reply_to_message_id=msg_id)
 
 
 # ==========================================
@@ -715,9 +718,7 @@ async def health_check(request):
 
 async def main():
     global BOT_INFO
-
     try:
-        # Wipe any existing webhook on Telegram's side before polling
         await bot.delete_webhook(drop_pending_updates=True)
         BOT_INFO = await bot.get_me()
         print(f"Bot authenticated as {BOT_INFO.username}")
