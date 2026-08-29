@@ -1,19 +1,19 @@
+import asyncio
 import os
 import re
-import asyncio
 from datetime import datetime, timezone
-from aiohttp import web
 
-from aiogram import Bot, Dispatcher, Router, F
-from aiogram.types import Update, Message, FSInputFile, MessageEntity
-from aiogram.filters import Command
+import httpx
+import redis.asyncio as redis
+from aiogram import Bot, Dispatcher, F, Router
 from aiogram.enums import MessageEntityType
 from aiogram.exceptions import TelegramAPIError
-import redis.asyncio as redis
-from redis.exceptions import RedisError
-import httpx
+from aiogram.filters import Command
+from aiogram.types import FSInputFile, Message, MessageEntity
+from aiohttp import web
 from google import genai
 from google.genai import types
+from redis.exceptions import RedisError
 
 # ==========================================
 # Environment & Config
@@ -250,7 +250,7 @@ async def send_audio_track(
                     if isinstance(cached_id, bytes)
                     else cached_id
                 )
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 if "message to be replied not found" in str(e).lower():
                     await bot.send_audio(
                         chat_id=chat_id,
@@ -566,7 +566,7 @@ async def handle_conversation(message: Message):
                     await free_web_search(clean_prompt)
                     if any(
                         w in clean_prompt.lower()
-                        for w in {"search", "google", "look up", "find"}
+                        for w in ("search", "google", "look up", "find")
                     )
                     else ""
                 )
