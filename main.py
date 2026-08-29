@@ -60,8 +60,8 @@ OWNER_ID = int(os.getenv("OWNER_ID", "0"))
 async def transmit_rich_payload(
     chat_id: int, blocks: list, reply_to_id: int = None
 ) -> dict:
-    url = f"https://telegram.org{API_TOKEN}/sendRichMessage"
-    payload = {"chat_id": chat_id, "rich_message": {"blocks": blocks}}
+    url = f"https://api.telegram.org/bot{API_TOKEN}/sendRichMessage"
+    payload = {"chat_id": chat_id, "blocks": blocks}
     if reply_to_id:
         payload["reply_parameters"] = {"message_id": reply_to_id}
 
