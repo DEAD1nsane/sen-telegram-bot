@@ -11,7 +11,6 @@ from aiogram.types import (
     InputRichMessage,
     InputRichBlockHeading,
     InputRichBlockParagraph,
-    InputRichBlockCollapsibleDetails,
     InputRichBlockMathematicalExpression,
     InputRichBlockList,
     InputRichBlockListItem,
@@ -88,7 +87,6 @@ def parse_text_to_blocks(text: str) -> list:
             paragraph_buffer.clear()
 
     for line in lines:
-        # Multi-line Code Block Toggle
         if line.strip().startswith("```"):
             if in_code_block:
                 in_code_block = False
@@ -107,7 +105,6 @@ def parse_text_to_blocks(text: str) -> list:
             code_buffer.append(line)
             continue
 
-        # Mathematical Expressions
         if line.strip().startswith("$$") and line.strip().endswith("$$"):
             flush_buffers()
             blocks.append(
@@ -115,7 +112,6 @@ def parse_text_to_blocks(text: str) -> list:
             )
             continue
 
-        # Headings
         heading_match = re.match(r"^(#{1,3})\s+(.*)", line)
         if heading_match:
             flush_buffers()
@@ -125,12 +121,9 @@ def parse_text_to_blocks(text: str) -> list:
             )
             continue
 
-        # 📊 NATIVE RICH TEXT TABLE PARSER
         if line.strip().startswith("|") and line.strip().endswith("|"):
             flush_buffers()
-
             cells = [c.strip() for c in line.strip().strip("|").split("|")]
-            # Skip markdown structural row separators like |---|---|
             if all(re.match(r"^\-+$", c) for c in cells):
                 continue
 
@@ -147,11 +140,9 @@ def parse_text_to_blocks(text: str) -> list:
                 )
             continue
 
-        # Flexible List Matching (Numbered, Dashes, Asterisks)
         list_match = re.match(r"^(\d+\.|\-|\*)\s+(.*)", line)
         if list_match:
             flush_buffers()
-
             item_content = list_match.group(2).strip()
             new_item = InputRichBlockListItem(
                 blocks=[InputRichBlockParagraph(text=item_content)]
@@ -163,15 +154,12 @@ def parse_text_to_blocks(text: str) -> list:
                 blocks.append(InputRichBlockList(items=[new_item]))
             continue
 
-        # Empty lines break paragraph continuity
         if not line.strip():
             flush_buffers()
             continue
 
-        # Standard Paragraph Text
         paragraph_buffer.append(line)
 
-    # Final flush at EOF
     flush_buffers()
 
     if not blocks:
