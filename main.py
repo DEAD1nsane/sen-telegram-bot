@@ -6,11 +6,11 @@ from datetime import datetime, timezone
 import httpx
 import redis.asyncio as redis
 from aiogram import Bot, Dispatcher, F, Router
-from aiogram.enums import MessageEntityType
+from aiogram.client.default import DefaultBotProperties
+from aiogram.enums import ParseMode
 from aiogram.exceptions import TelegramAPIError
 from aiogram.filters import Command
-from aiogram.types import FSInputFile, Message, MessageEntity
-from aiogram.utils.formatting import Bold, Text, as_list
+from aiogram.types import FSInputFile, Message
 from aiohttp import web
 from google import genai
 from google.genai import types
@@ -41,7 +41,7 @@ else:
 API_TOKEN = os.getenv("BOT_TOKEN")
 SEARXNG_URL = os.getenv("SEARXNG_URL", "https://railway.app")
 
-bot = Bot(token=API_TOKEN)
+bot = Bot(token=API_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher()
 router = Router()
 dp.include_router(router)
@@ -54,111 +54,6 @@ if not gemini_api_key:
 gemini_client = genai.Client(api_key=gemini_api_key)
 OWNER_ID = int(os.getenv("OWNER_ID", "0"))
 app = web.Application()
-
-
-# ==========================================
-# Native Block Parser using MessageEntities
-# ==========================================
-def parse_text_to_entities(text: str) -> tuple[str, list[MessageEntity]]:
-    full_text = ""
-    text_entities = []
-    lines = text.split("\n")
-    in_code_block = False
-    code_buffer = []
-
-    for line in lines:
-        if line.strip().startswith("```"):
-            if in_code_block:
-                in_code_block = False
-                clean_code = "\n".join(code_buffer)
-                start_offset = len(full_text)
-                display_text = f"Code Snippet:\n{clean_code}\n\n"
-                full_text += display_text
-                text_entities.append(
-                    MessageEntity(
-                        type=MessageEntityType.PRE,
-                        offset=start_offset + 14,
-                        length=len(clean_code),
-                        language="python",
-                    )
-                )
-                code_buffer.clear()
-            else:
-                in_code_block = True
-            continue
-
-        if in_code_block:
-            code_buffer.append(line)
-            continue
-
-        if line.strip().startswith("$$") and line.strip().endswith("$$"):
-            expr = line.strip().strip("$")
-            start_offset = len(full_text)
-            full_text += f"{expr}\n\n"
-            text_entities.append(
-                MessageEntity(
-                    type=MessageEntityType.CODE, offset=start_offset, length=len(expr)
-                )
-            )
-            continue
-
-        heading_match = re.match(r"^(#{1,3})\s+(.*)", line)
-        if heading_match:
-            content = heading_match.group(2).strip()
-            start_offset = len(full_text)
-            full_text += f"{content}\n\n"
-            text_entities.append(
-                MessageEntity(
-                    type=MessageEntityType.BOLD,
-                    offset=start_offset,
-                    length=len(content),
-                )
-            )
-            text_entities.append(
-                MessageEntity(
-                    type=MessageEntityType.UNDERLINE,
-                    offset=start_offset,
-                    length=len(content),
-                )
-            )
-            continue
-
-        if line.strip().startswith("|") and line.strip().endswith("|"):
-            cells = [c.strip() for c in line.strip().strip("|").split("|")]
-            if all(re.match(r"^\-+$", c) for c in cells):
-                continue
-            row_str = " | ".join(cells)
-            start_offset = len(full_text)
-            full_text += f"| {row_str} |\n"
-            text_entities.append(
-                MessageEntity(
-                    type=MessageEntityType.PRE,
-                    offset=start_offset,
-                    length=len(row_str) + 4,
-                    language="text",
-                )
-            )
-            continue
-
-        list_match = re.match(r"^(\d+\.|\-|\*)\s+(.*)", line)
-        if list_match:
-            item_content = list_match.group(2).strip()
-            bullet_prefix = (
-                "• "
-                if not list_match.group(1).replace(".", "").isdigit()
-                else f"{list_match.group(1)} "
-            )
-            full_text += f"{bullet_prefix}{item_content}\n"
-            continue
-
-        if not line.strip():
-            if not full_text.endswith("\n\n") and full_text:
-                full_text += "\n"
-            continue
-
-        full_text += f"{line}\n"
-
-    return full_text.strip(), text_entities
 
 
 # ==========================================
@@ -264,34 +159,29 @@ async def send_audio_track(
         print(f"Error sending audio ({key}): {send_err}")
 
 
-async def send_formatted_memories_as_blocks(message: Message, user_id_str: str):
-    """Builds the text using pure Aiogram formatting objects, bypassing parse_mode entirely."""
+async def send_formatted_memories(message: Message, user_id_str: str):
+    """Fetches memory lists and outputs clean HTML structure."""
     try:
         raw_items = await redis_client.lrange(f"memory_list:{user_id_str}", 0, -1)
         if not raw_items:
-            content = Text("Your memory list is currently empty.")
+            content = "Your memory list is currently empty."
         else:
             formatted_items = []
             for i, item in enumerate(raw_items):
                 mem_text = item.decode("utf-8") if isinstance(item, bytes) else item
-                # Standard numbering format matching your screenshot layout
-                formatted_items.append(Text(f"{i+1}. ", mem_text))
+                formatted_items.append(f"{i+1}. {mem_text}")
 
-            content = as_list(
-                Bold("Active Memory Directives:"), "", *formatted_items, sep="\n\n"
+            content = (
+                "<b>Active Memory Directives:</b>\n──────────────────────────\n\n"
+                + "\n".join(formatted_items)
             )
 
-        # Extract explicit string keys: 'text' and 'entities'
-        payload = content.as_kwargs()
-        reply_id = None if message.chat.type == "private" else message.message_id
-
-        # Route directly through bot.send_message to enforce the rich text entity mapping
-        sent_msg = await bot.send_message(
-            chat_id=message.chat.id,
-            text=payload["text"],
-            entities=payload.get("entities"),
-            reply_to_message_id=reply_id,
-        )
+        if message.chat.type == "private":
+            sent_msg = await message.answer(content)
+        else:
+            sent_msg = await message.answer(
+                content, reply_to_message_id=message.message_id
+            )
 
         if sent_msg:
             asyncio.create_task(
@@ -327,23 +217,18 @@ async def handle_delete(message: Message):
 
 @router.message(Command("help", "commands"))
 async def handle_help(message: Message):
-    content = as_list(
-        Bold("Sen Bot Command Hub"),
-        "",
-        "• remember [item],, [item2] - Adds items to memory",
-        "• what do you remember - Displays rules in a formatted list",
-        "• edit [number] [new fact] - Edits a specific rule",
-        "• forget [number],, [number2] - Removes memories",
-        "• forget all - Clears all memory",
-        sep="\n",
+    content = (
+        "<b>Sen Bot Command Hub</b>\n\n"
+        "• remember [item],, [item2] - Adds items to memory\n"
+        "• what do you remember - Displays rules in a formatted list\n"
+        "• edit [number] [new fact] - Edits a specific rule\n"
+        "• forget [number],, [number2] - Removes memories\n"
+        "• forget all - Clears all memory"
     )
-    kwargs = content.as_kwargs()
     if message.chat.type == "private":
-        sent_msg = await message.answer(**kwargs)
+        sent_msg = await message.answer(content)
     else:
-        sent_msg = await message.answer(
-            **kwargs, reply_to_message_id=message.message_id
-        )
+        sent_msg = await message.answer(content, reply_to_message_id=message.message_id)
 
     if sent_msg:
         asyncio.create_task(
@@ -363,7 +248,7 @@ def text_startswith(prefix: str):
 
 @router.message(text_in({"what do you remember", "how do you remember"}))
 async def handle_what_remember(message: Message):
-    await send_formatted_memories_as_blocks(message, str(message.from_user.id))
+    await send_formatted_memories(message, str(message.from_user.id))
 
 
 @router.message(text_startswith("remember "))
@@ -377,7 +262,7 @@ async def handle_remember(message: Message):
         except RedisError:
             pass
     await redis_client.ltrim(f"memory_list:{user_id_str}", -25, -1)
-    await send_formatted_memories_as_blocks(message, user_id_str)
+    await send_formatted_memories(message, user_id_str)
 
 
 @router.message(text_startswith("edit "))
@@ -389,7 +274,7 @@ async def handle_edit(message: Message):
         raw_items = await redis_client.lrange(f"memory_list:{user_id_str}", 0, -1)
         if 0 <= idx < len(raw_items):
             await redis_client.lset(f"memory_list:{user_id_str}", idx, new_val)
-            await send_formatted_memories_as_blocks(message, user_id_str)
+            await send_formatted_memories(message, user_id_str)
             return
 
     sent_msg = await message.answer("Usage: edit [number] [new text]")
@@ -443,7 +328,7 @@ async def handle_forget(message: Message):
                 await redis_client.rpush(f"memory_list:{user_id_str}", *memories)
     except RedisError:
         pass
-    await send_formatted_memories_as_blocks(message, user_id_str)
+    await send_formatted_memories(message, user_id_str)
 
 
 # ==========================================
@@ -520,7 +405,7 @@ async def handle_conversation(message: Message):
                 reply_to_message_id=reply_id,
             )
             return
-        await redis_client.set(cooldown_key, "1", ex=4)
+        await redis_client.setex(cooldown_key, 4, "1")
 
         if message.reply_to_message:
             replied_context = (
@@ -595,6 +480,9 @@ async def handle_conversation(message: Message):
                     f"Today's date is {today_str}. Keep responses structural using double line-breaks to separate ideas. "
                     "Never use standard AI pleasantries. Do not start responses with 'As an AI' or end with generic offers for help. "
                     "Keep casual replies brief, but dynamically expand your response length when explicitly asked for details. "
+                    "CRITICAL formatting rule: You must wrap any important terms or headings in standard HTML bold tags like <b>text</b>. "
+                    "When providing search references, websites, or hyperlinks, you must embed them natively inside clean anchor tags "
+                    'like <a href="URL">Clickable Title</a>. Never print raw URLs on the floor.'
                 )
 
                 if saved_facts:
@@ -637,12 +525,10 @@ async def handle_conversation(message: Message):
                     response = await chat.send_message(final_prompt)
 
                 raw_text = response.text or ""
-                final_text, text_entities = parse_text_to_entities(raw_text)
 
                 await bot.send_message(
                     chat_id=chat_id,
-                    text=final_text,
-                    entities=text_entities,
+                    text=raw_text,
                     reply_to_message_id=reply_id,
                 )
                 await redis_client.rpush(
@@ -673,7 +559,6 @@ app.router.add_get("/", health_check)
 app.router.add_get("/health", health_check)
 
 
-# 1. Strip the polling loop out of your on_startup hook completely
 async def on_startup(app_instance):
     global BOT_INFO
     try:
@@ -685,6 +570,8 @@ async def on_startup(app_instance):
     except Exception as e:  # noqa: BLE001
         print(f"Failed to fetch bot info: {e}")
 
+    asyncio.create_task(dp.start_polling(bot))
+
 
 async def on_shutdown(app_instance):
     await bot.session.close()
@@ -694,23 +581,5 @@ async def on_shutdown(app_instance):
 app.on_startup.append(on_startup)
 app.on_shutdown.append(on_shutdown)
 
-
-# 2. Use a unified single-runner to handle both tasks safely in one loop
-async def main():
-    # Start the web app runner in the background
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, host="0.0.0.0", port=int(os.environ.get("PORT", "8080")))
-    await site.start()
-    print(f"======== Running web app on port {os.environ.get('PORT', '8080')} ========")
-
-    # Run the SINGLE polling instance directly on the primary main context task chain
-    try:
-        await dp.start_polling(bot)
-    finally:
-        await runner.cleanup()
-
-
 if __name__ == "__main__":
-    # Fire a single global event loop
-    asyncio.run(main())
+    web.run_app(app, host="0.0.0.0", port=int(os.environ.get("PORT", "8080")))
