@@ -520,7 +520,7 @@ async def handle_conversation(message: Message):
                 reply_to_message_id=reply_id,
             )
             return
-        await redis_client.setex(cooldown_key, 4, "1")
+        await redis_client.set(cooldown_key, "1", ex=4)
 
         if message.reply_to_message:
             replied_context = (
