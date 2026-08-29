@@ -2,6 +2,7 @@ import os
 import re
 import asyncio
 from datetime import datetime
+from aiohttp import web
 
 from aiogram import Bot, Dispatcher, Router, F
 from aiogram.types import Update, Message, FSInputFile
@@ -819,8 +820,13 @@ async def handle_conversation(message: Message):
 
 
 # ==========================================
-# Polling Execution Loop
+# Polling Execution Loop & Healthcheck Server
 # ==========================================
+
+
+async def health_check(request):
+    """Dummy endpoint to satisfy platform healthchecks."""
+    return web.Response(text="200 OK - Bot is running.", status=200)
 
 
 async def main():
@@ -831,11 +837,24 @@ async def main():
     except Exception as e:
         print(f"Failed to fetch bot info: {e}")
 
+    # Initialize background web server for healthchecks
+    app = web.Application()
+    app.router.add_get("/", health_check)
+    app.router.add_get("/health", health_check)
+
+    runner = web.AppRunner(app)
+    await runner.setup()
+    port = int(os.environ.get("PORT", 8080))
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+    print(f"Healthcheck server listening on port {port}")
+
     try:
         await dp.start_polling(bot)
     finally:
         await bot.session.close()
         await redis_client.aclose()
+        await runner.cleanup()
 
 
 if __name__ == "__main__":
