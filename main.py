@@ -82,6 +82,16 @@ async def transmit_rich_payload(
 
 
 # ==========================================
+# Rich Text Structural Helpers
+# ==========================================
+
+
+def wrap_text_payload(content: str) -> dict:
+    """Wraps plain text strings cleanly into a semantic TextWithEntities JSON structure required by Bot API 10.1+."""
+    return {"text": content}
+
+
+# ==========================================
 # Stateful Block Parser (Raw Dictionary Output)
 # ==========================================
 
@@ -99,7 +109,9 @@ def parse_text_to_blocks(text: str) -> list:
         if paragraph_buffer:
             text_content = "\n".join(paragraph_buffer).strip()
             if text_content:
-                blocks.append({"type": "paragraph", "text": text_content})
+                blocks.append(
+                    {"type": "paragraph", "text": wrap_text_payload(text_content)}
+                )
             paragraph_buffer.clear()
 
     for line in lines:
@@ -109,7 +121,10 @@ def parse_text_to_blocks(text: str) -> list:
                 flush_buffers()
                 clean_code = "\n".join(code_buffer)
                 blocks.append(
-                    {"type": "paragraph", "text": f"Code Snippet:\n{clean_code}"}
+                    {
+                        "type": "paragraph",
+                        "text": wrap_text_payload(f"Code Snippet:\n{clean_code}"),
+                    }
                 )
                 code_buffer.clear()
             else:
@@ -138,7 +153,7 @@ def parse_text_to_blocks(text: str) -> list:
             blocks.append(
                 {
                     "type": "heading",
-                    "text": heading_match.group(2).strip(),
+                    "text": wrap_text_payload(heading_match.group(2).strip()),
                     "level": level,
                 }
             )
@@ -150,7 +165,7 @@ def parse_text_to_blocks(text: str) -> list:
             if all(re.match(r"^\-+$", c) for c in cells):
                 continue
 
-            table_cells = [{"text": c} for c in cells]
+            table_cells = [{"text": wrap_text_payload(c)} for c in cells]
             new_row = {"cells": table_cells}
 
             if blocks and blocks[-1].get("type") == "table":
@@ -170,7 +185,11 @@ def parse_text_to_blocks(text: str) -> list:
         if list_match:
             flush_buffers()
             item_content = list_match.group(2).strip()
-            new_item = {"blocks": [{"type": "paragraph", "text": item_content}]}
+            new_item = {
+                "blocks": [
+                    {"type": "paragraph", "text": wrap_text_payload(item_content)}
+                ]
+            }
 
             if blocks and blocks[-1].get("type") == "list":
                 blocks[-1]["items"].append(new_item)
@@ -187,7 +206,7 @@ def parse_text_to_blocks(text: str) -> list:
     flush_buffers()
 
     if not blocks:
-        blocks.append({"type": "paragraph", "text": " "})
+        blocks.append({"type": "paragraph", "text": wrap_text_payload(" ")})
 
     return blocks
 
@@ -224,7 +243,7 @@ async def free_web_search(query: str) -> str:
     try:
         async with httpx.AsyncClient() as client:
             res = await client.post(
-                "[https://html.duckduckgo.com/html/](https://html.duckduckgo.com/html/)",
+                "https://html.duckduckgo.com/html/",
                 data={"q": query},
                 headers=headers,
                 timeout=8.0,
@@ -345,18 +364,41 @@ async def send_formatted_memories_as_blocks(message: Message, user_id_str: str):
     """Directly builds native rich block dicts via code iteration, compiling memories into a structured table."""
     try:
         raw_items = await redis_client.lrange(f"memory_list:{user_id_str}", 0, -1)
-        blocks = [{"type": "heading", "text": "Active Memory Directives", "level": 2}]
+        blocks = [
+            {
+                "type": "heading",
+                "text": wrap_text_payload("Active Memory Directives"),
+                "level": 2,
+            }
+        ]
 
         if not raw_items:
             blocks.append(
-                {"type": "paragraph", "text": "Your memory list is currently empty."}
+                {
+                    "type": "paragraph",
+                    "text": wrap_text_payload("Your memory list is currently empty."),
+                }
             )
         else:
-            rows = [{"cells": [{"text": "Index"}, {"text": "Memory Directive"}]}]
+            rows = [
+                {
+                    "cells": [
+                        {"text": wrap_text_payload("Index")},
+                        {"text": wrap_text_payload("Memory Directive")},
+                    ]
+                }
+            ]
 
             for idx, item in enumerate(raw_items):
                 mem_text = item.decode("utf-8") if isinstance(item, bytes) else item
-                rows.append({"cells": [{"text": str(idx + 1)}, {"text": mem_text}]})
+                rows.append(
+                    {
+                        "cells": [
+                            {"text": wrap_text_payload(str(idx + 1))},
+                            {"text": wrap_text_payload(mem_text)},
+                        ]
+                    }
+                )
 
             blocks.append({"type": "table", "is_bordered": True, "rows": rows})
 
@@ -374,7 +416,7 @@ async def send_formatted_memories_as_blocks(message: Message, user_id_str: str):
     except Exception as e:
         print(f"Error rendering structured memory blocks: {e}")
         await bot.send_message(
-            chat_id=message.chat.id, text="⚠️ Error loading active memory layout."
+            chat_id=message.chat.id, text="âš ï¸ Error loading active memory layout."
         )
 
 
@@ -402,7 +444,11 @@ async def handle_delete(message: Message):
 @router.message(Command("help", "commands"))
 async def handle_help(message: Message):
     blocks = [
-        {"type": "heading", "text": "Sen Bot Command Hub", "level": 1},
+        {
+            "type": "heading",
+            "text": wrap_text_payload("Sen Bot Command Hub"),
+            "level": 1,
+        },
         {
             "type": "list",
             "items": [
@@ -410,7 +456,9 @@ async def handle_help(message: Message):
                     "blocks": [
                         {
                             "type": "paragraph",
-                            "text": "remember [item],, [item2] - Adds items to memory",
+                            "text": wrap_text_payload(
+                                "remember [item],, [item2] - Adds items to memory"
+                            ),
                         }
                     ]
                 },
@@ -418,7 +466,9 @@ async def handle_help(message: Message):
                     "blocks": [
                         {
                             "type": "paragraph",
-                            "text": "what do you remember - Displays rules in a formatted list",
+                            "text": wrap_text_payload(
+                                "what do you remember - Displays rules in a formatted list"
+                            ),
                         }
                     ]
                 },
@@ -426,7 +476,9 @@ async def handle_help(message: Message):
                     "blocks": [
                         {
                             "type": "paragraph",
-                            "text": "edit [number] [new fact] - Edits a specific rule",
+                            "text": wrap_text_payload(
+                                "edit [number] [new fact] - Edits a specific rule"
+                            ),
                         }
                     ]
                 },
@@ -434,13 +486,18 @@ async def handle_help(message: Message):
                     "blocks": [
                         {
                             "type": "paragraph",
-                            "text": "forget [number],, [number2] - Removes memories",
+                            "text": wrap_text_payload(
+                                "forget [number],, [number2] - Removes memories"
+                            ),
                         }
                     ]
                 },
                 {
                     "blocks": [
-                        {"type": "paragraph", "text": "forget all - Clears all memory"}
+                        {
+                            "type": "paragraph",
+                            "text": wrap_text_payload("forget all - Clears all memory"),
+                        }
                     ]
                 },
             ],
@@ -501,7 +558,12 @@ async def handle_edit(message: Message):
             await send_formatted_memories_as_blocks(message, user_id_str)
             return
 
-    error_blocks = [{"type": "paragraph", "text": "Usage: edit [number] [new text]"}]
+    error_blocks = [
+        {
+            "type": "paragraph",
+            "text": wrap_text_payload("Usage: edit [number] [new text]"),
+        }
+    ]
     reply_to = message.message_id if message.chat.type != "private" else None
     res = await transmit_rich_payload(message.chat.id, error_blocks, reply_to)
 
@@ -520,7 +582,12 @@ async def handle_forget_all(message: Message):
         f"memory_list:{user_id_str}", f"chat_history:{chat_id}:{user_id_str}"
     )
 
-    blocks = [{"type": "paragraph", "text": "Cleared all your saved memories."}]
+    blocks = [
+        {
+            "type": "paragraph",
+            "text": wrap_text_payload("Cleared all your saved memories."),
+        }
+    ]
     reply_to = message.message_id if message.chat.type != "private" else None
     res = await transmit_rich_payload(message.chat.id, blocks, reply_to)
 
@@ -628,7 +695,10 @@ async def handle_conversation(message: Message):
 
         if await redis_client.exists(cooldown_key):
             warn_blocks = [
-                {"type": "paragraph", "text": "Slow down, request limit reached."}
+                {
+                    "type": "paragraph",
+                    "text": wrap_text_payload("Slow down, request limit reached."),
+                }
             ]
             await transmit_rich_payload(chat_id, warn_blocks, reply_to_id)
             return
@@ -793,14 +863,18 @@ async def handle_conversation(message: Message):
                 error_blocks = [
                     {
                         "type": "paragraph",
-                        "text": "I am currently broken right now, the owner needs to fix me.",
+                        "text": wrap_text_payload(
+                            "I am currently broken right now, the owner needs to fix me."
+                        ),
                     }
                 ]
                 if "429" in str(ai_err):
                     error_blocks = [
                         {
                             "type": "paragraph",
-                            "text": "Whoa, I'm getting a little overwhelmed! Let me catch my breath for a minute.",
+                            "text": wrap_text_payload(
+                                "Whoa, I'm getting a little overwhelmed! Let me catch my breath for a minute."
+                            ),
                         }
                     ]
 
