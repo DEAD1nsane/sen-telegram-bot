@@ -22,11 +22,8 @@
   },
   "homepage": "https://github.com",
   "dependencies": {
-    "@railway/cli": "^5.45.7",
-    "beautify": "^0.0.8",
     "dotenv": "^16.4.5",
-    "googleapis": "^176.0.0",
-    "node": "^26.8.1"
+    "googleapis": "^176.0.0"
   },
   "devDependencies": {
     "husky": "^9.1.5",
@@ -36,8 +33,5 @@
   "lint-staged": {
     "*.{js,json,md}": "prettier --write",
     "*.py": "black"
-  },
-  "allowScripts": {
-    "@railway/cli@0.3.1": true
   }
 }
