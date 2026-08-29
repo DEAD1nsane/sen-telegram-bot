@@ -274,21 +274,24 @@ async def send_formatted_memories_as_blocks(message: Message, user_id_str: str):
             formatted_items = []
             for i, item in enumerate(raw_items):
                 mem_text = item.decode("utf-8") if isinstance(item, bytes) else item
-                # Swap the bold bracket format for the standard dot format natively
+                # Standard numbering format matching your screenshot layout
                 formatted_items.append(Text(f"{i+1}. ", mem_text))
 
             content = as_list(
                 Bold("Active Memory Directives:"), "", *formatted_items, sep="\n\n"
             )
 
-        kwargs = content.as_kwargs()
+        # Extract explicit string keys: 'text' and 'entities'
+        payload = content.as_kwargs()
+        reply_id = None if message.chat.type == "private" else message.message_id
 
-        if message.chat.type == "private":
-            sent_msg = await message.answer(**kwargs)
-        else:
-            sent_msg = await message.answer(
-                **kwargs, reply_to_message_id=message.message_id
-            )
+        # Route directly through bot.send_message to enforce the rich text entity mapping
+        sent_msg = await bot.send_message(
+            chat_id=message.chat.id,
+            text=payload["text"],
+            entities=payload.get("entities"),
+            reply_to_message_id=reply_id,
+        )
 
         if sent_msg:
             asyncio.create_task(
