@@ -11,7 +11,6 @@ from aiogram.types import (
     InputRichMessage,
     InputRichBlockHeading,
     InputRichBlockParagraph,
-    InputRichBlockCollapsibleDetails,
     InputRichBlockMathematicalExpression,
     InputRichBlockList,
     InputRichBlockListItem,
@@ -134,7 +133,7 @@ def parse_text_to_blocks(text: str) -> list:
             if all(re.match(r"^\-+$", c) for c in cells):
                 continue
 
-            # FIX: Clear out block arrays inside the cell, mapping text inputs natively
+            # Clear out block arrays inside the cell, mapping text inputs natively
             table_cells = [InputRichTableCell(text=c) for c in cells]
             new_row = InputRichTableRow(cells=table_cells)
 
@@ -255,27 +254,19 @@ async def get_formatted_memories(user_id_str: str) -> str:
         return "Could not retrieve memory list."
 
 
-async def collapse_message(chat_id: int, message_id: int, delay: int):
-    """Waits for the delay (in seconds), then dynamically edits the message into an accordion state."""
+async def auto_delete_message(
+    chat_id: int, bot_msg_id: int, user_msg_id: int, delay: int
+):
+    """Waits for the delay (in seconds), then silently deletes both the bot's response and user's command."""
     await asyncio.sleep(delay)
-    blocks = [
-        InputRichBlockCollapsibleDetails(
-            summary="Active Memories Collapsed",
-            blocks=[
-                InputRichBlockParagraph(
-                    text="Your memory list is hidden to conserve space."
-                )
-            ],
-        )
-    ]
     try:
-        await bot.edit_message_rich_message(
-            chat_id=chat_id,
-            message_id=message_id,
-            rich_message=InputRichMessage(blocks=blocks),
-        )
+        await bot.delete_message(chat_id=chat_id, message_id=bot_msg_id)
     except Exception as e:
-        print(f"Error collapsing memory list: {e}")
+        print(f"Error auto-deleting bot memory list: {e}")
+    try:
+        await bot.delete_message(chat_id=chat_id, message_id=user_msg_id)
+    except Exception as e:
+        print(f"Error auto-deleting user memory command: {e}")
 
 
 async def send_audio_track(
@@ -376,57 +367,59 @@ async def handle_delete(message: Message):
 async def handle_help(message: Message):
     blocks = [
         InputRichBlockHeading(text="Sen Bot Command Hub", level=1),
-        InputRichBlockCollapsibleDetails(
-            summary="View Available Directives",
-            blocks=[
-                InputRichBlockList(
-                    items=[
-                        InputRichBlockListItem(
-                            blocks=[
-                                InputRichBlockParagraph(
-                                    text="remember [item],, [item2] - Adds items to memory"
-                                )
-                            ]
-                        ),
-                        InputRichBlockListItem(
-                            blocks=[
-                                InputRichBlockParagraph(
-                                    text="what do you remember - Displays rules in a formatted list"
-                                )
-                            ]
-                        ),
-                        InputRichBlockListItem(
-                            blocks=[
-                                InputRichBlockParagraph(
-                                    text="edit [number] [new fact] - Edits a specific rule"
-                                )
-                            ]
-                        ),
-                        InputRichBlockListItem(
-                            blocks=[
-                                InputRichBlockParagraph(
-                                    text="forget [number],, [number2] - Removes memories"
-                                )
-                            ]
-                        ),
-                        InputRichBlockListItem(
-                            blocks=[
-                                InputRichBlockParagraph(
-                                    text="forget all - Clears all memory"
-                                )
-                            ]
-                        ),
+        InputRichBlockList(
+            items=[
+                InputRichBlockListItem(
+                    blocks=[
+                        InputRichBlockParagraph(
+                            text="remember [item],, [item2] - Adds items to memory"
+                        )
                     ]
-                )
-            ],
+                ),
+                InputRichBlockListItem(
+                    blocks=[
+                        InputRichBlockParagraph(
+                            text="what do you remember - Displays rules in a formatted list"
+                        )
+                    ]
+                ),
+                InputRichBlockListItem(
+                    blocks=[
+                        InputRichBlockParagraph(
+                            text="edit [number] [new fact] - Edits a specific rule"
+                        )
+                    ]
+                ),
+                InputRichBlockListItem(
+                    blocks=[
+                        InputRichBlockParagraph(
+                            text="forget [number],, [number2] - Removes memories"
+                        )
+                    ]
+                ),
+                InputRichBlockListItem(
+                    blocks=[
+                        InputRichBlockParagraph(text="forget all - Clears all memory")
+                    ]
+                ),
+            ]
         ),
     ]
     if message.chat.type == "private":
-        await message.answer_rich_message(rich_message=InputRichMessage(blocks=blocks))
+        sent_msg = await message.answer_rich_message(
+            rich_message=InputRichMessage(blocks=blocks)
+        )
     else:
-        await message.answer_rich_message(
+        sent_msg = await message.answer_rich_message(
             rich_message=InputRichMessage(blocks=blocks),
             reply_to_message_id=message.message_id,
+        )
+
+    if sent_msg:
+        asyncio.create_task(
+            auto_delete_message(
+                message.chat.id, sent_msg.message_id, message.message_id, 60
+            )
         )
 
 
@@ -455,7 +448,11 @@ async def handle_what_remember(message: Message):
         )
 
     if sent_msg:
-        asyncio.create_task(collapse_message(message.chat.id, sent_msg.message_id, 60))
+        asyncio.create_task(
+            auto_delete_message(
+                message.chat.id, sent_msg.message_id, message.message_id, 60
+            )
+        )
 
 
 @router.message(text_startswith("remember "))
@@ -486,7 +483,11 @@ async def handle_remember(message: Message):
         )
 
     if sent_msg:
-        asyncio.create_task(collapse_message(message.chat.id, sent_msg.message_id, 60))
+        asyncio.create_task(
+            auto_delete_message(
+                message.chat.id, sent_msg.message_id, message.message_id, 60
+            )
+        )
 
 
 @router.message(text_startswith("edit "))
@@ -521,7 +522,11 @@ async def handle_edit(message: Message):
         )
 
     if sent_msg and len(blocks) > 1:
-        asyncio.create_task(collapse_message(message.chat.id, sent_msg.message_id, 60))
+        asyncio.create_task(
+            auto_delete_message(
+                message.chat.id, sent_msg.message_id, message.message_id, 60
+            )
+        )
 
 
 @router.message(F.text.lower() == "forget all")
@@ -534,11 +539,20 @@ async def handle_forget_all(message: Message):
 
     blocks = parse_text_to_blocks("Cleared all your saved memories.")
     if message.chat.type == "private":
-        await message.answer_rich_message(rich_message=InputRichMessage(blocks=blocks))
+        sent_msg = await message.answer_rich_message(
+            rich_message=InputRichMessage(blocks=blocks)
+        )
     else:
-        await message.answer_rich_message(
+        sent_msg = await message.answer_rich_message(
             rich_message=InputRichMessage(blocks=blocks),
             reply_to_message_id=message.message_id,
+        )
+
+    if sent_msg:
+        asyncio.create_task(
+            auto_delete_message(
+                message.chat.id, sent_msg.message_id, message.message_id, 60
+            )
         )
 
 
@@ -585,7 +599,11 @@ async def handle_forget(message: Message):
         )
 
     if sent_msg and len(blocks) > 1:
-        asyncio.create_task(collapse_message(message.chat.id, sent_msg.message_id, 60))
+        asyncio.create_task(
+            auto_delete_message(
+                message.chat.id, sent_msg.message_id, message.message_id, 60
+            )
+        )
 
 
 # ==========================================
