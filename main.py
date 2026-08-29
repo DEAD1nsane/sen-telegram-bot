@@ -10,6 +10,7 @@ from aiogram.enums import MessageEntityType
 from aiogram.exceptions import TelegramAPIError
 from aiogram.filters import Command
 from aiogram.types import FSInputFile, Message, MessageEntity
+from aiogram.utils.formatting import Bold, Text, as_list
 from aiohttp import web
 from google import genai
 from google.genai import types
@@ -38,15 +39,12 @@ else:
     redis_client = redis.from_url(redis_url)
 
 API_TOKEN = os.getenv("BOT_TOKEN")
-SEARXNG_URL = os.getenv(
-    "SEARXNG_URL", "https://searxng-railway-production-3252.up.railway.app/search"
-)
+SEARXNG_URL = os.getenv("SEARXNG_URL", "https://railway.app")
 
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher()
 router = Router()
 dp.include_router(router)
-
 BOT_INFO = None
 
 gemini_api_key = os.getenv("GEMINI_API_KEY")
@@ -55,19 +53,16 @@ if not gemini_api_key:
 
 gemini_client = genai.Client(api_key=gemini_api_key)
 OWNER_ID = int(os.getenv("OWNER_ID", "0"))
-
 app = web.Application()
+
 
 # ==========================================
 # Native Block Parser using MessageEntities
 # ==========================================
-
-
 def parse_text_to_entities(text: str) -> tuple[str, list[MessageEntity]]:
     full_text = ""
     text_entities = []
     lines = text.split("\n")
-
     in_code_block = False
     code_buffer = []
 
@@ -148,7 +143,6 @@ def parse_text_to_entities(text: str) -> tuple[str, list[MessageEntity]]:
         list_match = re.match(r"^(\d+\.|\-|\*)\s+(.*)", line)
         if list_match:
             item_content = list_match.group(2).strip()
-            start_offset = len(full_text)
             bullet_prefix = (
                 "• "
                 if not list_match.group(1).replace(".", "").isdigit()
@@ -170,8 +164,6 @@ def parse_text_to_entities(text: str) -> tuple[str, list[MessageEntity]]:
 # ==========================================
 # Helpers
 # ==========================================
-
-
 async def free_web_search(query: str) -> str:
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
     try:
@@ -250,7 +242,7 @@ async def send_audio_track(
                     if isinstance(cached_id, bytes)
                     else cached_id
                 )
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 if "message to be replied not found" in str(e).lower():
                     await bot.send_audio(
                         chat_id=chat_id,
@@ -273,30 +265,30 @@ async def send_audio_track(
 
 
 async def send_formatted_memories_as_blocks(message: Message, user_id_str: str):
+    """Builds the text using pure Aiogram formatting objects, bypassing parse_mode entirely."""
     try:
         raw_items = await redis_client.lrange(f"memory_list:{user_id_str}", 0, -1)
-        title_text = "Active Memory Directives\n\n"
-        entities = [
-            MessageEntity(type=MessageEntityType.BOLD, offset=0, length=24),
-            MessageEntity(type=MessageEntityType.UNDERLINE, offset=0, length=24),
-        ]
-        body_text = ""
         if not raw_items:
-            body_text = "Your memory list is currently empty."
+            content = Text("Your memory list is currently empty.")
         else:
-            for item in raw_items:
+            formatted_items = []
+            for i, item in enumerate(raw_items):
                 mem_text = item.decode("utf-8") if isinstance(item, bytes) else item
-                body_text += f"• {mem_text}\n"
+                formatted_items.append(Text(Bold(f"[{i+1}] "), mem_text))
 
-        final_text = title_text + body_text.strip()
-        reply_id = None if message.chat.type == "private" else message.message_id
+            content = as_list(
+                Bold("Active Memory Directives:"), "", *formatted_items, sep="\n\n"
+            )
 
-        sent_msg = await bot.send_message(
-            chat_id=message.chat.id,
-            text=final_text,
-            entities=entities,
-            reply_to_message_id=reply_id,
-        )
+        kwargs = content.as_kwargs()
+
+        if message.chat.type == "private":
+            sent_msg = await message.answer(**kwargs)
+        else:
+            sent_msg = await message.answer(
+                **kwargs, reply_to_message_id=message.message_id
+            )
+
         if sent_msg:
             asyncio.create_task(
                 auto_delete_message(
@@ -305,6 +297,7 @@ async def send_formatted_memories_as_blocks(message: Message, user_id_str: str):
             )
     except Exception as e:  # noqa: BLE001
         print(f"Error rendering structured memory blocks: {e}")
+        await message.answer("⚠️ Error loading active memory layout.")
 
 
 # ==========================================
@@ -330,26 +323,24 @@ async def handle_delete(message: Message):
 
 @router.message(Command("help", "commands"))
 async def handle_help(message: Message):
-    heading = "Sen Bot Command Hub\n\n"
-    commands = [
+    content = as_list(
+        Bold("Sen Bot Command Hub"),
+        "",
         "• remember [item],, [item2] - Adds items to memory",
         "• what do you remember - Displays rules in a formatted list",
         "• edit [number] [new fact] - Edits a specific rule",
         "• forget [number],, [number2] - Removes memories",
         "• forget all - Clears all memory",
-    ]
-    full_help_text = heading + "\n".join(commands)
-    entities = [
-        MessageEntity(type=MessageEntityType.BOLD, offset=0, length=19),
-        MessageEntity(type=MessageEntityType.UNDERLINE, offset=0, length=19),
-    ]
-    reply_id = None if message.chat.type == "private" else message.message_id
-    sent_msg = await bot.send_message(
-        chat_id=message.chat.id,
-        text=full_help_text,
-        entities=entities,
-        reply_to_message_id=reply_id,
+        sep="\n",
     )
+    kwargs = content.as_kwargs()
+    if message.chat.type == "private":
+        sent_msg = await message.answer(**kwargs)
+    else:
+        sent_msg = await message.answer(
+            **kwargs, reply_to_message_id=message.message_id
+        )
+
     if sent_msg:
         asyncio.create_task(
             auto_delete_message(
@@ -389,13 +380,14 @@ async def handle_remember(message: Message):
 async def handle_edit(message: Message):
     user_id_str = str(message.from_user.id)
     parts = message.text.strip()[5:].strip().split(" ", 1)
-    if len(parts) == 2 and parts.isdigit():
-        idx, new_val = int(parts) - 1, parts.strip()
+    if len(parts) == 2 and parts[0].isdigit():
+        idx, new_val = int(parts[0]) - 1, parts[1].strip()
         raw_items = await redis_client.lrange(f"memory_list:{user_id_str}", 0, -1)
         if 0 <= idx < len(raw_items):
             await redis_client.lset(f"memory_list:{user_id_str}", idx, new_val)
             await send_formatted_memories_as_blocks(message, user_id_str)
             return
+
     sent_msg = await message.answer("Usage: edit [number] [new text]")
     if sent_msg:
         asyncio.create_task(
@@ -458,8 +450,8 @@ async def handle_forget(message: Message):
 @router.message(F.text | F.caption | F.voice | F.audio)
 async def handle_conversation(message: Message):
     text = message.text or message.caption or ""
-    text_no_code = re.sub(r"(?s)```.*?```", "", text)
-    text_no_code = re.sub(r"(?s)`.*?`", "", text_no_code)
+    text_no_code = re.sub(r"(?s).*?", "", text)
+    text_no_code = re.sub(r"(?s).*?", "", text_no_code)
 
     if re.search(r"\bsen\b", text_no_code, re.IGNORECASE):
         asyncio.create_task(
@@ -600,6 +592,7 @@ async def handle_conversation(message: Message):
                     "Never use standard AI pleasantries. Do not start responses with 'As an AI' or end with generic offers for help. "
                     "Keep casual replies brief, but dynamically expand your response length when explicitly asked for details. "
                 )
+
                 if saved_facts:
                     bot_instructions += (
                         "\n\nYou must strictly follow these overrides:\n"
@@ -686,6 +679,7 @@ async def on_startup(app_instance):
         print(f"Bot authenticated as {BOT_INFO.username}")
     except Exception as e:  # noqa: BLE001
         print(f"Failed to fetch bot info: {e}")
+
     asyncio.create_task(dp.start_polling(bot))
 
 
