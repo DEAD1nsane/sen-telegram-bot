@@ -31,3 +31,4 @@ telebot
 md2tgmd
 markdownify
 aiogram
+telegramify_markdown
