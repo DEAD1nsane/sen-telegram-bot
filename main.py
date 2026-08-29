@@ -7,6 +7,7 @@ from aiohttp import web
 from aiogram import Bot, Dispatcher, Router, F
 from aiogram.types import Message, FSInputFile, LinkPreviewOptions
 from aiogram.filters import Command
+from aiogram.client.default import DefaultBotProperties
 
 import redis.asyncio as redis
 import httpx
@@ -40,7 +41,8 @@ SEARXNG_URL = os.getenv(
     "SEARXNG_URL", "https://searxng-railway-production-3252.up.railway.app/search"
 )
 
-bot = Bot(token=API_TOKEN)
+# FIXED: Integrated system-wide HTML parse mode to cleanly handle rich text elements
+bot = Bot(token=API_TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
 dp = Dispatcher()
 router = Router()
 dp.include_router(router)
@@ -591,6 +593,8 @@ async def handle_conversation(message: Message):
                     )
 
                 today_str = datetime.now(timezone.utc).strftime("%A, %B %d, %Y")
+
+                # FIXED/ENFORCED: Upgraded bot prompt logic to forcefully suppress markdown and mandatorily switch to native Telegram HTML structures
                 bot_instructions = (
                     f"Today's date is {today_str}. Keep responses structural using double line-breaks to separate ideas. "
                     "Never use standard AI pleasantries. Do not start responses with 'As an AI' or end with generic offers for help. "
@@ -598,7 +602,11 @@ async def handle_conversation(message: Message):
                     "If the user changes the subject abruptly, drop the previous topic immediately and adapt to the new flow. "
                     "If the user is clearly joking or sarcastic, match their energy rather than taking the prompt literally. "
                     "If you do not know the answer or the provided context is insufficient, state 'I don't have enough details to answer that accurately' directly without guessing. "
-                    "Do not assume personal details about the user unless they are explicitly provided in your memory list."
+                    "Do not assume personal details about the user unless they are explicitly provided in your memory list. "
+                    "CRITICAL FOR RICH TEXT RENDERING: You must write exclusively in Telegram-compatible HTML parse mode syntax. "
+                    "Do not use ANY markdown formatting symbols (never use asterisks **, underscores _, or backticks `). "
+                    "Instead, use explicit HTML tags: <b>text</b> for bold, <i>text</i> for italic, <u>text</u> for underline, <s>text</s> for strikethrough, and <code>text</code> for inline code. "
+                    "When generating tabular data, lists or data layouts requiring clean structural margins, you MUST construct a text table using monospaced characters and wrap the whole block within raw `<pre>...</pre>` tags. This preserves table cell spacing cleanly."
                 )
 
                 if search_context:
@@ -647,63 +655,46 @@ async def handle_conversation(message: Message):
                         ),
                     )
                 else:
-                    try:
-                        chat = gemini_client.aio.chats.create(
-                            model="gemini-3.5-flash-lite",
-                            config=types.GenerateContentConfig(
-                                system_instruction=bot_instructions,
-                                safety_settings=safety_overrides,
-                            ),
-                        )
-                        response = await chat.send_message(final_prompt)
-                    except Exception as primary_err:
-                        print(
-                            f"Primary model failed ({primary_err}), falling back to gemini-2.5-flash..."
-                        )
-                        chat = gemini_client.aio.chats.create(
-                            model="gemini-2.5-flash",
-                            config=types.GenerateContentConfig(
-                                system_instruction=bot_instructions,
-                                safety_settings=safety_overrides,
-                            ),
-                        )
-                        response = await chat.send_message(final_prompt)
+                    response = await gemini_client.aio.models.generate_content(
+                        model="gemini-3.5-flash-lite",
+                        contents=final_prompt,
+                        config=types.GenerateContentConfig(
+                            system_instruction=bot_instructions,
+                            safety_settings=safety_overrides,
+                        ),
+                    )
 
-                clean_text = response.text or ""
-                preview_opts = LinkPreviewOptions(
-                    is_disabled=False, prefer_small_media=True
+                bot_text = (
+                    response.text
+                    if response and response.text
+                    else "I am currently broken."
                 )
 
                 if is_private:
                     await message.answer(
-                        text=clean_text, link_preview_options=preview_opts
+                        text=bot_text,
+                        link_preview_options=LinkPreviewOptions(is_disabled=True),
                     )
                 else:
                     await message.answer(
-                        text=clean_text,
+                        text=bot_text,
                         reply_to_message_id=msg_id,
-                        link_preview_options=preview_opts,
+                        link_preview_options=LinkPreviewOptions(is_disabled=True),
                     )
 
                 await redis_client.rpush(
-                    history_key,
-                    f"User: {clean_prompt or 'Voice Note'}",
-                    f"Bot: {clean_text}",
+                    history_key, f"User: {clean_prompt}", f"Bot: {bot_text}"
                 )
                 await redis_client.ltrim(history_key, -10, -1)
+                await redis_client.expire(history_key, 3600)
 
-            except Exception as ai_err:
-                print(f"Gemini API error: {ai_err}")
-                error_content = (
-                    "I am currently broken right now, the owner needs to fix me."
-                )
-                if "429" in str(ai_err):
-                    error_content = "Whoa, I'm getting a little overwhelmed! Let me catch my breath for a minute."
-
+            except Exception as e:
+                print(f"Gemini/Chat error: {e}")
+                error_msg = "I am currently broken."
                 if is_private:
-                    await message.answer(text=error_content)
+                    await message.answer(text=error_msg)
                 else:
-                    await message.answer(text=error_content, reply_to_message_id=msg_id)
+                    await message.answer(text=error_msg, reply_to_message_id=msg_id)
 
 
 # ==========================================
