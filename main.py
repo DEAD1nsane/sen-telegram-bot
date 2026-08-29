@@ -1,19 +1,18 @@
 import os
 import re
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime
 
 import httpx
 import redis.asyncio as redis
-from aiogram import Bot, Dispatcher, F, Router
-from aiogram.client.default import DefaultBotProperties
-from aiogram.enums import ParseMode
+from aiogram import Bot, Dispatcher, Router, F
+from aiogram.types import Message, FSInputFile
+from aiogram.filters import Command
 from aiogram.exceptions import TelegramAPIError
-from aiogram.types import FSInputFile, Message
 from aiohttp import web
+
 from google import genai
 from google.genai import types
-from redis.exceptions import RedisError
 
 # ==========================================
 # Environment & Config
@@ -38,12 +37,15 @@ else:
     redis_client = redis.from_url(redis_url)
 
 API_TOKEN = os.getenv("BOT_TOKEN")
-SEARXNG_URL = os.getenv("SEARXNG_URL", "https://railway.app")
+SEARXNG_URL = os.getenv(
+    "SEARXNG_URL", "https://searxng-railway-production-3252.up.railway.app/search"
+)
 
-bot = Bot(token=API_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+bot = Bot(token=API_TOKEN)
 dp = Dispatcher()
 router = Router()
 dp.include_router(router)
+
 BOT_INFO = None
 
 gemini_api_key = os.getenv("GEMINI_API_KEY")
@@ -52,12 +54,149 @@ if not gemini_api_key:
 
 gemini_client = genai.Client(api_key=gemini_api_key)
 OWNER_ID = int(os.getenv("OWNER_ID", "0"))
+
 app = web.Application()
+
+# ==========================================
+# Core Messaging Network Client
+# ==========================================
+
+
+async def transmit_rich_payload(
+    chat_id: int, blocks: list, reply_to_id: int = None
+) -> dict:
+    """Bypasses standard aiogram send methods to manually interface with Telegram's rich text API endpoints."""
+    url = f"https://api.telegram.org/bot{API_TOKEN}/sendRichMessage"
+    payload = {"chat_id": chat_id, "rich_message": {"blocks": blocks}}
+
+    if reply_to_id:
+        payload["reply_parameters"] = {"message_id": reply_to_id}
+
+    async with httpx.AsyncClient() as client:
+        try:
+            res = await client.post(url, json=payload, timeout=10.0)
+            return res.json()
+        except Exception as e:
+            print(f"Error transmitting rich payload: {e}")
+            return {}
+
+
+# ==========================================
+# Stateful Block Parser (Raw Dictionary Output)
+# ==========================================
+
+
+def parse_text_to_blocks(text: str) -> list:
+    """Statefully tokenizes raw text into raw block dictionaries for the native JSON payload."""
+    blocks = []
+    lines = text.split("\n")
+
+    paragraph_buffer = []
+    in_code_block = False
+    code_buffer = []
+
+    def flush_buffers():
+        if paragraph_buffer:
+            text_content = "\n".join(paragraph_buffer).strip()
+            if text_content:
+                blocks.append({"type": "paragraph", "text": text_content})
+            paragraph_buffer.clear()
+
+    for line in lines:
+        if line.strip().startswith("```"):
+            if in_code_block:
+                in_code_block = False
+                flush_buffers()
+                clean_code = "\n".join(code_buffer)
+                blocks.append(
+                    {"type": "paragraph", "text": f"Code Snippet:\n{clean_code}"}
+                )
+                code_buffer.clear()
+            else:
+                flush_buffers()
+                in_code_block = True
+            continue
+
+        if in_code_block:
+            code_buffer.append(line)
+            continue
+
+        if line.strip().startswith("$$") and line.strip().endswith("$$"):
+            flush_buffers()
+            blocks.append(
+                {
+                    "type": "mathematical_expression",
+                    "expression": line.strip().strip("$"),
+                }
+            )
+            continue
+
+        heading_match = re.match(r"^(#{1,3})\s+(.*)", line)
+        if heading_match:
+            flush_buffers()
+            level = len(heading_match.group(1))
+            blocks.append(
+                {
+                    "type": "heading",
+                    "text": heading_match.group(2).strip(),
+                    "level": level,
+                }
+            )
+            continue
+
+        if line.strip().startswith("|") and line.strip().endswith("|"):
+            flush_buffers()
+            cells = [c.strip() for c in line.strip().strip("|").split("|")]
+            if all(re.match(r"^\-+$", c) for c in cells):
+                continue
+
+            table_cells = [{"text": c} for c in cells]
+            new_row = {"cells": table_cells}
+
+            if blocks and blocks[-1].get("type") == "table":
+                blocks[-1]["rows"].append(new_row)
+            else:
+                blocks.append(
+                    {
+                        "type": "table",
+                        "is_bordered": True,
+                        "is_striped": True,
+                        "rows": [new_row],
+                    }
+                )
+            continue
+
+        list_match = re.match(r"^(\d+\.|\-|\*)\s+(.*)", line)
+        if list_match:
+            flush_buffers()
+            item_content = list_match.group(2).strip()
+            new_item = {"blocks": [{"type": "paragraph", "text": item_content}]}
+
+            if blocks and blocks[-1].get("type") == "list":
+                blocks[-1]["items"].append(new_item)
+            else:
+                blocks.append({"type": "list", "items": [new_item]})
+            continue
+
+        if not line.strip():
+            flush_buffers()
+            continue
+
+        paragraph_buffer.append(line)
+
+    flush_buffers()
+
+    if not blocks:
+        blocks.append({"type": "paragraph", "text": " "})
+
+    return blocks
 
 
 # ==========================================
 # Helpers
 # ==========================================
+
+
 async def free_web_search(query: str) -> str:
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
     try:
@@ -85,7 +224,7 @@ async def free_web_search(query: str) -> str:
     try:
         async with httpx.AsyncClient() as client:
             res = await client.post(
-                "https://html.duckduckgo.com/html/",
+                "[https://html.duckduckgo.com/html/](https://html.duckduckgo.com/html/)",
                 data={"q": query},
                 headers=headers,
                 timeout=8.0,
@@ -110,15 +249,18 @@ async def free_web_search(query: str) -> str:
 async def auto_delete_message(
     chat_id: int, bot_msg_id: int, user_msg_id: int, delay: int
 ):
+    """Waits for the delay (in seconds), then silently deletes both the bot's response and user's command."""
+    if not bot_msg_id:
+        return
     await asyncio.sleep(delay)
     try:
         await bot.delete_message(chat_id=chat_id, message_id=bot_msg_id)
-    except TelegramAPIError:
-        pass
+    except Exception as e:
+        print(f"Error auto-deleting bot memory list: {e}")
     try:
         await bot.delete_message(chat_id=chat_id, message_id=user_msg_id)
-    except TelegramAPIError:
-        pass
+    except Exception as e:
+        print(f"Error auto-deleting user memory command: {e}")
 
 
 async def send_audio_track(
@@ -144,9 +286,10 @@ async def send_audio_track(
                     reply_to_message_id=reply_to,
                 )
             else:
+                audio_file = FSInputFile(audio_payload)
                 return await bot.send_audio(
                     chat_id=chat_id,
-                    audio=FSInputFile(audio_payload),
+                    audio=audio_file,
                     title=title,
                     performer=performer,
                     reply_to_message_id=reply_to,
@@ -172,69 +315,75 @@ async def send_audio_track(
                         performer=performer,
                     )
                 else:
-                    raise
+                    raise e
         elif os.path.exists(file_path):
-            msg = await attempt_send(file_path)
+            try:
+                msg = await attempt_send(file_path)
+            except Exception as e:
+                if "message to be replied not found" in str(e).lower():
+                    audio_file = FSInputFile(file_path)
+                    msg = await bot.send_audio(
+                        chat_id=chat_id,
+                        audio=audio_file,
+                        title=title,
+                        performer=performer,
+                    )
+                else:
+                    raise e
             if msg and msg.audio and msg.audio.file_id:
                 await redis_client.set(f"audio_cache:{key}", msg.audio.file_id)
     except Exception as send_err:
         print(f"Error sending audio ({key}): {send_err}")
 
 
-async def send_formatted_memories(message: Message, user_id_str: str):
-    """Fetches memory lists and outputs clean HTML structure."""
+# ==========================================
+# Direct Native Block Builders
+# ==========================================
+
+
+async def send_formatted_memories_as_blocks(message: Message, user_id_str: str):
+    """Directly builds native rich block dicts via code iteration, compiling memories into a structured table."""
     try:
         raw_items = await redis_client.lrange(f"memory_list:{user_id_str}", 0, -1)
+        blocks = [{"type": "heading", "text": "Active Memory Directives", "level": 2}]
+
         if not raw_items:
-            content = "Your memory list is currently empty."
+            blocks.append(
+                {"type": "paragraph", "text": "Your memory list is currently empty."}
+            )
         else:
-            formatted_items = []
-            for i, item in enumerate(raw_items):
+            rows = [{"cells": [{"text": "Index"}, {"text": "Memory Directive"}]}]
+
+            for idx, item in enumerate(raw_items):
                 mem_text = item.decode("utf-8") if isinstance(item, bytes) else item
-                formatted_items.append(f"{i+1}. {mem_text}")
+                rows.append({"cells": [{"text": str(idx + 1)}, {"text": mem_text}]})
 
-            content = (
-                "<b>Active Memory Directives:</b>\n──────────────────────────\n\n"
-                + "\n".join(formatted_items)
-            )
+            blocks.append({"type": "table", "is_bordered": True, "rows": rows})
 
-        if message.chat.type == "private":
-            sent_msg = await message.answer(content)
-        else:
-            sent_msg = await message.answer(
-                content, reply_to_message_id=message.message_id
-            )
+        reply_to = message.message_id if message.chat.type != "private" else None
+        res = await transmit_rich_payload(message.chat.id, blocks, reply_to)
 
-        if sent_msg:
+        sent_msg_id = res.get("result", {}).get("message_id")
+        if sent_msg_id:
             asyncio.create_task(
                 auto_delete_message(
-                    message.chat.id, sent_msg.message_id, message.message_id, 60
+                    message.chat.id, sent_msg_id, message.message_id, 60
                 )
             )
+
     except Exception as e:
         print(f"Error rendering structured memory blocks: {e}")
-        await message.answer("⚠️ Error loading active memory layout.")
+        await bot.send_message(
+            chat_id=message.chat.id, text="⚠️ Error loading active memory layout."
+        )
 
 
 # ==========================================
-# Handlers (Command-Free)
+# Aiogram Handlers
 # ==========================================
 
 
-def text_in(options: set):
-    return (
-        lambda message: message.text
-        and message.text.strip().lstrip("/").lower() in options
-    )
-
-
-def text_startswith(prefix: str):
-    return lambda message: message.text and message.text.strip().lstrip(
-        "/"
-    ).lower().startswith(prefix)
-
-
-@router.message(text_in({"delete", "del"}))
+@router.message(Command("delete", "del"))
 async def handle_delete(message: Message):
     if message.from_user.id == OWNER_ID:
         chat_id = message.chat.id
@@ -242,107 +391,154 @@ async def handle_delete(message: Message):
         if reply_msg and BOT_INFO and reply_msg.from_user.id == BOT_INFO.id:
             try:
                 await bot.delete_message(chat_id, reply_msg.message_id)
-            except TelegramAPIError:
+            except Exception:
                 pass
         try:
             await bot.delete_message(chat_id, message.message_id)
-        except TelegramAPIError:
+        except Exception:
             pass
 
 
-@router.message(text_in({"help", "commands"}))
+@router.message(Command("help", "commands"))
 async def handle_help(message: Message):
-    content = (
-        "<b>Sen Bot Command Hub</b>\n\n"
-        "• remember [item],, [item2] - Adds items to memory\n"
-        "• what do you remember - Displays rules in a formatted list\n"
-        "• edit [number] [new fact] - Edits a specific rule\n"
-        "• forget [number],, [number2] - Removes memories\n"
-        "• forget all - Clears all memory"
-    )
-    if message.chat.type == "private":
-        sent_msg = await message.answer(content)
-    else:
-        sent_msg = await message.answer(content, reply_to_message_id=message.message_id)
+    blocks = [
+        {"type": "heading", "text": "Sen Bot Command Hub", "level": 1},
+        {
+            "type": "list",
+            "items": [
+                {
+                    "blocks": [
+                        {
+                            "type": "paragraph",
+                            "text": "remember [item],, [item2] - Adds items to memory",
+                        }
+                    ]
+                },
+                {
+                    "blocks": [
+                        {
+                            "type": "paragraph",
+                            "text": "what do you remember - Displays rules in a formatted list",
+                        }
+                    ]
+                },
+                {
+                    "blocks": [
+                        {
+                            "type": "paragraph",
+                            "text": "edit [number] [new fact] - Edits a specific rule",
+                        }
+                    ]
+                },
+                {
+                    "blocks": [
+                        {
+                            "type": "paragraph",
+                            "text": "forget [number],, [number2] - Removes memories",
+                        }
+                    ]
+                },
+                {
+                    "blocks": [
+                        {"type": "paragraph", "text": "forget all - Clears all memory"}
+                    ]
+                },
+            ],
+        },
+    ]
 
-    if sent_msg:
+    reply_to = message.message_id if message.chat.type != "private" else None
+    res = await transmit_rich_payload(message.chat.id, blocks, reply_to)
+
+    sent_msg_id = res.get("result", {}).get("message_id")
+    if sent_msg_id:
         asyncio.create_task(
-            auto_delete_message(
-                message.chat.id, sent_msg.message_id, message.message_id, 60
-            )
+            auto_delete_message(message.chat.id, sent_msg_id, message.message_id, 60)
         )
+
+
+def text_in(options: set):
+    return lambda message: message.text and message.text.lower() in options
+
+
+def text_startswith(prefix: str):
+    return lambda message: message.text and message.text.lower().startswith(prefix)
 
 
 @router.message(text_in({"what do you remember", "how do you remember"}))
 async def handle_what_remember(message: Message):
-    await send_formatted_memories(message, str(message.from_user.id))
+    user_id_str = str(message.from_user.id)
+    await send_formatted_memories_as_blocks(message, user_id_str)
 
 
 @router.message(text_startswith("remember "))
 async def handle_remember(message: Message):
     user_id_str = str(message.from_user.id)
-    clean_text = message.text.strip().lstrip("/")
-    parts = [p.strip()[:200] for p in clean_text[9:].split(",,") if p.strip()]
+    clean_prompt = message.text.strip()
+    parts = [p.strip()[:200] for p in clean_prompt[9:].split(",,") if p.strip()]
     for part in parts[:10]:
         try:
-            if await redis_client.lpos(f"memory_list:{user_id_str}", part) is None:
+            pos = await redis_client.lpos(f"memory_list:{user_id_str}", part)
+            if pos is None:
                 await redis_client.rpush(f"memory_list:{user_id_str}", part)
-        except RedisError:
+        except Exception:
             pass
     await redis_client.ltrim(f"memory_list:{user_id_str}", -25, -1)
-    await send_formatted_memories(message, user_id_str)
+    await send_formatted_memories_as_blocks(message, user_id_str)
 
 
 @router.message(text_startswith("edit "))
 async def handle_edit(message: Message):
     user_id_str = str(message.from_user.id)
-    clean_text = message.text.strip().lstrip("/")
-    parts = clean_text[5:].strip().split(" ", 1)
+    clean_prompt = message.text.strip()
+    parts = clean_prompt[5:].strip().split(" ", 1)
+
     if len(parts) == 2 and parts[0].isdigit():
         idx, new_val = int(parts[0]) - 1, parts[1].strip()
         raw_items = await redis_client.lrange(f"memory_list:{user_id_str}", 0, -1)
         if 0 <= idx < len(raw_items):
             await redis_client.lset(f"memory_list:{user_id_str}", idx, new_val)
-            await send_formatted_memories(message, user_id_str)
+            await send_formatted_memories_as_blocks(message, user_id_str)
             return
 
-    sent_msg = await message.answer("Usage: edit [number] [new text]")
-    if sent_msg:
+    error_blocks = [{"type": "paragraph", "text": "Usage: edit [number] [new text]"}]
+    reply_to = message.message_id if message.chat.type != "private" else None
+    res = await transmit_rich_payload(message.chat.id, error_blocks, reply_to)
+
+    sent_msg_id = res.get("result", {}).get("message_id")
+    if sent_msg_id:
         asyncio.create_task(
-            auto_delete_message(
-                message.chat.id, sent_msg.message_id, message.message_id, 10
-            )
+            auto_delete_message(message.chat.id, sent_msg_id, message.message_id, 10)
         )
 
 
-@router.message(text_in({"forget all"}))
+@router.message(F.text.lower() == "forget all")
 async def handle_forget_all(message: Message):
     user_id_str = str(message.from_user.id)
+    chat_id = message.chat.id
     await redis_client.delete(
-        f"memory_list:{user_id_str}", f"chat_history:{message.chat.id}:{user_id_str}"
+        f"memory_list:{user_id_str}", f"chat_history:{chat_id}:{user_id_str}"
     )
-    reply_id = None if message.chat.type == "private" else message.message_id
-    sent_msg = await bot.send_message(
-        chat_id=message.chat.id,
-        text="Cleared all your saved memories.",
-        reply_to_message_id=reply_id,
-    )
-    if sent_msg:
+
+    blocks = [{"type": "paragraph", "text": "Cleared all your saved memories."}]
+    reply_to = message.message_id if message.chat.type != "private" else None
+    res = await transmit_rich_payload(message.chat.id, blocks, reply_to)
+
+    sent_msg_id = res.get("result", {}).get("message_id")
+    if sent_msg_id:
         asyncio.create_task(
-            auto_delete_message(
-                message.chat.id, sent_msg.message_id, message.message_id, 10
-            )
+            auto_delete_message(message.chat.id, sent_msg_id, message.message_id, 10)
         )
 
 
 @router.message(text_startswith("forget "))
 async def handle_forget(message: Message):
     user_id_str = str(message.from_user.id)
-    clean_text = message.text.strip().lstrip("/")
+    clean_prompt = message.text.strip()
     try:
         indices = [
             int(n.strip()) - 1
-            for n in clean_text[7:].split(",,")
+            for n in clean_prompt[7:].split(",,")
             if n.strip().isdigit()
         ]
         raw_items = await redis_client.lrange(f"memory_list:{user_id_str}", 0, -1)
@@ -356,21 +552,22 @@ async def handle_forget(message: Message):
             await redis_client.delete(f"memory_list:{user_id_str}")
             if memories:
                 await redis_client.rpush(f"memory_list:{user_id_str}", *memories)
-    except RedisError:
+    except Exception:
         pass
-    await send_formatted_memories(message, user_id_str)
+
+    await send_formatted_memories_as_blocks(message, user_id_str)
 
 
 # ==========================================
-# Core Engine
+# Primary Chat, Mentions & Audio Engine
 # ==========================================
 
 
 @router.message(F.text | F.caption | F.voice | F.audio)
 async def handle_conversation(message: Message):
     text = message.text or message.caption or ""
-    text_no_code = re.sub(r"(?s).*?", "", text)
-    text_no_code = re.sub(r"(?s).*?", "", text_no_code)
+    text_no_code = re.sub(r"(?s)```.*?```", "", text)
+    text_no_code = re.sub(r"(?s)`.*?`", "", text_no_code)
 
     if re.search(r"\bsen\b", text_no_code, re.IGNORECASE):
         asyncio.create_task(
@@ -424,30 +621,25 @@ async def handle_conversation(message: Message):
             .replace("@gemini", "")
             .replace("@Gemini", "")
             .strip()
-            .lstrip("/")
         )
+
         cooldown_key = f"cooldown:{user_id_str}"
-        reply_id = None if is_private else msg_id
+        reply_to_id = None if is_private else msg_id
 
         if await redis_client.exists(cooldown_key):
-            await bot.send_message(
-                chat_id=chat_id,
-                text="Slow down, request limit reached.",
-                reply_to_message_id=reply_id,
-            )
+            warn_blocks = [
+                {"type": "paragraph", "text": "Slow down, request limit reached."}
+            ]
+            await transmit_rich_payload(chat_id, warn_blocks, reply_to_id)
             return
+
         await redis_client.setex(cooldown_key, 4, "1")
 
-        if message.reply_to_message:
-            replied_context = (
-                message.reply_to_message.text or message.reply_to_message.caption or ""
-            )
-        else:
-            replied_context = ""
+        replied = message.reply_to_message
+        replied_context = replied.text or replied.caption or "" if replied else ""
 
         audio_bytes = None
         audio_mime = "audio/ogg"
-
         if message.content_type in ["voice", "audio"]:
             audio_obj = message.voice or message.audio
             if audio_obj:
@@ -455,7 +647,7 @@ async def handle_conversation(message: Message):
                 audio_stream = await bot.download_file(file_info.file_path)
                 if audio_stream:
                     audio_bytes = audio_stream.read()
-                if getattr(audio_obj, "mime_type", None):
+                if hasattr(audio_obj, "mime_type") and audio_obj.mime_type:
                     audio_mime = audio_obj.mime_type
 
         if not clean_prompt and replied_context:
@@ -474,19 +666,18 @@ async def handle_conversation(message: Message):
                     h.decode("utf-8") if isinstance(h, bytes) else h for h in raw_hist
                 ]
 
+                search_keywords = {"search", "google", "look up", "lookup", "find"}
+                explicit_search = any(
+                    word in clean_prompt.lower() for word in search_keywords
+                )
                 search_context = (
-                    await free_web_search(clean_prompt)
-                    if any(
-                        w in clean_prompt.lower()
-                        for w in ("search", "google", "look up", "find")
-                    )
-                    else ""
+                    await free_web_search(clean_prompt) if explicit_search else ""
                 )
 
                 context_parts = []
                 if replied_context:
                     context_parts.append(
-                        f"Message User is Replying To:\n{replied_context}"
+                        f'Message User is Replying To:\n"{replied_context}"'
                     )
                 if chat_history:
                     context_parts.append(
@@ -506,36 +697,47 @@ async def handle_conversation(message: Message):
                         + f"\n\nUser Question: {final_prompt}"
                     )
 
-                today_str = datetime.now(timezone.utc).strftime("%A, %B %d, %Y")
+                today_str = datetime.now().strftime("%A, %B %d, %Y")
                 bot_instructions = (
                     f"Today's date is {today_str}. Keep responses structural using double line-breaks to separate ideas. "
                     "Never use standard AI pleasantries. Do not start responses with 'As an AI' or end with generic offers for help. "
-                    "Keep casual replies brief, but dynamically expand your response length when explicitly asked for details.\n\n"
-                    "CRITICAL RICH TEXT HTML FORMATTING RULES:\n"
-                    "- Headings/Titles: Wrap structural headings or major titles in bold tags: <b>Section Heading</b>\n"
-                    "- Emphasis: Use italics <i>text</i> for emphasis, underlines <u>text</u> for key takeaways, and strikethroughs <s>text</s> for removed/outdated items.\n"
-                    "- Spoilers: Wrap plot twists, answers to trivia, or hidden text inside spoiler tags: <tg-spoiler>hidden content</tg-spoiler>\n"
-                    "- Technical Variables: Wrap inline variables, short configurations, or command strings inside code tags: <code>git commit</code>\n"
-                    "- Code Blocks: Wrap multi-line code snippets inside pre-formatted blocks: <pre><code>def sample():\n    return True</code></pre>\n"
-                    "- Blockquotes: Use <blockquote>Indented structural quote block text</blockquote> to visually isolate quoted definitions or references.\n"
-                    "- Expandable Pullquotes: Use <blockquote expandable>Long detailed notes, logs, or secondary explanations go here...</blockquote> to provide details that the user can expand or collapse to save space.\n"
-                    '- Hyperlinks: Embed references or web destinations inside anchor tags: <a href="URL">Clickable Description</a>. Never print raw, bare URLs on the floor.'
+                    "Keep casual replies brief, but dynamically expand your response length when explicitly asked for details or when playing interactive games. "
+                    "If the user changes the subject abruptly, drop the previous topic immediately and adapt to the new flow. "
+                    "If the user is clearly joking or sarcastic, match their energy rather than taking the prompt literally. "
+                    "If you do not know the answer or the provided context is insufficient, state 'I don't have enough details to answer that accurately' directly without guessing. "
+                    "Do not assume personal details about the user unless they are explicitly provided in your memory list. "
                 )
+
+                if search_context:
+                    bot_instructions += (
+                        "When referencing 'Web Search Context', state the information directly without saying 'According to my search' or 'I found this online'. "
+                        "Never include or state URLs/links from the Web Search Context unless the user explicitly asks for links, sources, or URLs in their prompt. "
+                    )
+
+                if chat_history:
+                    bot_instructions += "Use the 'Recent Conversation Context' to track pronouns and subjects, but never summarize or repeat the history back to the user. "
 
                 if saved_facts:
                     bot_instructions += (
-                        "\n\nYou must strictly follow these overrides:\n"
+                        "\n\nYou must strictly follow these User Instructions. They override any baseline behavior and are your absolute highest priority:\n"
                         + "\n".join(f"- {f}" for f in saved_facts)
                     )
 
                 safety_overrides = [
-                    types.SafetySetting(category=c, threshold="BLOCK_NONE")
-                    for c in [
-                        "HARM_CATEGORY_HATE_SPEECH",
-                        "HARM_CATEGORY_HARASSMENT",
-                        "HARM_CATEGORY_SEXUALLY_EXPLICIT",
-                        "HARM_CATEGORY_DANGEROUS_CONTENT",
-                    ]
+                    types.SafetySetting(
+                        category="HARM_CATEGORY_HATE_SPEECH", threshold="BLOCK_NONE"
+                    ),
+                    types.SafetySetting(
+                        category="HARM_CATEGORY_HARASSMENT", threshold="BLOCK_NONE"
+                    ),
+                    types.SafetySetting(
+                        category="HARM_CATEGORY_SEXUALLY_EXPLICIT",
+                        threshold="BLOCK_NONE",
+                    ),
+                    types.SafetySetting(
+                        category="HARM_CATEGORY_DANGEROUS_CONTENT",
+                        threshold="BLOCK_NONE",
+                    ),
                 ]
 
                 if audio_bytes:
@@ -552,22 +754,33 @@ async def handle_conversation(message: Message):
                         ),
                     )
                 else:
-                    chat = gemini_client.aio.chats.create(
-                        model="gemini-3.5-flash-lite",
-                        config=types.GenerateContentConfig(
-                            system_instruction=bot_instructions,
-                            safety_settings=safety_overrides,
-                        ),
-                    )
-                    response = await chat.send_message(final_prompt)
+                    try:
+                        chat = gemini_client.aio.chats.create(
+                            model="gemini-3.5-flash-lite",
+                            config=types.GenerateContentConfig(
+                                system_instruction=bot_instructions,
+                                safety_settings=safety_overrides,
+                            ),
+                        )
+                        response = await chat.send_message(final_prompt)
+                    except Exception as primary_err:
+                        print(
+                            f"Primary model failed ({primary_err}), falling back to gemini-2.5-flash..."
+                        )
+                        chat = gemini_client.aio.chats.create(
+                            model="gemini-2.5-flash",
+                            config=types.GenerateContentConfig(
+                                system_instruction=bot_instructions,
+                                safety_settings=safety_overrides,
+                            ),
+                        )
+                        response = await chat.send_message(final_prompt)
 
                 raw_text = response.text or ""
+                rich_blocks = parse_text_to_blocks(raw_text)
 
-                await bot.send_message(
-                    chat_id=chat_id,
-                    text=raw_text,
-                    reply_to_message_id=reply_id,
-                )
+                await transmit_rich_payload(chat_id, rich_blocks, reply_to_id)
+
                 await redis_client.rpush(
                     history_key,
                     f"User: {clean_prompt or 'Voice Note'}",
@@ -575,12 +788,23 @@ async def handle_conversation(message: Message):
                 )
                 await redis_client.ltrim(history_key, -10, -1)
 
-            except RedisError:
-                await bot.send_message(
-                    chat_id=chat_id,
-                    text="Whoa, I'm getting a little overwhelmed! Let me catch my breath.",
-                    reply_to_message_id=reply_id,
-                )
+            except Exception as ai_err:
+                print(f"Gemini API error: {ai_err}")
+                error_blocks = [
+                    {
+                        "type": "paragraph",
+                        "text": "I am currently broken right now, the owner needs to fix me.",
+                    }
+                ]
+                if "429" in str(ai_err):
+                    error_blocks = [
+                        {
+                            "type": "paragraph",
+                            "text": "Whoa, I'm getting a little overwhelmed! Let me catch my breath for a minute.",
+                        }
+                    ]
+
+                await transmit_rich_payload(chat_id, error_blocks, reply_to_id)
 
 
 # ==========================================
