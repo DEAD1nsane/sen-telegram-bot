@@ -5,21 +5,9 @@ from datetime import datetime
 from aiohttp import web
 
 from aiogram import Bot, Dispatcher, Router, F
-from aiogram.types import Update, Message, FSInputFile
+from aiogram.types import Update, Message, FSInputFile, MessageEntity
 from aiogram.filters import Command
-from aiogram.client.default import DefaultBotProperties
-from aiogram.types import (
-    InputRichMessage,
-    InputRichBlockHeading,
-    InputRichBlockParagraph,
-    InputRichBlockMathematicalExpression,
-    InputRichBlockList,
-    InputRichBlockListItem,
-    InputRichBlockTable,
-    InputRichTableRow,
-    InputRichTableCell,
-)
-
+from aiogram.enums import MessageEntityType
 import redis.asyncio as redis
 import httpx
 from google import genai
@@ -67,38 +55,41 @@ gemini_client = genai.Client(api_key=gemini_api_key)
 OWNER_ID = int(os.getenv("OWNER_ID", "0"))
 
 # ==========================================
-# Stateful Block Parser (API 10.2)
+# Native Block Parser using MessageEntities
 # ==========================================
 
 
-def parse_text_to_blocks(text: str) -> list:
-    """Statefully tokenizes raw text into native Telegram Bot API 10.2 Rich Blocks."""
-    blocks = []
+def parse_text_to_entities(text: str) -> tuple[str, list[MessageEntity]]:
+    """
+    Parses structural text blocks statefully into standard Telegram entities.
+    Preserves rich-text blocks natively without using raw HTML formatting.
+    """
+    full_text = ""
+    entities = []
     lines = text.split("\n")
 
-    paragraph_buffer = []
     in_code_block = False
     code_buffer = []
 
-    def flush_buffers():
-        if paragraph_buffer:
-            text_content = "\n".join(paragraph_buffer).strip()
-            if text_content:
-                blocks.append(InputRichBlockParagraph(text=text_content))
-            paragraph_buffer.clear()
-
     for line in lines:
+        # Check Code Blocks
         if line.strip().startswith("```"):
             if in_code_block:
                 in_code_block = False
-                flush_buffers()
                 clean_code = "\n".join(code_buffer)
-                blocks.append(
-                    InputRichBlockParagraph(text=f"Code Snippet:\n{clean_code}")
+                start_offset = len(full_text)
+                display_text = f"Code Snippet:\n{clean_code}\n\n"
+                full_text += display_text
+                entities.append(
+                    MessageEntity(
+                        type=MessageEntityType.PRE,
+                        offset=start_offset + 14,  # Offset past 'Code Snippet:\n'
+                        length=len(clean_code),
+                        language="python",
+                    )
                 )
                 code_buffer.clear()
             else:
-                flush_buffers()
                 in_code_block = True
             continue
 
@@ -106,67 +97,79 @@ def parse_text_to_blocks(text: str) -> list:
             code_buffer.append(line)
             continue
 
+        # Mathematical Expressions -> Monospace
         if line.strip().startswith("$$") and line.strip().endswith("$$"):
-            flush_buffers()
-            blocks.append(
-                InputRichBlockMathematicalExpression(expression=line.strip().strip("$"))
+            expr = line.strip().strip("$")
+            start_offset = len(full_text)
+            full_text += f"{expr}\n\n"
+            entities.append(
+                MessageEntity(
+                    type=MessageEntityType.CODE, offset=start_offset, length=len(expr)
+                )
             )
             continue
 
+        # Headings -> Bold + Underline
         heading_match = re.match(r"^(#{1,3})\s+(.*)", line)
         if heading_match:
-            flush_buffers()
-            level = len(heading_match.group(1))
-            blocks.append(
-                InputRichBlockHeading(text=heading_match.group(2).strip(), level=level)
+            content = heading_match.group(2).strip()
+            start_offset = len(full_text)
+            full_text += f"{content}\n\n"
+            entities.append(
+                MessageEntity(
+                    type=MessageEntityType.BOLD,
+                    offset=start_offset,
+                    length=len(content),
+                )
+            )
+            entities.append(
+                MessageEntity(
+                    type=MessageEntityType.UNDERLINE,
+                    offset=start_offset,
+                    length=len(content),
+                )
             )
             continue
 
+        # Table Rows -> Monospace alignment block
         if line.strip().startswith("|") and line.strip().endswith("|"):
-            flush_buffers()
             cells = [c.strip() for c in line.strip().strip("|").split("|")]
             if all(re.match(r"^\-+$", c) for c in cells):
                 continue
-
-            table_cells = [InputRichTableCell(text=c) for c in cells]
-            new_row = InputRichTableRow(cells=table_cells)
-
-            if blocks and isinstance(blocks[-1], InputRichBlockTable):
-                blocks[-1].rows.append(new_row)
-            else:
-                blocks.append(
-                    InputRichBlockTable(
-                        is_bordered=True, is_striped=True, rows=[new_row]
-                    )
+            row_str = " | ".join(cells)
+            start_offset = len(full_text)
+            full_text += f"| {row_str} |\n"
+            entities.append(
+                MessageEntity(
+                    type=MessageEntityType.PRE,
+                    offset=start_offset,
+                    length=len(row_str) + 4,
+                    language="text",
                 )
+            )
             continue
 
+        # Lists -> Bulleted format
         list_match = re.match(r"^(\d+\.|\-|\*)\s+(.*)", line)
         if list_match:
-            flush_buffers()
             item_content = list_match.group(2).strip()
-            new_item = InputRichBlockListItem(
-                blocks=[InputRichBlockParagraph(text=item_content)]
+            start_offset = len(full_text)
+            bullet_prefix = (
+                "• "
+                if not list_match.group(1).replace(".", "").isdigit()
+                else f"{list_match.group(1)} "
             )
-
-            if blocks and isinstance(blocks[-1], InputRichBlockList):
-                blocks[-1].items.append(new_item)
-            else:
-                blocks.append(InputRichBlockList(items=[new_item]))
+            full_text += f"{bullet_prefix}{item_content}\n"
             continue
 
         if not line.strip():
-            flush_buffers()
+            if not full_text.endswith("\n\n") and full_text:
+                full_text += "\n"
             continue
 
-        paragraph_buffer.append(line)
+        full_text += f"{line}\n"
 
-    flush_buffers()
-
-    if not blocks:
-        blocks.append(InputRichBlockParagraph(text=" "))
-
-    return blocks
+    return full_text.strip(), entities
 
 
 # ==========================================
@@ -201,7 +204,7 @@ async def free_web_search(query: str) -> str:
     try:
         async with httpx.AsyncClient() as client:
             res = await client.post(
-                "[https://html.duckduckgo.com/html/](https://html.duckduckgo.com/html/)",
+                "https://html.duckduckgo.com/html/",
                 data={"q": query},
                 headers=headers,
                 timeout=8.0,
@@ -226,7 +229,6 @@ async def free_web_search(query: str) -> str:
 async def auto_delete_message(
     chat_id: int, bot_msg_id: int, user_msg_id: int, delay: int
 ):
-    """Waits for the delay (in seconds), then silently deletes both the bot's response and user's command."""
     await asyncio.sleep(delay)
     try:
         await bot.delete_message(chat_id=chat_id, message_id=bot_msg_id)
@@ -317,35 +319,33 @@ async def send_audio_track(
 
 
 async def send_formatted_memories_as_blocks(message: Message, user_id_str: str):
-    """Directly builds native rich blocks via code iteration, completely bypassing text parsing."""
+    """Directly builds custom block-entities via code loop processing."""
     try:
         raw_items = await redis_client.lrange(f"memory_list:{user_id_str}", 0, -1)
-        blocks = [InputRichBlockHeading(text="Active Memory Directives", level=2)]
 
+        title_text = "Active Memory Directives\n\n"
+        entities = [
+            MessageEntity(type=MessageEntityType.BOLD, offset=0, length=24),
+            MessageEntity(type=MessageEntityType.UNDERLINE, offset=0, length=24),
+        ]
+
+        body_text = ""
         if not raw_items:
-            blocks.append(
-                InputRichBlockParagraph(text="Your memory list is currently empty.")
-            )
+            body_text = "Your memory list is currently empty."
         else:
-            list_items = []
             for item in raw_items:
                 mem_text = item.decode("utf-8") if isinstance(item, bytes) else item
-                list_items.append(
-                    InputRichBlockListItem(
-                        blocks=[InputRichBlockParagraph(text=mem_text)]
-                    )
-                )
-            blocks.append(InputRichBlockList(items=list_items))
+                body_text += f"• {mem_text}\n"
 
-        if message.chat.type == "private":
-            sent_msg = await message.answer_rich_message(
-                rich_message=InputRichMessage(blocks=blocks)
-            )
-        else:
-            sent_msg = await message.answer_rich_message(
-                rich_message=InputRichMessage(blocks=blocks),
-                reply_to_message_id=message.message_id,
-            )
+        final_text = title_text + body_text.strip()
+        reply_id = None if message.chat.type == "private" else message.message_id
+
+        sent_msg = await bot.send_message(
+            chat_id=message.chat.id,
+            text=final_text,
+            entities=entities,
+            reply_to_message_id=reply_id,
+        )
 
         if sent_msg:
             asyncio.create_task(
@@ -382,55 +382,27 @@ async def handle_delete(message: Message):
 
 @router.message(Command("help", "commands"))
 async def handle_help(message: Message):
-    blocks = [
-        InputRichBlockHeading(text="Sen Bot Command Hub", level=1),
-        InputRichBlockList(
-            items=[
-                InputRichBlockListItem(
-                    blocks=[
-                        InputRichBlockParagraph(
-                            text="remember [item],, [item2] - Adds items to memory"
-                        )
-                    ]
-                ),
-                InputRichBlockListItem(
-                    blocks=[
-                        InputRichBlockParagraph(
-                            text="what do you remember - Displays rules in a formatted list"
-                        )
-                    ]
-                ),
-                InputRichBlockListItem(
-                    blocks=[
-                        InputRichBlockParagraph(
-                            text="edit [number] [new fact] - Edits a specific rule"
-                        )
-                    ]
-                ),
-                InputRichBlockListItem(
-                    blocks=[
-                        InputRichBlockParagraph(
-                            text="forget [number],, [number2] - Removes memories"
-                        )
-                    ]
-                ),
-                InputRichBlockListItem(
-                    blocks=[
-                        InputRichBlockParagraph(text="forget all - Clears all memory")
-                    ]
-                ),
-            ]
-        ),
+    heading = "Sen Bot Command Hub\n\n"
+    commands = [
+        "• remember [item],, [item2] - Adds items to memory",
+        "• what do you remember - Displays rules in a formatted list",
+        "• edit [number] [new fact] - Edits a specific rule",
+        "• forget [number],, [number2] - Removes memories",
+        "• forget all - Clears all memory",
     ]
-    if message.chat.type == "private":
-        sent_msg = await message.answer_rich_message(
-            rich_message=InputRichMessage(blocks=blocks)
-        )
-    else:
-        sent_msg = await message.answer_rich_message(
-            rich_message=InputRichMessage(blocks=blocks),
-            reply_to_message_id=message.message_id,
-        )
+    full_help_text = heading + "\n".join(commands)
+    entities = [
+        MessageEntity(type=MessageEntityType.BOLD, offset=0, length=19),
+        MessageEntity(type=MessageEntityType.UNDERLINE, offset=0, length=19),
+    ]
+
+    reply_id = None if message.chat.type == "private" else message.message_id
+    sent_msg = await bot.send_message(
+        chat_id=message.chat.id,
+        text=full_help_text,
+        entities=entities,
+        reply_to_message_id=reply_id,
+    )
 
     if sent_msg:
         asyncio.create_task(
@@ -484,9 +456,11 @@ async def handle_edit(message: Message):
             await send_formatted_memories_as_blocks(message, user_id_str)
             return
 
-    error_blocks = [InputRichBlockParagraph(text="Usage: edit [number] [new text]")]
-    sent_msg = await message.answer_rich_message(
-        rich_message=InputRichMessage(blocks=error_blocks)
+    reply_id = None if message.chat.type == "private" else message.message_id
+    sent_msg = await bot.send_message(
+        chat_id=message.chat.id,
+        text="Usage: edit [number] [new text]",
+        reply_to_message_id=reply_id,
     )
     if sent_msg:
         asyncio.create_task(
@@ -504,16 +478,12 @@ async def handle_forget_all(message: Message):
         f"memory_list:{user_id_str}", f"chat_history:{chat_id}:{user_id_str}"
     )
 
-    blocks = [InputRichBlockParagraph(text="Cleared all your saved memories.")]
-    if message.chat.type == "private":
-        sent_msg = await message.answer_rich_message(
-            rich_message=InputRichMessage(blocks=blocks)
-        )
-    else:
-        sent_msg = await message.answer_rich_message(
-            rich_message=InputRichMessage(blocks=blocks),
-            reply_to_message_id=message.message_id,
-        )
+    reply_id = None if message.chat.type == "private" else message.message_id
+    sent_msg = await bot.send_message(
+        chat_id=message.chat.id,
+        text="Cleared all your saved memories.",
+        reply_to_message_id=reply_id,
+    )
 
     if sent_msg:
         asyncio.create_task(
@@ -616,19 +586,13 @@ async def handle_conversation(message: Message):
         )
 
         cooldown_key = f"cooldown:{user_id_str}"
+        reply_id = None if is_private else msg_id
         if await redis_client.exists(cooldown_key):
-            warn_blocks = [
-                InputRichBlockParagraph(text="Slow down, request limit reached.")
-            ]
-            if is_private:
-                await message.answer_rich_message(
-                    rich_message=InputRichMessage(blocks=warn_blocks)
-                )
-            else:
-                await message.answer_rich_message(
-                    rich_message=InputRichMessage(blocks=warn_blocks),
-                    reply_to_message_id=msg_id,
-                )
+            await bot.send_message(
+                chat_id=chat_id,
+                text="Slow down, request limit reached.",
+                reply_to_message_id=reply_id,
+            )
             return
 
         await redis_client.setex(cooldown_key, 4, "1")
@@ -775,17 +739,14 @@ async def handle_conversation(message: Message):
                         response = await chat.send_message(final_prompt)
 
                 raw_text = response.text or ""
-                rich_blocks = parse_text_to_blocks(raw_text)
+                final_text, text_entities = parse_text_to_entities(raw_text)
 
-                if is_private:
-                    await message.answer_rich_message(
-                        rich_message=InputRichMessage(blocks=rich_blocks)
-                    )
-                else:
-                    await message.answer_rich_message(
-                        rich_message=InputRichMessage(blocks=rich_blocks),
-                        reply_to_message_id=msg_id,
-                    )
+                await bot.send_message(
+                    chat_id=chat_id,
+                    text=final_text,
+                    entities=text_entities,
+                    reply_to_message_id=reply_id,
+                )
 
                 await redis_client.rpush(
                     history_key,
@@ -796,27 +757,15 @@ async def handle_conversation(message: Message):
 
             except Exception as ai_err:
                 print(f"Gemini API error: {ai_err}")
-                error_blocks = [
-                    InputRichBlockParagraph(
-                        text="I am currently broken right now, the owner needs to fix me."
-                    )
-                ]
+                error_msg = (
+                    "I am currently broken right now, the owner needs to fix me."
+                )
                 if "429" in str(ai_err):
-                    error_blocks = [
-                        InputRichBlockParagraph(
-                            text="Whoa, I'm getting a little overwhelmed! Let me catch my breath for a minute."
-                        )
-                    ]
+                    error_msg = "Whoa, I'm getting a little overwhelmed! Let me catch my breath for a minute."
 
-                if is_private:
-                    await message.answer_rich_message(
-                        rich_message=InputRichMessage(blocks=error_blocks)
-                    )
-                else:
-                    await message.answer_rich_message(
-                        rich_message=InputRichMessage(blocks=error_blocks),
-                        reply_to_message_id=msg_id,
-                    )
+                await bot.send_message(
+                    chat_id=chat_id, text=error_msg, reply_to_message_id=reply_id
+                )
 
 
 # ==========================================
@@ -825,7 +774,7 @@ async def handle_conversation(message: Message):
 
 
 async def health_check(request):
-    """Dummy endpoint to satisfy platform healthchecks."""
+    """Endpoint satisfying platform healthchecks completely."""
     return web.Response(text="200 OK - Bot is running.", status=200)
 
 
