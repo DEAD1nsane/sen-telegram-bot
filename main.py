@@ -41,7 +41,7 @@ SEARXNG_URL = os.getenv(
     "SEARXNG_URL", "https://searxng-railway-production-3252.up.railway.app/search"
 )
 
-# FIX 1: Explicitly set parse_mode to "Markdown" so standard Markdown outputs as native formatted text
+# Explicitly set parse_mode to "Markdown" to render lists and tables natively
 bot = Bot(token=API_TOKEN, default=DefaultBotProperties(parse_mode="Markdown"))
 dp = Dispatcher()
 router = Router()
@@ -280,7 +280,6 @@ def text_startswith(prefix: str):
     return lambda message: message.text and message.text.lower().startswith(prefix)
 
 
-# FIX 3: Restrict memory queries in group chats so they require a tag or reply to the bot
 @router.message(text_in({"what do you remember", "how do you remember"}))
 async def handle_what_remember(message: Message):
     bot_username = f"@{BOT_INFO.username}" if BOT_INFO else ""
@@ -296,7 +295,7 @@ async def handle_what_remember(message: Message):
     is_private = message.chat.type == "private"
 
     if not (is_private or is_tagged or is_reply_to_bot):
-        return  # Ignore untagged requests in group chats
+        return  # Ignore untagged queries in group chats
 
     user_id_str = str(message.from_user.id)
     content = await get_formatted_memories(user_id_str)
@@ -542,7 +541,7 @@ async def handle_conversation(message: Message):
                     h.decode("utf-8") if isinstance(h, bytes) else h for h in raw_hist
                 ]
 
-                # FIX 2: Expanded search triggers to catch weather, list, and table queries automatically
+                # Expanded search keywords to trigger web searches automatically
                 search_keywords = {
                     "search",
                     "google",
@@ -550,13 +549,12 @@ async def handle_conversation(message: Message):
                     "lookup",
                     "find",
                     "show me",
-                    "show",
-                    "table",
                     "weather",
                     "forecast",
                     "temp",
                     "temperature",
                     "list",
+                    "table",
                 }
                 explicit_search = any(
                     word in clean_prompt.lower() for word in search_keywords
@@ -614,9 +612,9 @@ async def handle_conversation(message: Message):
                     "Keep casual replies brief, but dynamically expand your response length when explicitly asked for details or when playing interactive games. "
                     "If the user changes the subject abruptly, drop the previous topic immediately and adapt to the new flow. "
                     "If the user is clearly joking or sarcastic, match their energy rather than taking the prompt literally. "
-                    "If you do not know the answer or the provided context is insufficient, state 'I don't have enough details to answer that accurately' directly without guessing. "
-                    "Do not assume personal details about the user unless they are explicitly provided in your memory list. "
-                    "Generate response using standard Markdown (e.g. *bold*, - lists, etc.)."
+                    "If asking for real-time information and the context is insufficient, state 'I don't have enough details to answer that accurately'. "
+                    "Otherwise, answer freely using general knowledge. "
+                    "Format responses using standard Markdown syntax (e.g. *bold*, - lists, etc.)."
                 )
 
                 if search_context:
@@ -687,6 +685,7 @@ async def handle_conversation(message: Message):
                         )
                         response = await chat.send_message(final_prompt)
 
+                # Send raw response so Markdown elements are preserved
                 response_text = response.text or ""
                 preview_opts = LinkPreviewOptions(
                     is_disabled=False, prefer_small_media=True
