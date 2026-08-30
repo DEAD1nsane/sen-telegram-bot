@@ -41,8 +41,8 @@ SEARXNG_URL = os.getenv(
     "SEARXNG_URL", "https://searxng-railway-production-3252.up.railway.app/search"
 )
 
-# FIXED: Integrated system-wide HTML parse mode to cleanly handle rich text elements
-bot = Bot(token=API_TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
+# FIX: Set parse_mode so Telegram automatically compiles Markdown/lists into rich text
+bot = Bot(token=API_TOKEN, default=DefaultBotProperties(parse_mode="Markdown"))
 dp = Dispatcher()
 router = Router()
 dp.include_router(router)
@@ -120,12 +120,22 @@ async def get_formatted_memories(user_id_str: str) -> str:
             item.decode("utf-8") if isinstance(item, bytes) else item
             for item in raw_items
         ]
-        formatted_list = "\n".join(f"{i+1}. {mem}" for i, mem in enumerate(memories))
-
-        return f"Active Memory Directives:\n\n{formatted_list}"
+        formatted = "\n".join(f"- {m}" for m in memories)
+        return f"*Active Memory Directives*\n\n{formatted}"
     except Exception as e:
         print(f"Error fetching memory list format: {e}")
         return "Could not retrieve memory list."
+
+
+async def collapse_message(chat_id: int, message_id: int, delay: int):
+    await asyncio.sleep(delay)
+    content = "_Active Memories Collapsed_"
+    try:
+        await bot.edit_message_text(
+            chat_id=chat_id, message_id=message_id, text=content
+        )
+    except Exception as e:
+        print(f"Error collapsing memory list: {e}")
 
 
 async def auto_delete_message(
@@ -239,12 +249,12 @@ async def handle_delete(message: Message):
 @router.message(Command("help", "commands"))
 async def handle_help(message: Message):
     content = (
-        "Sen Bot Command Hub\n\n"
-        "remember [item],, [item2] - Adds items to memory\n"
-        "what do you remember - Displays memory list\n"
-        "edit [number] [new fact] - Edits a specific rule\n"
-        "forget [number],, [number2] - Removes memories\n"
-        "forget all - Clears all memory"
+        "*Sen Bot Command Hub*\n\n"
+        "- *remember [item],, [item2]* - Adds items to memory\n"
+        "- *what do you remember* - Displays rules in a formatted list\n"
+        "- *edit [number] [new fact]* - Edits a specific rule\n"
+        "- *forget [number],, [number2]* - Removes memories\n"
+        "- *forget all* - Clears all memory"
     )
 
     if message.chat.type == "private":
@@ -283,11 +293,7 @@ async def handle_what_remember(message: Message):
         )
 
     if sent_msg:
-        asyncio.create_task(
-            auto_delete_message(
-                message.chat.id, sent_msg.message_id, message.message_id, 60
-            )
-        )
+        asyncio.create_task(collapse_message(message.chat.id, sent_msg.message_id, 60))
 
 
 @router.message(text_startswith("remember "))
@@ -315,11 +321,7 @@ async def handle_remember(message: Message):
         )
 
     if sent_msg:
-        asyncio.create_task(
-            auto_delete_message(
-                message.chat.id, sent_msg.message_id, message.message_id, 60
-            )
-        )
+        asyncio.create_task(collapse_message(message.chat.id, sent_msg.message_id, 60))
 
 
 @router.message(text_startswith("edit "))
@@ -344,9 +346,7 @@ async def handle_edit(message: Message):
 
             if sent_msg:
                 asyncio.create_task(
-                    auto_delete_message(
-                        message.chat.id, sent_msg.message_id, message.message_id, 60
-                    )
+                    collapse_message(message.chat.id, sent_msg.message_id, 60)
                 )
             return
 
@@ -418,25 +418,19 @@ async def handle_forget(message: Message):
         )
 
     if sent_msg:
-        asyncio.create_task(
-            auto_delete_message(
-                message.chat.id, sent_msg.message_id, message.message_id, 60
-            )
-        )
+        asyncio.create_task(collapse_message(message.chat.id, sent_msg.message_id, 60))
 
 
 # ==========================================
-# Primary Chat, Mentions & Audio Engine
+# Primary Chat & Engine
 # ==========================================
 
 
 @router.message(F.text | F.caption | F.voice | F.audio)
 async def handle_conversation(message: Message):
     text = message.text or message.caption or ""
-    text_no_code = re.sub(r"(?s)```.*?```", "", text)
-    text_no_code = re.sub(r"(?s)`.*?`", "", text_no_code)
 
-    if re.search(r"\bsen\b", text_no_code, re.IGNORECASE):
+    if re.search(r"\bsen\b", text, re.IGNORECASE):
         asyncio.create_task(
             send_audio_track(
                 message.chat.id,
@@ -448,7 +442,7 @@ async def handle_conversation(message: Message):
                 message.chat.type == "private",
             )
         )
-    if re.search(r"\bmagic(?:al|ally)?\b", text_no_code, re.IGNORECASE):
+    if re.search(r"\bmagic(?:al|ally)?\b", text, re.IGNORECASE):
         asyncio.create_task(
             send_audio_track(
                 message.chat.id,
@@ -463,8 +457,8 @@ async def handle_conversation(message: Message):
 
     bot_username = f"@{BOT_INFO.username}" if BOT_INFO else ""
     is_tagged = (
-        bot_username and bot_username.lower() in text_no_code.lower()
-    ) or "@gemini" in text_no_code.lower()
+        bot_username and bot_username.lower() in text.lower()
+    ) or "@gemini" in text.lower()
     is_reply_to_bot = bool(
         message.reply_to_message
         and BOT_INFO
@@ -538,16 +532,12 @@ async def handle_conversation(message: Message):
                     "look up",
                     "lookup",
                     "find",
-                    "show",
-                    "table",
-                    "send",
                     "show me",
                 }
                 explicit_search = any(
                     word in clean_prompt.lower() for word in search_keywords
                 )
 
-                # Context-Aware Search Router
                 search_query = clean_prompt
                 if explicit_search and len(clean_prompt.split()) <= 4:
                     if (
@@ -594,7 +584,6 @@ async def handle_conversation(message: Message):
 
                 today_str = datetime.now(timezone.utc).strftime("%A, %B %d, %Y")
 
-                # FIXED/ENFORCED: Upgraded bot prompt logic to forcefully suppress markdown and mandatorily switch to native Telegram HTML structures
                 bot_instructions = (
                     f"Today's date is {today_str}. Keep responses structural using double line-breaks to separate ideas. "
                     "Never use standard AI pleasantries. Do not start responses with 'As an AI' or end with generic offers for help. "
@@ -603,10 +592,7 @@ async def handle_conversation(message: Message):
                     "If the user is clearly joking or sarcastic, match their energy rather than taking the prompt literally. "
                     "If you do not know the answer or the provided context is insufficient, state 'I don't have enough details to answer that accurately' directly without guessing. "
                     "Do not assume personal details about the user unless they are explicitly provided in your memory list. "
-                    "CRITICAL FOR RICH TEXT RENDERING: You must write exclusively in Telegram-compatible HTML parse mode syntax. "
-                    "Do not use ANY markdown formatting symbols (never use asterisks **, underscores _, or backticks `). "
-                    "Instead, use explicit HTML tags: <b>text</b> for bold, <i>text</i> for italic, <u>text</u> for underline, <s>text</s> for strikethrough, and <code>text</code> for inline code. "
-                    "When generating tabular data, lists or data layouts requiring clean structural margins, you MUST construct a text table using monospaced characters and wrap the whole block within raw `<pre>...</pre>` tags. This preserves table cell spacing cleanly."
+                    "Generate response using standard Markdown (e.g. *bold*, - lists, etc.)."
                 )
 
                 if search_context:
@@ -655,46 +641,63 @@ async def handle_conversation(message: Message):
                         ),
                     )
                 else:
-                    response = await gemini_client.aio.models.generate_content(
-                        model="gemini-3.5-flash-lite",
-                        contents=final_prompt,
-                        config=types.GenerateContentConfig(
-                            system_instruction=bot_instructions,
-                            safety_settings=safety_overrides,
-                        ),
-                    )
+                    try:
+                        chat = gemini_client.aio.chats.create(
+                            model="gemini-3.5-flash-lite",
+                            config=types.GenerateContentConfig(
+                                system_instruction=bot_instructions,
+                                safety_settings=safety_overrides,
+                            ),
+                        )
+                        response = await chat.send_message(final_prompt)
+                    except Exception as primary_err:
+                        print(
+                            f"Primary model failed ({primary_err}), falling back to gemini-2.5-flash..."
+                        )
+                        chat = gemini_client.aio.chats.create(
+                            model="gemini-2.5-flash",
+                            config=types.GenerateContentConfig(
+                                system_instruction=bot_instructions,
+                                safety_settings=safety_overrides,
+                            ),
+                        )
+                        response = await chat.send_message(final_prompt)
 
-                bot_text = (
-                    response.text
-                    if response and response.text
-                    else "I am currently broken."
+                response_text = response.text or ""
+                preview_opts = LinkPreviewOptions(
+                    is_disabled=False, prefer_small_media=True
                 )
 
                 if is_private:
                     await message.answer(
-                        text=bot_text,
-                        link_preview_options=LinkPreviewOptions(is_disabled=True),
+                        text=response_text, link_preview_options=preview_opts
                     )
                 else:
                     await message.answer(
-                        text=bot_text,
+                        text=response_text,
                         reply_to_message_id=msg_id,
-                        link_preview_options=LinkPreviewOptions(is_disabled=True),
+                        link_preview_options=preview_opts,
                     )
 
                 await redis_client.rpush(
-                    history_key, f"User: {clean_prompt}", f"Bot: {bot_text}"
+                    history_key,
+                    f"User: {clean_prompt or 'Voice Note'}",
+                    f"Bot: {response_text}",
                 )
                 await redis_client.ltrim(history_key, -10, -1)
-                await redis_client.expire(history_key, 3600)
 
-            except Exception as e:
-                print(f"Gemini/Chat error: {e}")
-                error_msg = "I am currently broken."
+            except Exception as ai_err:
+                print(f"Gemini API error: {ai_err}")
+                error_content = (
+                    "I am currently broken right now, the owner needs to fix me."
+                )
+                if "429" in str(ai_err):
+                    error_content = "Whoa, I'm getting a little overwhelmed! Let me catch my breath for a minute."
+
                 if is_private:
-                    await message.answer(text=error_msg)
+                    await message.answer(text=error_content)
                 else:
-                    await message.answer(text=error_msg, reply_to_message_id=msg_id)
+                    await message.answer(text=error_content, reply_to_message_id=msg_id)
 
 
 # ==========================================
@@ -703,12 +706,12 @@ async def handle_conversation(message: Message):
 
 
 async def health_check(request):
-    """Dummy endpoint to satisfy platform healthchecks."""
     return web.Response(text="200 OK - Bot is running.", status=200)
 
 
 async def main():
     global BOT_INFO
+
     try:
         await bot.delete_webhook(drop_pending_updates=True)
         BOT_INFO = await bot.get_me()
