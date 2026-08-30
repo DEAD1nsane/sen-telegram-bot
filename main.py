@@ -41,7 +41,7 @@ SEARXNG_URL = os.getenv(
     "SEARXNG_URL", "https://searxng-railway-production-3252.up.railway.app/search"
 )
 
-# FIX: Set parse_mode so Telegram automatically compiles Markdown/lists into rich text
+# FIX 1: Explicitly set parse_mode to "Markdown" so standard Markdown outputs as native formatted text
 bot = Bot(token=API_TOKEN, default=DefaultBotProperties(parse_mode="Markdown"))
 dp = Dispatcher()
 router = Router()
@@ -280,12 +280,28 @@ def text_startswith(prefix: str):
     return lambda message: message.text and message.text.lower().startswith(prefix)
 
 
+# FIX 3: Restrict memory queries in group chats so they require a tag or reply to the bot
 @router.message(text_in({"what do you remember", "how do you remember"}))
 async def handle_what_remember(message: Message):
+    bot_username = f"@{BOT_INFO.username}" if BOT_INFO else ""
+    text = message.text or ""
+    is_tagged = (
+        bot_username and bot_username.lower() in text.lower()
+    ) or "@gemini" in text.lower()
+    is_reply_to_bot = bool(
+        message.reply_to_message
+        and BOT_INFO
+        and message.reply_to_message.from_user.id == BOT_INFO.id
+    )
+    is_private = message.chat.type == "private"
+
+    if not (is_private or is_tagged or is_reply_to_bot):
+        return  # Ignore untagged requests in group chats
+
     user_id_str = str(message.from_user.id)
     content = await get_formatted_memories(user_id_str)
 
-    if message.chat.type == "private":
+    if is_private:
         sent_msg = await message.answer(text=content)
     else:
         sent_msg = await message.answer(
@@ -526,6 +542,7 @@ async def handle_conversation(message: Message):
                     h.decode("utf-8") if isinstance(h, bytes) else h for h in raw_hist
                 ]
 
+                # FIX 2: Expanded search triggers to catch weather, list, and table queries automatically
                 search_keywords = {
                     "search",
                     "google",
@@ -533,6 +550,13 @@ async def handle_conversation(message: Message):
                     "lookup",
                     "find",
                     "show me",
+                    "show",
+                    "table",
+                    "weather",
+                    "forecast",
+                    "temp",
+                    "temperature",
+                    "list",
                 }
                 explicit_search = any(
                     word in clean_prompt.lower() for word in search_keywords
