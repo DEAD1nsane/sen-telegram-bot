@@ -41,7 +41,7 @@ SEARXNG_URL = os.getenv(
     "SEARXNG_URL", "https://searxng-railway-production-3252.up.railway.app/search"
 )
 
-# Explicitly set parse_mode to "Markdown" to render lists and tables natively
+# Configure default parse_mode="Markdown" for native rich text rendering
 bot = Bot(token=API_TOKEN, default=DefaultBotProperties(parse_mode="Markdown"))
 dp = Dispatcher()
 router = Router()
@@ -295,7 +295,7 @@ async def handle_what_remember(message: Message):
     is_private = message.chat.type == "private"
 
     if not (is_private or is_tagged or is_reply_to_bot):
-        return  # Ignore untagged queries in group chats
+        return  # Ignore untagged memory requests in group chats
 
     user_id_str = str(message.from_user.id)
     content = await get_formatted_memories(user_id_str)
@@ -541,7 +541,7 @@ async def handle_conversation(message: Message):
                     h.decode("utf-8") if isinstance(h, bytes) else h for h in raw_hist
                 ]
 
-                # Expanded search keywords to trigger web searches automatically
+                # Expanded keywords to trigger web searches automatically
                 search_keywords = {
                     "search",
                     "google",
@@ -685,7 +685,6 @@ async def handle_conversation(message: Message):
                         )
                         response = await chat.send_message(final_prompt)
 
-                # Send raw response so Markdown elements are preserved
                 response_text = response.text or ""
                 preview_opts = LinkPreviewOptions(
                     is_disabled=False, prefer_small_media=True
