@@ -41,7 +41,6 @@ SEARXNG_URL = os.getenv(
     "SEARXNG_URL", "https://searxng-railway-production-3252.up.railway.app/search"
 )
 
-# Configure default parse_mode="Markdown" for native rich text rendering
 bot = Bot(token=API_TOKEN, default=DefaultBotProperties(parse_mode="Markdown"))
 dp = Dispatcher()
 router = Router()
@@ -295,7 +294,7 @@ async def handle_what_remember(message: Message):
     is_private = message.chat.type == "private"
 
     if not (is_private or is_tagged or is_reply_to_bot):
-        return  # Ignore untagged memory requests in group chats
+        return
 
     user_id_str = str(message.from_user.id)
     content = await get_formatted_memories(user_id_str)
@@ -491,6 +490,8 @@ async def handle_conversation(message: Message):
         chat_id = message.chat.id
         msg_id = message.message_id
 
+        # Keep original text intact for keyword trigger evaluation
+        raw_input_text = text.strip()
         clean_prompt = (
             text.replace(bot_username, "")
             .replace(bot_username.lower(), "")
@@ -541,7 +542,7 @@ async def handle_conversation(message: Message):
                     h.decode("utf-8") if isinstance(h, bytes) else h for h in raw_hist
                 ]
 
-                # Expanded keywords to trigger web searches automatically
+                # Expanded keywords so requests for digimon, pokemon, lists, tables, or weather trigger web context
                 search_keywords = {
                     "search",
                     "google",
@@ -555,9 +556,11 @@ async def handle_conversation(message: Message):
                     "temperature",
                     "list",
                     "table",
+                    "digimon",
+                    "pokemon",
                 }
                 explicit_search = any(
-                    word in clean_prompt.lower() for word in search_keywords
+                    word in raw_input_text.lower() for word in search_keywords
                 )
 
                 search_query = clean_prompt
