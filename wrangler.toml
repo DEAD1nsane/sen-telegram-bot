@@ -1,0 +1,8 @@
+name = "sen-telegram-bot"
+main = "src/index.py"
+compatibility_date = "2026-08-31"
+compatibility_flags = ["python_workers"]
+
+[vars]
+SEARXNG_URL = "https://searxng-railway-production-3252.up.railway.app/search"
+
