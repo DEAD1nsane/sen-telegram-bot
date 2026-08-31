@@ -1,16 +1,15 @@
+import asyncio
 import os
 import re
-import asyncio
 from datetime import datetime, timezone
-from aiohttp import web
 
-from aiogram import Bot, Dispatcher, Router, F
-from aiogram.types import Message, FSInputFile, LinkPreviewOptions
-from aiogram.filters import Command
-from aiogram.client.default import DefaultBotProperties
-
-import redis.asyncio as redis
 import httpx
+import redis.asyncio as redis
+from aiogram import Bot, Dispatcher, F, Router
+from aiogram.client.default import DefaultBotProperties
+from aiogram.filters import Command
+from aiogram.types import FSInputFile, LinkPreviewOptions, Message
+from aiohttp import web
 from google import genai
 from google.genai import types
 
@@ -214,7 +213,7 @@ async def send_audio_track(
                         performer=performer,
                     )
                 else:
-                    raise e
+                    raise
         elif os.path.exists(file_path):
             try:
                 msg = await attempt_send(file_path)
@@ -228,7 +227,7 @@ async def send_audio_track(
                         performer=performer,
                     )
                 else:
-                    raise e
+                    raise
             if msg and msg.audio and msg.audio.file_id:
                 await redis_client.set(f"audio_cache:{key}", msg.audio.file_id)
     except Exception as send_err:
