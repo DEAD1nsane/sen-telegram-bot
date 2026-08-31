@@ -41,7 +41,7 @@ SEARXNG_URL = os.getenv(
     "SEARXNG_URL", "https://searxng-railway-production-3252.up.railway.app/search"
 )
 
-# 1. FIX: Globally initialize HTML parse mode for seamless rich text
+# Globally enforce HTML parsing for native rich text rendering[span_2](start_span)[span_2](end_span)
 bot = Bot(token=API_TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
 dp = Dispatcher()
 router = Router()
@@ -111,6 +111,7 @@ async def free_web_search(query: str) -> str:
 
 
 async def get_formatted_memories(user_id_str: str) -> str:
+    """Returns memory list formatted purely in standard HTML to prevent parse collisions."""
     try:
         raw_items = await redis_client.lrange(f"memory_list:{user_id_str}", 0, -1)
         if not raw_items:
@@ -137,6 +138,7 @@ async def get_formatted_memories(user_id_str: str) -> str:
 
 
 async def collapse_message(chat_id: int, message_id: int, delay: int):
+    """Dynamically edits the message into an HTML blockquote after delay."""
     await asyncio.sleep(delay)
     content = "<blockquote>Active Memories Collapsed</blockquote>"
     try:
@@ -440,6 +442,7 @@ async def handle_forget(message: Message):
 @router.message(F.text | F.caption | F.voice | F.audio)
 async def handle_conversation(message: Message):
     text = message.text or message.caption or ""
+    # Strip HTML tags before doing text-based pattern searches
     text_no_html = re.sub(r"<[^>]+>", "", text)
 
     if re.search(r"\bsen\b", text_no_html, re.IGNORECASE):
@@ -538,17 +541,15 @@ async def handle_conversation(message: Message):
                     h.decode("utf-8") if isinstance(h, bytes) else h for h in raw_hist
                 ]
 
+                # Explicitly expanded search keywords to capture "show me a table[span_3](start_span)"[span_3](end_span)
                 search_keywords = {
                     "search",
                     "google",
                     "look up",
                     "lookup",
                     "find",
+                    "show",
                     "show me",
-                    "weather",
-                    "forecast",
-                    "temp",
-                    "temperature",
                     "table",
                     "list",
                 }
@@ -602,7 +603,7 @@ async def handle_conversation(message: Message):
 
                 today_str = datetime.now(timezone.utc).strftime("%A, %B %d, %Y")
 
-                # 2. FIX: Gemini is strictly instructed to format using HTML and wrap tables in <pre> tags
+                # Enforce HTML tags, but explicitly instruct Gemini to wrap pipe tables in <pre> tags[span_4](start_span)[span_4](end_span)
                 bot_instructions = (
                     f"Today's date is {today_str}. Keep responses structural using double line-breaks to separate ideas. "
                     "Never use standard AI pleasantries. Do not start responses with 'As an AI' or end with generic offers for help. "
@@ -687,7 +688,7 @@ async def handle_conversation(message: Message):
 
                 response_text = response.text or ""
 
-                # Clean up any rogue Markdown escaping that might break the HTML parser
+                # Gently scrub raw bullets and backticks, but LEAVE HTML <pre> tags completely intact
                 response_text = response_text.replace("\u2022", "").replace("```", "")
 
                 preview_opts = LinkPreviewOptions(
@@ -705,6 +706,7 @@ async def handle_conversation(message: Message):
                         link_preview_options=preview_opts,
                     )
 
+                # Store plain text version in history
                 clean_history_text = re.sub(r"<[^>]+>", "", response_text)
                 await redis_client.rpush(
                     history_key,
@@ -733,6 +735,7 @@ async def handle_conversation(message: Message):
 
 
 async def health_check(request):
+    """Dummy endpoint to satisfy platform healthchecks."""
     return web.Response(text="200 OK - Bot is running.", status=200)
 
 
@@ -740,7 +743,8 @@ async def main():
     global BOT_INFO
 
     try:
-        # 3. FIX: Drops overlapping connections from Railway zero-downtime deploys
+        # Crucial step: Drop pending webhooks to prevent duplicate container conflicts[span_5](start_span)[span_5](end_span)
+        print("Clearing conflicting webhooks from Telegram servers...")
         await bot.delete_webhook(drop_pending_updates=True)
         BOT_INFO = await bot.get_me()
         print(f"Bot authenticated as {BOT_INFO.username}")
