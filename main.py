@@ -127,6 +127,16 @@ async def cmd_start(message: types.Message):
 
 @dp.message()
 async def handle_message(message: types.Message):
+    global BOT_USERNAME
+    if BOT_USERNAME is None:
+        bot_info = await Bot(token=os.getenv("BOT_TOKEN")).get_me()
+        BOT_USERNAME = f"@{bot_info.username}"
+    if BOT_USERNAME not in message.text:
+        if not (
+            message.reply_to_message
+            and message.reply_to_message.from_user.id == (await bot.get_me()).id
+        ):
+            return
     # Only if not handled by search_router
     prompt = (
         f"Question: {message.text}\n\n"
