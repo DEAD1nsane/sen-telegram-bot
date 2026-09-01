@@ -829,7 +829,8 @@ async def handle_conversation(message: Message):
                     "If you do not know the answer or the provided context is insufficient, state 'I don't have enough details to answer that accurately' directly without guessing. "
                     "Do not assume personal details about the user unless they are explicitly provided in your memory list. "
                     "Match the format the user requests: if they ask for a list, give a list; if they ask for a table, give a table. "
-                    "Use varied, context-appropriate column headers for tables — never reuse the same column names across different topics."
+                    "Use varied, context-appropriate column headers for tables — never reuse the same column names across different topics. "
+                    "Use normal, straightforward language in lists and tables — no custom slang or quirky descriptors."
                 )
 
                 if search_context:
