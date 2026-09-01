@@ -155,6 +155,12 @@ async def send_formatted_response(message: Message, content: str, auto_delete: i
                 )
             return
 
+        print(f"sendRichMessage failed: {result}")
+
+        plain_text = extract_text_from_blocks(rich_data["blocks"])
+        if plain_text:
+            content = plain_text
+
     if message.chat.type == "private":
         sent_msg = await message.answer(text=content, parse_mode=None)
     else:
@@ -165,6 +171,26 @@ async def send_formatted_response(message: Message, content: str, auto_delete: i
         asyncio.create_task(
             collapse_message(message.chat.id, sent_msg.message_id, auto_delete)
         )
+
+
+def extract_text_from_blocks(blocks: list) -> str:
+    """Extract plain text from rich message blocks for fallback."""
+    parts = []
+    for block in blocks:
+        btype = block.get("type")
+        if btype == "paragraph":
+            for item in block.get("text", []):
+                if item.get("type") == "text":
+                    parts.append(item.get("text", ""))
+        elif btype == "list":
+            for item in block.get("items", []):
+                if item.get("type") == "text":
+                    parts.append(f"- {item.get('text', '')}")
+        elif btype == "table":
+            for row in block.get("cells", []):
+                cells = [c.get("text", "") for c in row if c.get("type") == "text"]
+                parts.append(" | ".join(cells))
+    return "\n".join(parts) if parts else ""
 
 
 async def send_ai_response(message: Message, response_text: str, is_private: bool):
@@ -178,6 +204,10 @@ async def send_ai_response(message: Message, response_text: str, is_private: boo
         )
         if result and result.get("ok"):
             return
+        print(f"sendRichMessage failed: {result}")
+        plain_text = extract_text_from_blocks(rich_data["blocks"])
+        if plain_text:
+            response_text = plain_text
 
     preview_opts = LinkPreviewOptions(is_disabled=False, prefer_small_media=True)
     if is_private:
@@ -768,15 +798,11 @@ async def handle_conversation(message: Message):
                     "If the user is clearly joking or sarcastic, match their energy rather than taking the prompt literally. "
                     "If you do not know the answer or the provided context is insufficient, state 'I don't have enough details to answer that accurately' directly without guessing. "
                     "Do not assume personal details about the user unless they are explicitly provided in your memory list. "
-                    "CRITICAL FORMATTING RULE: ALL responses MUST be a JSON object with a 'blocks' array using Telegram InputRichMessage format. "
-                    "No plain text responses. No HTML. No markdown. Only rich message JSON. "
-                    "Available block types: paragraph, preformatted, block_quotation, list, table, divider, section_heading, anchor. "
-                    "Inside paragraphs you can use RichText types: bold, italic, underline, strikethrough, spoiler, code, url, text. "
-                    'Example simple response: {"blocks":[{"type":"paragraph","text":[{"type":"text","text":"Hello!"}]}]}'
-                    'Example bold: {"blocks":[{"type":"paragraph","text":[{"type":"text","text":"Normal "},{"type":"bold","text":[{"type":"text","text":"bold"}]}]}]}'
-                    'Example table: {"blocks":[{"type":"table","is_compact":true,"cells":[[{"type":"text","text":"Name"},{"type":"text","text":"Age"}],[{"type":"text","text":"Alice"},{"type":"text","text":"25"}]]}]}'
-                    'Example list: {"blocks":[{"type":"list","items":[{"type":"text","text":"Item 1"},{"type":"text","text":"Item 2"}]}]}'
-                    "NEVER output plain text outside of JSON blocks. NEVER use HTML tags. NEVER use markdown asterisks."
+                    "By default, respond as plain text. Do not use HTML tags, markdown, or code blocks. "
+                    "Use rich message JSON ONLY when the response benefits from structured formatting: tables, lists, headers, or when the user explicitly asks for formatted output. "
+                    'Rich message format: {"blocks":[{"type":"paragraph","text":[{"type":"text","text":"Your message"}]}]}. '
+                    "Available block types: paragraph, list, table, divider, section_heading, preformatted. "
+                    "RichText types for inline formatting: bold, italic, code, url."
                 )
 
                 if search_context:
