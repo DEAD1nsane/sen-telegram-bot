@@ -2,3 +2,4 @@ node_modules/
 google-cloud-sdk/
 google-cloud-cli-linux-arm.tar.gz
 .env
+__pycache__/
