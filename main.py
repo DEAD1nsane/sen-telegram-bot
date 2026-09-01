@@ -41,7 +41,6 @@ SEARXNG_URL = os.getenv(
     "SEARXNG_URL", "https://searxng-railway-production-3252.up.railway.app/search"
 )
 
-# FIX: Set parse_mode so Telegram automatically compiles Markdown/lists into rich text
 bot = Bot(token=API_TOKEN, default=DefaultBotProperties(parse_mode="Markdown"))
 dp = Dispatcher()
 router = Router()
@@ -282,10 +281,25 @@ def text_startswith(prefix: str):
 
 @router.message(text_in({"what do you remember", "how do you remember"}))
 async def handle_what_remember(message: Message):
+    bot_username = f"@{BOT_INFO.username}" if BOT_INFO else ""
+    text = message.text or ""
+    is_tagged = (
+        bot_username and bot_username.lower() in text.lower()
+    ) or "@gemini" in text.lower()
+    is_reply_to_bot = bool(
+        message.reply_to_message
+        and BOT_INFO
+        and message.reply_to_message.from_user.id == BOT_INFO.id
+    )
+    is_private = message.chat.type == "private"
+
+    if not (is_private or is_tagged or is_reply_to_bot):
+        return
+
     user_id_str = str(message.from_user.id)
     content = await get_formatted_memories(user_id_str)
 
-    if message.chat.type == "private":
+    if is_private:
         sent_msg = await message.answer(text=content)
     else:
         sent_msg = await message.answer(
@@ -476,6 +490,8 @@ async def handle_conversation(message: Message):
         chat_id = message.chat.id
         msg_id = message.message_id
 
+        # Keep original text intact for keyword trigger evaluation
+        raw_input_text = text.strip()
         clean_prompt = (
             text.replace(bot_username, "")
             .replace(bot_username.lower(), "")
@@ -526,6 +542,7 @@ async def handle_conversation(message: Message):
                     h.decode("utf-8") if isinstance(h, bytes) else h for h in raw_hist
                 ]
 
+                # Expanded keywords so requests for digimon, pokemon, lists, tables, or weather trigger web context
                 search_keywords = {
                     "search",
                     "google",
@@ -533,9 +550,17 @@ async def handle_conversation(message: Message):
                     "lookup",
                     "find",
                     "show me",
+                    "weather",
+                    "forecast",
+                    "temp",
+                    "temperature",
+                    "list",
+                    "table",
+                    "digimon",
+                    "pokemon",
                 }
                 explicit_search = any(
-                    word in clean_prompt.lower() for word in search_keywords
+                    word in raw_input_text.lower() for word in search_keywords
                 )
 
                 search_query = clean_prompt
@@ -590,9 +615,9 @@ async def handle_conversation(message: Message):
                     "Keep casual replies brief, but dynamically expand your response length when explicitly asked for details or when playing interactive games. "
                     "If the user changes the subject abruptly, drop the previous topic immediately and adapt to the new flow. "
                     "If the user is clearly joking or sarcastic, match their energy rather than taking the prompt literally. "
-                    "If you do not know the answer or the provided context is insufficient, state 'I don't have enough details to answer that accurately' directly without guessing. "
-                    "Do not assume personal details about the user unless they are explicitly provided in your memory list. "
-                    "Generate response using standard Markdown (e.g. *bold*, - lists, etc.)."
+                    "If asking for real-time information and the context is insufficient, state 'I don't have enough details to answer that accurately'. "
+                    "Otherwise, answer freely using general knowledge. "
+                    "Format responses using standard Markdown syntax (e.g. *bold*, - lists, etc.)."
                 )
 
                 if search_context:
