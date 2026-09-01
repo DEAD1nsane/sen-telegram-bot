@@ -131,12 +131,20 @@ async def send_rich_message_draft(
 
 def extract_json(text: str) -> dict | None:
     """Extract the first JSON object found in text."""
-    match = re.search(r"\{.*?\}", text, re.DOTALL)
-    if match:
-        try:
-            return json.loads(match.group(0))
-        except json.JSONDecodeError:
-            pass
+    start = text.find("{")
+    if start == -1:
+        return None
+    depth = 0
+    for i in range(start, len(text)):
+        if text[i] == "{":
+            depth += 1
+        elif text[i] == "}":
+            depth -= 1
+            if depth == 0:
+                try:
+                    return json.loads(text[start : i + 1])
+                except json.JSONDecodeError:
+                    return None
     return None
 
 
@@ -243,12 +251,16 @@ def extract_text_from_blocks(blocks: list) -> str:
 async def send_ai_response(message: Message, response_text: str, is_private: bool):
     """Send AI response: RichMessage JSON if present, otherwise plain text."""
     rich_data = extract_json(response_text)
+    print(
+        f"send_ai_response: extracted JSON={rich_data is not None}, has_blocks={rich_data and 'blocks' in rich_data if rich_data else False}"
+    )
     if rich_data and "blocks" in rich_data:
         result = await send_rich_message(
             message.chat.id,
             rich_data["blocks"],
             reply_to=None if is_private else message.message_id,
         )
+        print(f"send_ai_response: send_rich_message result={result}")
         if result and result.get("ok"):
             return
         print(f"sendRichMessage failed: {result}")
