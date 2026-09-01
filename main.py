@@ -67,10 +67,15 @@ OWNER_ID = int(os.getenv("OWNER_ID", "0"))
 # ==========================================
 
 
-async def send_rich_message(chat_id: int, markdown: str, reply_to: int = None):
-    """Send a rich formatted message via sendRichMessage using Markdown."""
+async def send_rich_message(chat_id: int, markdown: str = None, blocks: list = None, reply_to: int = None):
+    """Send a rich formatted message via sendRichMessage using Markdown or blocks."""
     url = f"https://api.telegram.org/bot{API_TOKEN}/sendRichMessage"
-    payload = {"chat_id": chat_id, "rich_message": {"markdown": markdown}}
+    rich_message = {}
+    if markdown:
+        rich_message["markdown"] = markdown
+    elif blocks:
+        rich_message["blocks"] = blocks
+    payload = {"chat_id": chat_id, "rich_message": rich_message}
     if reply_to:
         payload["reply_parameters"] = {"message_id": reply_to}
     try:
@@ -148,12 +153,13 @@ def extract_json(text: str) -> dict | None:
 
 
 async def send_formatted_response(message: Message, content: str, auto_delete: int = 0):
-    """Send content: RichMessage markdown if present, otherwise plain text."""
-    rich_md = extract_rich_markdown(content)
-    if rich_md:
+    """Send content: RichMessage markdown/blocks if present, otherwise plain text."""
+    rich_md, rich_blocks = extract_rich_content(content)
+    if rich_md or rich_blocks:
         result = await send_rich_message(
             message.chat.id,
-            rich_md,
+            markdown=rich_md,
+            blocks=rich_blocks,
             reply_to=None if message.chat.type == "private" else message.message_id,
         )
         if result and result.get("ok"):
@@ -302,28 +308,51 @@ def has_markdown_formatting(text: str) -> bool:
     return False
 
 
-def extract_rich_markdown(text: str) -> str | None:
-    """Extract markdown content from code block, JSON blocks, or detect natural markdown."""
+def html_to_blocks(text: str) -> list | None:
+    """Convert HTML details/summary tags to Telegram blocks."""
+    details_pattern = re.compile(
+        r"<details>\s*<summary>(.*?)</summary>\s*(.*?)</details>",
+        re.DOTALL,
+    )
+    matches = details_pattern.findall(text)
+    if not matches:
+        return None
+    blocks = []
+    for summary, content in matches:
+        blocks.append({
+            "type": "details",
+            "summary": [{"type": "text", "text": summary.strip()}],
+            "blocks": [{"type": "paragraph", "text": [{"type": "text", "text": content.strip()}]}],
+        })
+    return blocks if blocks else None
+
+
+def extract_rich_content(text: str) -> tuple[str | None, list | None]:
+    """Extract rich content: markdown string or blocks. Returns (markdown, blocks)."""
     match = re.search(r"```(?:md|markdown)?\s*\n(.*?)```", text, re.DOTALL)
     if match:
-        return match.group(1).strip()
+        return match.group(1).strip(), None
     rich_data = extract_json(text)
     if rich_data and "blocks" in rich_data:
         md = json_blocks_to_markdown(rich_data["blocks"])
         if md:
-            return md
+            return md, None
+    blocks = html_to_blocks(text)
+    if blocks:
+        return None, blocks
     if has_markdown_formatting(text):
-        return text.strip()
-    return None
+        return text.strip(), None
+    return None, None
 
 
 async def send_ai_response(message: Message, response_text: str, is_private: bool):
-    """Send AI response: rich Markdown if present, otherwise plain text."""
-    rich_md = extract_rich_markdown(response_text)
-    if rich_md:
+    """Send AI response: rich Markdown/blocks if present, otherwise plain text."""
+    rich_md, rich_blocks = extract_rich_content(response_text)
+    if rich_md or rich_blocks:
         result = await send_rich_message(
             message.chat.id,
-            rich_md,
+            markdown=rich_md,
+            blocks=rich_blocks,
             reply_to=None if is_private else message.message_id,
         )
         if result and result.get("ok"):
