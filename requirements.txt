@@ -1,0 +1,4 @@
+aiohttp
+aiogram
+redis
+google-generativeai

@@ -19,8 +19,9 @@ const FOLDER_ID = "1MbCNI0XeURT4z8w62zKwdlYllbRkeocq";
 const expandHome = (filepath) =>
   filepath.startsWith("~") ? filepath.replace("~", process.env.HOME) : filepath;
 
-// Updated target list: Removed main.py and requirements.txt
 const FILES_TO_UPLOAD = [
+  { localPath: "main.py", driveName: "main.py.txt" },
+  { localPath: "requirements.txt", driveName: "requirements.txt" },
   {
     localPath: expandHome(
       "~/storage/shared/Backups/Termux/.termux.properties.txt",
