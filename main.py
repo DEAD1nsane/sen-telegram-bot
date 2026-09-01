@@ -138,6 +138,7 @@ async def health_check(request):
 async def run_http_server():
     app = web.Application()
     app.router.add_get("/health", health_check)
+    app.router.add_get("/", health_check)  # Add healthcheck to root
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", 8080)
