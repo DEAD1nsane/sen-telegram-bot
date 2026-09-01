@@ -67,14 +67,12 @@ OWNER_ID = int(os.getenv("OWNER_ID", "0"))
 # ==========================================
 
 
-async def send_rich_message(chat_id: int, blocks: list, reply_to: int = None):
-    """Send a rich formatted message via sendRichMessage."""
-    blocks = normalize_table_blocks(blocks)
+async def send_rich_message(chat_id: int, markdown: str, reply_to: int = None):
+    """Send a rich formatted message via sendRichMessage using Markdown."""
     url = f"https://api.telegram.org/bot{API_TOKEN}/sendRichMessage"
-    payload = {"chat_id": chat_id, "rich_message": {"blocks": blocks}}
+    payload = {"chat_id": chat_id, "rich_message": {"markdown": markdown}}
     if reply_to:
         payload["reply_parameters"] = {"message_id": reply_to}
-    print(f"sendRichMessage payload blocks: {json.dumps(blocks, indent=2)[:500]}")
     try:
         async with httpx.AsyncClient() as client:
             res = await client.post(url, json=payload, timeout=10.0)
@@ -150,12 +148,12 @@ def extract_json(text: str) -> dict | None:
 
 
 async def send_formatted_response(message: Message, content: str, auto_delete: int = 0):
-    """Send content: RichMessage JSON if present, otherwise plain text."""
-    rich_data = extract_json(content)
-    if rich_data and "blocks" in rich_data:
+    """Send content: RichMessage markdown if present, otherwise plain text."""
+    rich_md = extract_rich_markdown(content)
+    if rich_md:
         result = await send_rich_message(
             message.chat.id,
-            rich_data["blocks"],
+            rich_md,
             reply_to=None if message.chat.type == "private" else message.message_id,
         )
         if result and result.get("ok"):
@@ -168,12 +166,7 @@ async def send_formatted_response(message: Message, content: str, auto_delete: i
                     )
                 )
             return
-
         print(f"sendRichMessage failed: {result}")
-
-        plain_text = extract_text_from_blocks(rich_data["blocks"])
-        if plain_text:
-            content = plain_text
 
     if message.chat.type == "private":
         sent_msg = await message.answer(text=content, parse_mode=None)
@@ -249,44 +242,26 @@ def extract_text_from_blocks(blocks: list) -> str:
     return "\n".join(parts) if parts else ""
 
 
+def extract_rich_markdown(text: str) -> str | None:
+    """Extract markdown content from code block for rich message."""
+    match = re.search(r"```(?:md|markdown)?\s*\n(.*?)```", text, re.DOTALL)
+    if match:
+        return match.group(1).strip()
+    return None
+
+
 async def send_ai_response(message: Message, response_text: str, is_private: bool):
-    """Send AI response: RichMessage JSON if present, otherwise plain text."""
-    rich_data = extract_json(response_text)
-    has_blocks = rich_data and "blocks" in rich_data if rich_data else False
-    has_table = (
-        any(b.get("type") == "table" for b in rich_data.get("blocks", []))
-        if has_blocks
-        else False
-    )
-    print(f"send_ai_response: has_blocks={has_blocks}, has_table={has_table}")
-    if has_blocks:
-        if has_table:
-            blocks = normalize_table_blocks(rich_data["blocks"])
-            result = await send_rich_message(
-                message.chat.id,
-                blocks,
-                reply_to=None if is_private else message.message_id,
-            )
-            print(f"send_ai_response: table result={result}")
-            if result and result.get("ok"):
-                return
-            print(f"sendRichMessage table failed: {result}")
-            plain_text = extract_text_from_blocks(blocks)
-            if plain_text:
-                response_text = plain_text
-        else:
-            result = await send_rich_message(
-                message.chat.id,
-                rich_data["blocks"],
-                reply_to=None if is_private else message.message_id,
-            )
-            print(f"send_ai_response: rich result={result}")
-            if result and result.get("ok"):
-                return
-            print(f"sendRichMessage failed: {result}")
-            plain_text = extract_text_from_blocks(rich_data["blocks"])
-            if plain_text:
-                response_text = plain_text
+    """Send AI response: rich Markdown if present, otherwise plain text."""
+    rich_md = extract_rich_markdown(response_text)
+    if rich_md:
+        result = await send_rich_message(
+            message.chat.id,
+            rich_md,
+            reply_to=None if is_private else message.message_id,
+        )
+        if result and result.get("ok"):
+            return
+        print(f"sendRichMessage failed: {result}")
 
     preview_opts = LinkPreviewOptions(is_disabled=False, prefer_small_media=True)
     if is_private:
@@ -362,59 +337,21 @@ async def get_formatted_memories(user_id_str: str) -> str:
     try:
         raw_items = await redis_client.lrange(f"memory_list:{user_id_str}", 0, -1)
         if not raw_items:
-            return json.dumps(
-                {
-                    "blocks": [
-                        {
-                            "type": "paragraph",
-                            "text": [
-                                {
-                                    "type": "text",
-                                    "text": "Your memory list is currently empty.",
-                                }
-                            ],
-                        }
-                    ]
-                }
-            )
+            return "```\nYour memory list is currently empty.\n```"
 
         memories = [
             item.decode("utf-8") if isinstance(item, bytes) else item
             for item in raw_items
         ]
 
-        blocks = [
-            {
-                "type": "paragraph",
-                "text": [
-                    {
-                        "type": "bold",
-                        "text": [{"type": "text", "text": "Active Memory Directives"}],
-                    }
-                ],
-            },
-            {"type": "divider"},
-            {
-                "type": "list",
-                "items": [{"type": "text", "text": mem} for mem in memories],
-            },
-        ]
-
-        return json.dumps({"blocks": blocks})
+        lines = ["```", "**Active Memory Directives**", "---"]
+        for mem in memories:
+            lines.append(f"- {mem}")
+        lines.append("```")
+        return "\n".join(lines)
     except Exception as e:
         print(f"Error fetching memory list format: {e}")
-        return json.dumps(
-            {
-                "blocks": [
-                    {
-                        "type": "paragraph",
-                        "text": [
-                            {"type": "text", "text": "Could not retrieve memory list."}
-                        ],
-                    }
-                ]
-            }
-        )
+        return "```\nCould not retrieve memory list.\n```"
 
 
 async def collapse_message(chat_id: int, message_id: int, delay: int):
@@ -538,44 +475,7 @@ async def handle_delete(message: Message):
 
 @router.message(Command("help", "commands"))
 async def handle_help(message: Message):
-    content = json.dumps(
-        {
-            "blocks": [
-                {
-                    "type": "paragraph",
-                    "text": [
-                        {
-                            "type": "bold",
-                            "text": [{"type": "text", "text": "Sen Bot Command Hub"}],
-                        }
-                    ],
-                },
-                {"type": "divider"},
-                {
-                    "type": "list",
-                    "items": [
-                        {
-                            "type": "text",
-                            "text": "remember [item],, [item2] - Adds items to memory",
-                        },
-                        {
-                            "type": "text",
-                            "text": "what do you remember - Displays rules in a formatted list",
-                        },
-                        {
-                            "type": "text",
-                            "text": "edit [number] [new fact] - Edits a specific rule",
-                        },
-                        {
-                            "type": "text",
-                            "text": "forget [number],, [number2] - Removes memories",
-                        },
-                        {"type": "text", "text": "forget all - Clears all memory"},
-                    ],
-                },
-            ]
-        }
-    )
+    content = "```\n**Sen Bot Command Hub**\n---\n- remember [item],, [item2] - Adds items to memory\n- what do you remember - Displays rules in a formatted list\n- edit [number] [new fact] - Edits a specific rule\n- forget [number],, [number2] - Removes memories\n- forget all - Clears all memory\n```"
     await send_formatted_response(message, content, auto_delete=60)
 
 
@@ -878,10 +778,9 @@ async def handle_conversation(message: Message):
                     "If you do not know the answer or the provided context is insufficient, state 'I don't have enough details to answer that accurately' directly without guessing. "
                     "Do not assume personal details about the user unless they are explicitly provided in your memory list. "
                     "By default, respond as plain text. Do not use HTML tags, markdown, or code blocks. "
-                    "Use rich message JSON ONLY when the response benefits from structured formatting: tables, lists, headers, or when the user explicitly asks for formatted output. "
-                    'Rich message format: {"blocks":[{"type":"paragraph","text":[{"type":"text","text":"Your message"}]}]}. '
-                    "Available block types: paragraph, list, table, divider, section_heading, preformatted. "
-                    "RichText types for inline formatting: bold, italic, code, url."
+                    "Use rich Markdown formatting ONLY when the response benefits from structured formatting: tables, lists, headers, or when the user explicitly asks for formatted output. "
+                    "Rich Markdown examples: **bold**, *italic*, # Heading, - list item, | Header | Header |\\n|---|---|\\n| cell | cell |. "
+                    "Wrap the entire rich response in a code block like: ```\\nyour rich markdown here\\n```"
                 )
 
                 if search_context:
