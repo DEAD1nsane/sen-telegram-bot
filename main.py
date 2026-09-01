@@ -74,15 +74,16 @@ async def send_rich_message(chat_id: int, blocks: list, reply_to: int = None):
     payload = {"chat_id": chat_id, "rich_message": {"blocks": blocks}}
     if reply_to:
         payload["reply_parameters"] = {"message_id": reply_to}
+    print(f"sendRichMessage payload blocks: {json.dumps(blocks, indent=2)[:500]}")
     try:
         async with httpx.AsyncClient() as client:
             res = await client.post(url, json=payload, timeout=10.0)
             result = res.json()
             if not result.get("ok"):
-                print(f"sendRichMessage failed: {result}")
+                print(f"sendRichMessage API error: {result}")
             return result
     except Exception as e:
-        print(f"sendRichMessage error: {e}")
+        print(f"sendRichMessage exception: {e}")
         return None
 
 
@@ -251,8 +252,14 @@ def extract_text_from_blocks(blocks: list) -> str:
 async def send_ai_response(message: Message, response_text: str, is_private: bool):
     """Send AI response: RichMessage JSON if present, otherwise plain text."""
     rich_data = extract_json(response_text)
-    if rich_data and "blocks" in rich_data:
-        has_table = any(b.get("type") == "table" for b in rich_data["blocks"])
+    has_blocks = rich_data and "blocks" in rich_data if rich_data else False
+    has_table = (
+        any(b.get("type") == "table" for b in rich_data.get("blocks", []))
+        if has_blocks
+        else False
+    )
+    print(f"send_ai_response: has_blocks={has_blocks}, has_table={has_table}")
+    if has_blocks:
         if has_table:
             blocks = normalize_table_blocks(rich_data["blocks"])
             result = await send_rich_message(
@@ -260,6 +267,7 @@ async def send_ai_response(message: Message, response_text: str, is_private: boo
                 blocks,
                 reply_to=None if is_private else message.message_id,
             )
+            print(f"send_ai_response: table result={result}")
             if result and result.get("ok"):
                 return
             print(f"sendRichMessage table failed: {result}")
@@ -272,6 +280,7 @@ async def send_ai_response(message: Message, response_text: str, is_private: boo
                 rich_data["blocks"],
                 reply_to=None if is_private else message.message_id,
             )
+            print(f"send_ai_response: rich result={result}")
             if result and result.get("ok"):
                 return
             print(f"sendRichMessage failed: {result}")
