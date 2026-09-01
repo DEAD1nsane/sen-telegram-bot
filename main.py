@@ -1,11 +1,17 @@
 import os
 import re
+import json
 import asyncio
 from datetime import datetime, timezone
 from aiohttp import web
 
 from aiogram import Bot, Dispatcher, Router, F
-from aiogram.types import Message, FSInputFile, LinkPreviewOptions
+from aiogram.types import (
+    Message,
+    FSInputFile,
+    LinkPreviewOptions,
+    Update,
+)
 from aiogram.filters import Command
 from aiogram.client.default import DefaultBotProperties
 
@@ -54,6 +60,113 @@ if not gemini_api_key:
 
 gemini_client = genai.Client(api_key=gemini_api_key)
 OWNER_ID = int(os.getenv("OWNER_ID", "0"))
+
+
+# ==========================================
+# Telegram Bot API: Rich Messages & Streaming
+# ==========================================
+
+
+async def send_rich_message(chat_id: int, blocks: list, reply_to: int = None):
+    """Send a rich formatted message via sendRichMessage."""
+    url = f"https://api.telegram.org/bot{API_TOKEN}/sendRichMessage"
+    payload = {"chat_id": chat_id, "rich_message": {"blocks": blocks}}
+    if reply_to:
+        payload["reply_parameters"] = {"message_id": reply_to}
+    try:
+        async with httpx.AsyncClient() as client:
+            res = await client.post(url, json=payload, timeout=10.0)
+            return res.json()
+    except Exception as e:
+        print(f"sendRichMessage error: {e}")
+        return None
+
+
+async def send_message_draft(
+    chat_id: int, text: str, reply_to: int = None, can_stop: bool = True
+):
+    """Send or edit a streaming draft (Thinking... or partial response)."""
+    url = f"https://api.telegram.org/bot{API_TOKEN}/sendMessageDraft"
+    payload = {
+        "chat_id": chat_id,
+        "content": text,
+        "can_stop": can_stop,
+    }
+    if reply_to:
+        payload["reply_parameters"] = {"message_id": reply_to}
+    try:
+        async with httpx.AsyncClient() as client:
+            res = await client.post(url, json=payload, timeout=10.0)
+            return res.json()
+    except Exception as e:
+        print(f"sendMessageDraft error: {e}")
+        return None
+
+
+async def send_rich_message_draft(
+    chat_id: int, blocks: list, reply_to: int = None, can_stop: bool = True
+):
+    """Send or edit a streaming rich draft."""
+    url = f"https://api.telegram.org/bot{API_TOKEN}/sendRichMessageDraft"
+    payload = {
+        "chat_id": chat_id,
+        "rich_message": {"blocks": blocks},
+        "can_stop": can_stop,
+    }
+    if reply_to:
+        payload["reply_parameters"] = {"message_id": reply_to}
+    try:
+        async with httpx.AsyncClient() as client:
+            res = await client.post(url, json=payload, timeout=10.0)
+            return res.json()
+    except Exception as e:
+        print(f"sendRichMessageDraft error: {e}")
+        return None
+
+
+def extract_json(text: str) -> dict | None:
+    """Extract the first JSON object found in text."""
+    match = re.search(r"\{.*?\}", text, re.DOTALL)
+    if match:
+        try:
+            return json.loads(match.group(0))
+        except json.JSONDecodeError:
+            pass
+    return None
+
+
+async def send_ai_response(message: Message, response_text: str, is_private: bool):
+    """Intelligently send AI response: RichMessage JSON or plain text with fallback."""
+    rich_data = extract_json(response_text)
+    if rich_data and "blocks" in rich_data:
+        result = await send_rich_message(
+            message.chat.id,
+            rich_data["blocks"],
+            reply_to=None if is_private else message.message_id,
+        )
+        if result and result.get("ok"):
+            return
+
+    preview_opts = LinkPreviewOptions(is_disabled=False, prefer_small_media=True)
+    try:
+        if is_private:
+            await message.answer(text=response_text, link_preview_options=preview_opts)
+        else:
+            await message.answer(
+                text=response_text,
+                reply_to_message_id=message.message_id,
+                link_preview_options=preview_opts,
+            )
+    except Exception:
+        if is_private:
+            await message.answer(text=response_text, parse_mode=None)
+        else:
+            await message.answer(
+                text=response_text,
+                reply_to_message_id=message.message_id,
+                parse_mode=None,
+            )
+
 
 # ==========================================
 # Helpers
@@ -522,6 +635,13 @@ async def handle_conversation(message: Message):
             await redis_client.set(cooldown_key, "1", ex=4)
 
             try:
+                await send_message_draft(
+                    chat_id,
+                    "<i>Thinking...</i>",
+                    reply_to=None if is_private else msg_id,
+                    can_stop=True,
+                )
+
                 raw_mem = await redis_client.lrange(f"memory_list:{user_id_str}", 0, -1)
                 saved_facts = [
                     i.decode("utf-8") if isinstance(i, bytes) else i for i in raw_mem
@@ -603,9 +723,10 @@ async def handle_conversation(message: Message):
                     "If you do not know the answer or the provided context is insufficient, state 'I don't have enough details to answer that accurately' directly without guessing. "
                     "Do not assume personal details about the user unless they are explicitly provided in your memory list. "
                     "CRITICAL FORMATTING RULE: Format regular text using standard Telegram HTML tags (<b>, <i>, <ul>, <li>). "
-                    "When asked to create a table, you MUST generate a text grid using pipe characters (|) "
-                    "and wrap the ENTIRE table inside <pre> and </pre> tags so Telegram renders it as a monospaced aligned grid. "
-                    "Never output raw pipe tables without <pre> tags. Do not use raw markdown asterisks."
+                    "When asked to create a table, you MUST output a JSON object with a 'blocks' key containing an InputRichMessage block array. "
+                    'Example table format: {"blocks":[{"type":"table","is_compact":true,"cells":[[{"type":"text","text":"Name"},{"type":"text","text":"Age"}],[{"type":"text","text":"Alice"},{"type":"text","text":"25"}]]}]}'
+                    "Do NOT output tables as pipe characters or <pre> blocks. Always use the JSON rich message format for tables. "
+                    "Do not use raw markdown asterisks."
                 )
 
                 if search_context:
@@ -680,20 +801,7 @@ async def handle_conversation(message: Message):
 
                 response_text = response_text.replace("\u2022", "").replace("```", "")
 
-                preview_opts = LinkPreviewOptions(
-                    is_disabled=False, prefer_small_media=True
-                )
-
-                if is_private:
-                    await message.answer(
-                        text=response_text, link_preview_options=preview_opts
-                    )
-                else:
-                    await message.answer(
-                        text=response_text,
-                        reply_to_message_id=msg_id,
-                        link_preview_options=preview_opts,
-                    )
+                await send_ai_response(message, response_text, is_private)
 
                 clean_history_text = re.sub(r"<[^>]+>", "", response_text)
                 await redis_client.rpush(
