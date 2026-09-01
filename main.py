@@ -69,6 +69,7 @@ OWNER_ID = int(os.getenv("OWNER_ID", "0"))
 
 async def send_rich_message(chat_id: int, blocks: list, reply_to: int = None):
     """Send a rich formatted message via sendRichMessage."""
+    blocks = normalize_table_blocks(blocks)
     url = f"https://api.telegram.org/bot{API_TOKEN}/sendRichMessage"
     payload = {"chat_id": chat_id, "rich_message": {"blocks": blocks}}
     if reply_to:
@@ -107,6 +108,7 @@ async def send_rich_message_draft(
     chat_id: int, blocks: list, reply_to: int = None, can_stop: bool = True
 ):
     """Send or edit a streaming rich draft."""
+    blocks = normalize_table_blocks(blocks)
     url = f"https://api.telegram.org/bot{API_TOKEN}/sendRichMessageDraft"
     payload = {
         "chat_id": chat_id,
@@ -173,6 +175,29 @@ async def send_formatted_response(message: Message, content: str, auto_delete: i
         )
 
 
+def normalize_table_blocks(blocks: list) -> list:
+    """Convert AI-generated table format (headers/rows) to Telegram API format (cells with is_header)."""
+    normalized = []
+    for block in blocks:
+        if block.get("type") == "table" and "headers" in block and "rows" in block:
+            cells = []
+            for header in block.get("headers", []):
+                text = (
+                    header.get("text", "") if isinstance(header, dict) else str(header)
+                )
+                cells.append([{"type": "text", "text": text, "is_header": True}])
+            for row in block.get("rows", []):
+                row_cells = []
+                for cell in row:
+                    text = cell.get("text", "") if isinstance(cell, dict) else str(cell)
+                    row_cells.append({"type": "text", "text": text})
+                cells.append(row_cells)
+            normalized.append({"type": "table", "cells": cells})
+        else:
+            normalized.append(block)
+    return normalized
+
+
 def extract_text_from_blocks(blocks: list) -> str:
     """Extract plain text from rich message blocks for fallback."""
     parts = []
@@ -187,9 +212,22 @@ def extract_text_from_blocks(blocks: list) -> str:
                 if item.get("type") == "text":
                     parts.append(f"- {item.get('text', '')}")
         elif btype == "table":
-            for row in block.get("cells", []):
-                cells = [c.get("text", "") for c in row if c.get("type") == "text"]
-                parts.append(" | ".join(cells))
+            if "headers" in block and "rows" in block:
+                headers = [
+                    h.get("text", "") if isinstance(h, dict) else str(h)
+                    for h in block.get("headers", [])
+                ]
+                parts.append(" | ".join(headers))
+                for row in block.get("rows", []):
+                    cells = [
+                        c.get("text", "") if isinstance(c, dict) else str(c)
+                        for c in row
+                    ]
+                    parts.append(" | ".join(cells))
+            else:
+                for row in block.get("cells", []):
+                    cells = [c.get("text", "") for c in row if c.get("type") == "text"]
+                    parts.append(" | ".join(cells))
     return "\n".join(parts) if parts else ""
 
 
