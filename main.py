@@ -77,7 +77,10 @@ async def send_rich_message(chat_id: int, blocks: list, reply_to: int = None):
     try:
         async with httpx.AsyncClient() as client:
             res = await client.post(url, json=payload, timeout=10.0)
-            return res.json()
+            result = res.json()
+            if not result.get("ok"):
+                print(f"sendRichMessage failed: {result}")
+            return result
     except Exception as e:
         print(f"sendRichMessage error: {e}")
         return None
@@ -180,18 +183,24 @@ def normalize_table_blocks(blocks: list) -> list:
     normalized = []
     for block in blocks:
         if block.get("type") == "table" and "headers" in block and "rows" in block:
+            headers = block.get("headers", [])
+            rows = block.get("rows", [])
+            num_headers = len(headers)
             cells = []
-            for header in block.get("headers", []):
+            header_row = []
+            for header in headers:
                 text = (
                     header.get("text", "") if isinstance(header, dict) else str(header)
                 )
-                cells.append([{"type": "text", "text": text, "is_header": True}])
-            for row in block.get("rows", []):
-                row_cells = []
+                header_row.append({"type": "text", "text": text, "is_header": True})
+            cells.append(header_row)
+            flat_cells = []
+            for row in rows:
                 for cell in row:
                     text = cell.get("text", "") if isinstance(cell, dict) else str(cell)
-                    row_cells.append({"type": "text", "text": text})
-                cells.append(row_cells)
+                    flat_cells.append({"type": "text", "text": text})
+            for i in range(0, len(flat_cells), num_headers):
+                cells.append(flat_cells[i : i + num_headers])
             normalized.append({"type": "table", "cells": cells})
         else:
             normalized.append(block)
