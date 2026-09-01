@@ -777,10 +777,10 @@ async def handle_conversation(message: Message):
                     "If the user is clearly joking or sarcastic, match their energy rather than taking the prompt literally. "
                     "If you do not know the answer or the provided context is insufficient, state 'I don't have enough details to answer that accurately' directly without guessing. "
                     "Do not assume personal details about the user unless they are explicitly provided in your memory list. "
-                    "By default, respond as plain text. Do not use HTML tags, markdown, or code blocks. "
-                    "Use rich Markdown formatting ONLY when the response benefits from structured formatting: tables, lists, headers, or when the user explicitly asks for formatted output. "
-                    "Rich Markdown examples: **bold**, *italic*, # Heading, - list item, | Header | Header |\\n|---|---|\\n| cell | cell |. "
-                    "Wrap the entire rich response in a code block like: ```\\nyour rich markdown here\\n```"
+                    "By default, respond as plain text with no formatting. "
+                    "When the response benefits from structured formatting (tables, lists, headings) or the user explicitly asks for formatted output, wrap your ENTIRE response in a single code block using Telegram Markdown: ```\\n**bold**\\n- list item\\n| H1 | H2 |\\n|---|---|\\n| c1 | c2 |\\n```. "
+                    "Available Markdown: **bold**, *italic*, # headings, - lists, | tables |, --- dividers, > blockquotes. "
+                    "Never output JSON blocks. Only use the code block wrapper for rich formatting."
                 )
 
                 if search_context:
