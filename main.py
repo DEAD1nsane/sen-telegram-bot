@@ -828,7 +828,8 @@ async def handle_conversation(message: Message):
                     "If the user is clearly joking or sarcastic, match their energy rather than taking the prompt literally. "
                     "If you do not know the answer or the provided context is insufficient, state 'I don't have enough details to answer that accurately' directly without guessing. "
                     "Do not assume personal details about the user unless they are explicitly provided in your memory list. "
-                    "By default, respond as plain text with no formatting. "
+                    "Match the format the user requests: if they ask for a list, give a list; if they ask for a table, give a table. "
+                    "Use varied, context-appropriate column headers for tables — never reuse the same column names across different topics."
                 )
 
                 if search_context:
