@@ -288,8 +288,22 @@ def json_blocks_to_markdown(blocks: list) -> str:
     return "\n".join(parts)
 
 
+def has_markdown_formatting(text: str) -> bool:
+    """Check if text contains markdown table or list formatting."""
+    lines = text.strip().split("\n")
+    for line in lines:
+        stripped = line.strip()
+        if re.match(r"^\|.*\|$", stripped):
+            return True
+        if re.match(r"^[-*+]\s+", stripped):
+            return True
+        if re.match(r"^#{1,6}\s+", stripped):
+            return True
+    return False
+
+
 def extract_rich_markdown(text: str) -> str | None:
-    """Extract markdown content from code block or JSON blocks for rich message."""
+    """Extract markdown content from code block, JSON blocks, or detect natural markdown."""
     match = re.search(r"```(?:md|markdown)?\s*\n(.*?)```", text, re.DOTALL)
     if match:
         return match.group(1).strip()
@@ -298,6 +312,8 @@ def extract_rich_markdown(text: str) -> str | None:
         md = json_blocks_to_markdown(rich_data["blocks"])
         if md:
             return md
+    if has_markdown_formatting(text):
+        return text.strip()
     return None
 
 
