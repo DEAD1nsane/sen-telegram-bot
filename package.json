@@ -6,8 +6,7 @@
   "type": "commonjs",
   "scripts": {
     "start": "node upload.js",
-    "test": "echo \"No tests configured yet\"",
-    "prepare": "husky"
+    "test": "echo \"No tests configured yet\""
   },
   "repository": {
     "type": "git",
