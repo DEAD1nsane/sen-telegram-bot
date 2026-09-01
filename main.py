@@ -308,25 +308,6 @@ def has_markdown_formatting(text: str) -> bool:
     return False
 
 
-def html_to_blocks(text: str) -> list | None:
-    """Convert HTML details/summary tags to Telegram blocks."""
-    details_pattern = re.compile(
-        r"<details>\s*<summary>(.*?)</summary>\s*(.*?)</details>",
-        re.DOTALL,
-    )
-    matches = details_pattern.findall(text)
-    if not matches:
-        return None
-    blocks = []
-    for summary, content in matches:
-        blocks.append({
-            "type": "details",
-            "summary": [{"type": "text", "text": summary.strip()}],
-            "blocks": [{"type": "paragraph", "text": [{"type": "text", "text": content.strip()}]}],
-        })
-    return blocks if blocks else None
-
-
 def extract_rich_content(text: str) -> tuple[str | None, list | None]:
     """Extract rich content: markdown string or blocks. Returns (markdown, blocks)."""
     match = re.search(r"```(?:md|markdown)?\s*\n(.*?)```", text, re.DOTALL)
@@ -337,10 +318,7 @@ def extract_rich_content(text: str) -> tuple[str | None, list | None]:
         md = json_blocks_to_markdown(rich_data["blocks"])
         if md:
             return md, None
-    blocks = html_to_blocks(text)
-    if blocks:
-        return None, blocks
-    if has_markdown_formatting(text):
+    if has_markdown_formatting(text) or "<details>" in text or "<details open>" in text:
         return text.strip(), None
     return None, None
 
