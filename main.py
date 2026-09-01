@@ -778,9 +778,6 @@ async def handle_conversation(message: Message):
                     "If you do not know the answer or the provided context is insufficient, state 'I don't have enough details to answer that accurately' directly without guessing. "
                     "Do not assume personal details about the user unless they are explicitly provided in your memory list. "
                     "By default, respond as plain text with no formatting. "
-                    "When the response benefits from structured formatting (tables, lists, headings) or the user explicitly asks for formatted output, wrap your ENTIRE response in a single code block using Telegram Markdown: ```\\n**bold**\\n- list item\\n| H1 | H2 |\\n|---|---|\\n| c1 | c2 |\\n```. "
-                    "Available Markdown: **bold**, *italic*, # headings, - lists, | tables |, --- dividers, > blockquotes. "
-                    "Never output JSON blocks. Only use the code block wrapper for rich formatting."
                 )
 
                 if search_context:
