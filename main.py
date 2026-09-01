@@ -477,12 +477,7 @@ async def handle_conversation(message: Message):
     )
     is_private = message.chat.type == "private"
 
-    if (
-        is_tagged
-        or is_reply_to_bot
-        or is_private
-        or message.content_type in ["voice", "audio"]
-    ):
+    if is_tagged or is_reply_to_bot or is_private:
         user_id_str = str(message.from_user.id)
         chat_id = message.chat.id
         msg_id = message.message_id
@@ -650,14 +645,14 @@ async def handle_conversation(message: Message):
                         types.Part.from_bytes(data=audio_bytes, mime_type=audio_mime),
                         final_prompt,
                     ]
-                    response = await gemini_client.aio.models.generate_content(
+                    chat = gemini_client.aio.chats.create(
                         model="gemini-3.5-flash-lite",
-                        contents=contents,
                         config=types.GenerateContentConfig(
                             system_instruction=bot_instructions,
                             safety_settings=safety_overrides,
                         ),
                     )
+                    response = await chat.send_message(contents)
                 else:
                     try:
                         chat = gemini_client.aio.chats.create(
