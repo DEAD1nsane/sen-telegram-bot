@@ -21,6 +21,11 @@ SEARXNG_URL = os.getenv(
     "SEARXNG_URL", "https://searxng-railway-production-3252.up.railway.app/search"
 )
 
+genai.configure(api_key=GEMINI_API_KEY)
+model = genai.GenerativeModel(
+    "gemini-1.5-flash"
+)  # Using standard flash for reliability
+
 # Setup Logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -32,20 +37,20 @@ storage = RedisStorage(redis=redis)
 dp = Dispatcher(storage=storage)
 search_router = Router()
 # Persistent HTTP session
-http_session = aiohttp.ClientSession()
+http_session = None
 
 
-genai.configure(api_key=GEMINI_API_KEY)
-model = genai.GenerativeModel(
-    "gemini-1.5-flash"
-)  # Using standard flash for reliability
+async def get_http_session():
+    global http_session
+    if http_session is None:
+        http_session = aiohttp.ClientSession()
+    return http_session
 
 
 # ... (Helpers)
 async def perform_search(query: str) -> str:
-    async with http_session.get(
-        SEARXNG_URL, params={"q": query, "format": "json"}
-    ) as resp:
+    session = await get_http_session()
+    async with session.get(SEARXNG_URL, params={"q": query, "format": "json"}) as resp:
         if resp.status == 200:
             data = await resp.json()
             snippets = [
@@ -61,7 +66,8 @@ async def perform_search(query: str) -> str:
 async def send_rich_message(chat_id, rich_message_data):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendRichMessage"
     payload = {"chat_id": chat_id, "rich_message": rich_message_data}
-    async with http_session.post(url, json=payload) as resp:
+    session = await get_http_session()
+    async with session.post(url, json=payload) as resp:
         return await resp.json()
 
 
@@ -86,6 +92,7 @@ async def send_ai_response(message: types.Message, response_text: str):
             pass
 
     # Fallback to plain text if not valid RichMessage JSON
+    # or if Gemini generation fails
     try:
         await message.answer(response_text)
     except Exception:
@@ -101,8 +108,12 @@ async def handle_search(message: types.Message):
         "If you need to display a table or complex layout, output ONLY the valid JSON for a Telegram InputRichMessage "
         "(with 'blocks' array containing InputRichBlockTable etc). Do not include any introductory text."
     )
-    response = model.generate_content(prompt)
-    await send_ai_response(message, response.text)
+    try:
+        response = model.generate_content(prompt)
+        response_text = response.text
+    except Exception:
+        response_text = "I'm having trouble generating a response right now. Please try again later."
+    await send_ai_response(message, response_text)
 
 
 dp.include_router(search_router)
@@ -122,8 +133,12 @@ async def handle_message(message: types.Message):
         "If you need to display a table or complex layout, output ONLY the valid JSON for a Telegram InputRichMessage "
         "(with 'blocks' array containing InputRichBlockTable etc). Do not include any introductory text."
     )
-    response = model.generate_content(prompt)
-    await send_ai_response(message, response.text)
+    try:
+        response = model.generate_content(prompt)
+        response_text = response.text
+    except Exception:
+        response_text = "I'm having trouble generating a response right now. Please try again later."
+    await send_ai_response(message, response_text)
 
 
 # ==========================================
@@ -149,6 +164,9 @@ async def run_http_server():
 async def main():
     # Start healthcheck server in background
     asyncio.create_task(run_http_server())
+
+    # Delete webhook if exists to avoid conflict with polling
+    await bot.delete_webhook(drop_pending_updates=True)
 
     # Start polling
     logger.info("Starting bot polling")
