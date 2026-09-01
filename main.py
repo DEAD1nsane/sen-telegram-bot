@@ -125,13 +125,19 @@ async def cmd_start(message: types.Message):
     await message.answer("<b>Sen Bot</b> initialized. Use commands or chat directly.")
 
 
+TRIGGER_KEYWORDS = {"sen", "magic", "magical"}
+
+
 @dp.message()
 async def handle_message(message: types.Message):
     global BOT_USERNAME
     if BOT_USERNAME is None:
         bot_info = await Bot(token=os.getenv("BOT_TOKEN")).get_me()
         BOT_USERNAME = f"@{bot_info.username}"
-    if BOT_USERNAME not in message.text:
+    text_lower = message.text.lower() if message.text else ""
+    if BOT_USERNAME not in message.text and not any(
+        kw in text_lower for kw in TRIGGER_KEYWORDS
+    ):
         if not (
             message.reply_to_message
             and message.reply_to_message.from_user.id == (await bot.get_me()).id
