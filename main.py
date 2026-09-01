@@ -853,7 +853,8 @@ async def handle_conversation(message: Message):
                     "Do not assume personal details about the user unless they are explicitly provided in your memory list. "
                     "CRITICAL: If the user says 'list', respond with a bullet list. If the user says 'table', respond with a table. Never substitute one format for the other. "
                     "Use varied, context-appropriate column headers for tables — never reuse the same column names across different topics. "
-                    "Use normal, straightforward language in lists and tables — no custom slang or quirky descriptors."
+                    "Use normal, straightforward language in lists and tables — no custom slang or quirky descriptors. "
+                    "When the user asks for sources or citations, use footnotes: write[^1] inline and define[^1]: source at the bottom."
                 )
 
                 if search_context:
