@@ -2,6 +2,7 @@ import asyncio
 import logging
 import json
 import os
+import re
 import aiohttp
 from aiohttp import web
 from aiogram import Bot, Dispatcher, types, F, Router
@@ -30,6 +31,9 @@ redis = Redis.from_url(REDIS_URL)
 storage = RedisStorage(redis=redis)
 dp = Dispatcher(storage=storage)
 search_router = Router()
+# Persistent HTTP session
+http_session = aiohttp.ClientSession()
+
 
 genai.configure(api_key=GEMINI_API_KEY)
 model = genai.GenerativeModel(
@@ -39,27 +43,66 @@ model = genai.GenerativeModel(
 
 # ... (Helpers)
 async def perform_search(query: str) -> str:
-    async with aiohttp.ClientSession() as session:
-        async with session.get(
-            SEARXNG_URL, params={"q": query, "format": "json"}
-        ) as resp:
-            if resp.status == 200:
-                data = await resp.json()
-                snippets = [
-                    f"Title: {r.get('title')}\nURL: {r.get('url')}"
-                    for r in data.get("results", [])[:5]
-                ]
-                return "\n\n".join(snippets)
+    async with http_session.get(
+        SEARXNG_URL, params={"q": query, "format": "json"}
+    ) as resp:
+        if resp.status == 200:
+            data = await resp.json()
+            snippets = [
+                f"Title: {r.get('title')}\nURL: {r.get('url')}"
+                for r in data.get("results", [])[:5]
+            ]
+            return "\n\n".join(snippets)
     return ""
+
+
+# ... (Router setup)
+# Helper to send Rich Messages
+async def send_rich_message(chat_id, rich_message_data):
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendRichMessage"
+    payload = {"chat_id": chat_id, "rich_message": rich_message_data}
+    async with http_session.post(url, json=payload) as resp:
+        return await resp.json()
+
+
+def extract_json(text):
+    # Try to find the first '{' and last '}'
+    match = re.search(r"\{.*?\}", text, re.DOTALL)
+    if match:
+        return match.group(0)
+    return None
+
+
+async def send_ai_response(message: types.Message, response_text: str):
+    # Try to extract and parse JSON for RichMessage
+    json_str = extract_json(response_text)
+    if json_str:
+        try:
+            rich_data = json.loads(json_str)
+            if "blocks" in rich_data:
+                await send_rich_message(message.chat.id, rich_data)
+                return
+        except json.JSONDecodeError:
+            pass
+
+    # Fallback to plain text if not valid RichMessage JSON
+    try:
+        await message.answer(response_text)
+    except Exception:
+        await message.answer(response_text, parse_mode=None)
 
 
 # ... (Router setup)
 @search_router.message(F.text.lower().contains("search"))
 async def handle_search(message: types.Message):
     search_context = await perform_search(message.text)
-    prompt = f"Context: {search_context}\n\nQuestion: {message.text}"
+    prompt = (
+        f"Context: {search_context}\n\nQuestion: {message.text}\n\n"
+        "If you need to display a table or complex layout, output ONLY the valid JSON for a Telegram InputRichMessage "
+        "(with 'blocks' array containing InputRichBlockTable etc). Do not include any introductory text."
+    )
     response = model.generate_content(prompt)
-    await message.answer(response.text)
+    await send_ai_response(message, response.text)
 
 
 dp.include_router(search_router)
@@ -74,8 +117,13 @@ async def cmd_start(message: types.Message):
 @dp.message()
 async def handle_message(message: types.Message):
     # Only if not handled by search_router
-    response = model.generate_content(message.text)
-    await message.answer(response.text)
+    prompt = (
+        f"Question: {message.text}\n\n"
+        "If you need to display a table or complex layout, output ONLY the valid JSON for a Telegram InputRichMessage "
+        "(with 'blocks' array containing InputRichBlockTable etc). Do not include any introductory text."
+    )
+    response = model.generate_content(prompt)
+    await send_ai_response(message, response.text)
 
 
 # ==========================================
