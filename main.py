@@ -47,7 +47,7 @@ SEARXNG_URL = os.getenv(
     "SEARXNG_URL", "https://searxng-railway-production-3252.up.railway.app/search"
 )
 
-bot = Bot(token=API_TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
+bot = Bot(token=API_TOKEN)
 dp = Dispatcher()
 router = Router()
 dp.include_router(router)
@@ -135,8 +135,40 @@ def extract_json(text: str) -> dict | None:
     return None
 
 
+async def send_formatted_response(message: Message, content: str, auto_delete: int = 0):
+    """Send content: RichMessage JSON if present, otherwise plain text."""
+    rich_data = extract_json(content)
+    if rich_data and "blocks" in rich_data:
+        result = await send_rich_message(
+            message.chat.id,
+            rich_data["blocks"],
+            reply_to=None if message.chat.type == "private" else message.message_id,
+        )
+        if result and result.get("ok"):
+            if auto_delete > 0:
+                asyncio.create_task(
+                    collapse_message(
+                        message.chat.id,
+                        result.get("result", {}).get("message_id", 0),
+                        auto_delete,
+                    )
+                )
+            return
+
+    if message.chat.type == "private":
+        sent_msg = await message.answer(text=content, parse_mode=None)
+    else:
+        sent_msg = await message.answer(
+            text=content, parse_mode=None, reply_to_message_id=message.message_id
+        )
+    if sent_msg and auto_delete > 0:
+        asyncio.create_task(
+            collapse_message(message.chat.id, sent_msg.message_id, auto_delete)
+        )
+
+
 async def send_ai_response(message: Message, response_text: str, is_private: bool):
-    """Intelligently send AI response: RichMessage JSON or plain text with fallback."""
+    """Send AI response: RichMessage JSON if present, otherwise plain text."""
     rich_data = extract_json(response_text)
     if rich_data and "blocks" in rich_data:
         result = await send_rich_message(
@@ -148,24 +180,19 @@ async def send_ai_response(message: Message, response_text: str, is_private: boo
             return
 
     preview_opts = LinkPreviewOptions(is_disabled=False, prefer_small_media=True)
-    try:
-        if is_private:
-            await message.answer(text=response_text, link_preview_options=preview_opts)
-        else:
-            await message.answer(
-                text=response_text,
-                reply_to_message_id=message.message_id,
-                link_preview_options=preview_opts,
-            )
-    except Exception:
-        if is_private:
-            await message.answer(text=response_text, parse_mode=None)
-        else:
-            await message.answer(
-                text=response_text,
-                reply_to_message_id=message.message_id,
-                parse_mode=None,
-            )
+    if is_private:
+        await message.answer(
+            text=response_text,
+            parse_mode=None,
+            link_preview_options=preview_opts,
+        )
+    else:
+        await message.answer(
+            text=response_text,
+            parse_mode=None,
+            reply_to_message_id=message.message_id,
+            link_preview_options=preview_opts,
+        )
 
 
 # ==========================================
@@ -226,34 +253,67 @@ async def get_formatted_memories(user_id_str: str) -> str:
     try:
         raw_items = await redis_client.lrange(f"memory_list:{user_id_str}", 0, -1)
         if not raw_items:
-            return "Your memory list is currently empty."
+            return json.dumps(
+                {
+                    "blocks": [
+                        {
+                            "type": "paragraph",
+                            "text": [
+                                {
+                                    "type": "text",
+                                    "text": "Your memory list is currently empty.",
+                                }
+                            ],
+                        }
+                    ]
+                }
+            )
 
         memories = [
             item.decode("utf-8") if isinstance(item, bytes) else item
             for item in raw_items
         ]
 
-        lines = [
-            "<b>Active Memory Directives</b>",
-            "──────────────────────────",
-            "<ul>",
+        blocks = [
+            {
+                "type": "paragraph",
+                "text": [
+                    {
+                        "type": "bold",
+                        "text": [{"type": "text", "text": "Active Memory Directives"}],
+                    }
+                ],
+            },
+            {"type": "divider"},
+            {
+                "type": "list",
+                "items": [{"type": "text", "text": mem} for mem in memories],
+            },
         ]
-        for mem in memories:
-            lines.append(f"<li>{mem}</li>")
-        lines.append("</ul>")
 
-        return "\n".join(lines)
+        return json.dumps({"blocks": blocks})
     except Exception as e:
         print(f"Error fetching memory list format: {e}")
-        return "Could not retrieve memory list."
+        return json.dumps(
+            {
+                "blocks": [
+                    {
+                        "type": "paragraph",
+                        "text": [
+                            {"type": "text", "text": "Could not retrieve memory list."}
+                        ],
+                    }
+                ]
+            }
+        )
 
 
 async def collapse_message(chat_id: int, message_id: int, delay: int):
     await asyncio.sleep(delay)
-    content = "<blockquote>Active Memories Collapsed</blockquote>"
+    content = "Active Memories Collapsed"
     try:
         await bot.edit_message_text(
-            chat_id=chat_id, message_id=message_id, text=content
+            chat_id=chat_id, message_id=message_id, text=content, parse_mode=None
         )
     except Exception as e:
         print(f"Error collapsing memory list: {e}")
@@ -369,30 +429,45 @@ async def handle_delete(message: Message):
 
 @router.message(Command("help", "commands"))
 async def handle_help(message: Message):
-    content = (
-        "<b>Sen Bot Command Hub</b>\n\n"
-        "<ul>"
-        "<li><b>remember [item],, [item2]</b> - Adds items to memory</li>"
-        "<li><b>what do you remember</b> - Displays rules in a formatted list</li>"
-        "<li><b>edit [number] [new fact]</b> - Edits a specific rule</li>"
-        "<li><b>forget [number],, [number2]</b> - Removes memories</li>"
-        "<li><b>forget all</b> - Clears all memory</li>"
-        "</ul>"
+    content = json.dumps(
+        {
+            "blocks": [
+                {
+                    "type": "paragraph",
+                    "text": [
+                        {
+                            "type": "bold",
+                            "text": [{"type": "text", "text": "Sen Bot Command Hub"}],
+                        }
+                    ],
+                },
+                {"type": "divider"},
+                {
+                    "type": "list",
+                    "items": [
+                        {
+                            "type": "text",
+                            "text": "remember [item],, [item2] - Adds items to memory",
+                        },
+                        {
+                            "type": "text",
+                            "text": "what do you remember - Displays rules in a formatted list",
+                        },
+                        {
+                            "type": "text",
+                            "text": "edit [number] [new fact] - Edits a specific rule",
+                        },
+                        {
+                            "type": "text",
+                            "text": "forget [number],, [number2] - Removes memories",
+                        },
+                        {"type": "text", "text": "forget all - Clears all memory"},
+                    ],
+                },
+            ]
+        }
     )
-
-    if message.chat.type == "private":
-        sent_msg = await message.answer(text=content)
-    else:
-        sent_msg = await message.answer(
-            text=content, reply_to_message_id=message.message_id
-        )
-
-    if sent_msg:
-        asyncio.create_task(
-            auto_delete_message(
-                message.chat.id, sent_msg.message_id, message.message_id, 60
-            )
-        )
+    await send_formatted_response(message, content, auto_delete=60)
 
 
 def text_in(options: set):
@@ -407,16 +482,7 @@ def text_startswith(prefix: str):
 async def handle_what_remember(message: Message):
     user_id_str = str(message.from_user.id)
     content = await get_formatted_memories(user_id_str)
-
-    if message.chat.type == "private":
-        sent_msg = await message.answer(text=content)
-    else:
-        sent_msg = await message.answer(
-            text=content, reply_to_message_id=message.message_id
-        )
-
-    if sent_msg:
-        asyncio.create_task(collapse_message(message.chat.id, sent_msg.message_id, 60))
+    await send_formatted_response(message, content, auto_delete=60)
 
 
 @router.message(text_startswith("remember "))
@@ -435,16 +501,7 @@ async def handle_remember(message: Message):
 
     await redis_client.ltrim(f"memory_list:{user_id_str}", -25, -1)
     content = await get_formatted_memories(user_id_str)
-
-    if message.chat.type == "private":
-        sent_msg = await message.answer(text=content)
-    else:
-        sent_msg = await message.answer(
-            text=content, reply_to_message_id=message.message_id
-        )
-
-    if sent_msg:
-        asyncio.create_task(collapse_message(message.chat.id, sent_msg.message_id, 60))
+    await send_formatted_response(message, content, auto_delete=60)
 
 
 @router.message(text_startswith("edit "))
@@ -459,18 +516,7 @@ async def handle_edit(message: Message):
         if 0 <= idx < len(raw_items):
             await redis_client.lset(f"memory_list:{user_id_str}", idx, new_val)
             content = await get_formatted_memories(user_id_str)
-
-            if message.chat.type == "private":
-                sent_msg = await message.answer(text=content)
-            else:
-                sent_msg = await message.answer(
-                    text=content, reply_to_message_id=message.message_id
-                )
-
-            if sent_msg:
-                asyncio.create_task(
-                    collapse_message(message.chat.id, sent_msg.message_id, 60)
-                )
+            await send_formatted_response(message, content, auto_delete=60)
             return
 
     error_content = "Usage: edit [number] [new text]"
@@ -637,7 +683,7 @@ async def handle_conversation(message: Message):
             try:
                 await send_message_draft(
                     chat_id,
-                    "<i>Thinking...</i>",
+                    "Thinking...",
                     reply_to=None if is_private else msg_id,
                     can_stop=True,
                 )
@@ -722,11 +768,15 @@ async def handle_conversation(message: Message):
                     "If the user is clearly joking or sarcastic, match their energy rather than taking the prompt literally. "
                     "If you do not know the answer or the provided context is insufficient, state 'I don't have enough details to answer that accurately' directly without guessing. "
                     "Do not assume personal details about the user unless they are explicitly provided in your memory list. "
-                    "CRITICAL FORMATTING RULE: Format regular text using standard Telegram HTML tags (<b>, <i>, <ul>, <li>). "
-                    "When asked to create a table, you MUST output a JSON object with a 'blocks' key containing an InputRichMessage block array. "
-                    'Example table format: {"blocks":[{"type":"table","is_compact":true,"cells":[[{"type":"text","text":"Name"},{"type":"text","text":"Age"}],[{"type":"text","text":"Alice"},{"type":"text","text":"25"}]]}]}'
-                    "Do NOT output tables as pipe characters or <pre> blocks. Always use the JSON rich message format for tables. "
-                    "Do not use raw markdown asterisks."
+                    "CRITICAL FORMATTING RULE: ALL responses MUST be a JSON object with a 'blocks' array using Telegram InputRichMessage format. "
+                    "No plain text responses. No HTML. No markdown. Only rich message JSON. "
+                    "Available block types: paragraph, preformatted, block_quotation, list, table, divider, section_heading, anchor. "
+                    "Inside paragraphs you can use RichText types: bold, italic, underline, strikethrough, spoiler, code, url, text. "
+                    'Example simple response: {"blocks":[{"type":"paragraph","text":[{"type":"text","text":"Hello!"}]}]}'
+                    'Example bold: {"blocks":[{"type":"paragraph","text":[{"type":"text","text":"Normal "},{"type":"bold","text":[{"type":"text","text":"bold"}]}]}]}'
+                    'Example table: {"blocks":[{"type":"table","is_compact":true,"cells":[[{"type":"text","text":"Name"},{"type":"text","text":"Age"}],[{"type":"text","text":"Alice"},{"type":"text","text":"25"}]]}]}'
+                    'Example list: {"blocks":[{"type":"list","items":[{"type":"text","text":"Item 1"},{"type":"text","text":"Item 2"}]}]}'
+                    "NEVER output plain text outside of JSON blocks. NEVER use HTML tags. NEVER use markdown asterisks."
                 )
 
                 if search_context:
