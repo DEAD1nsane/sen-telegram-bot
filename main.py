@@ -242,11 +242,62 @@ def extract_text_from_blocks(blocks: list) -> str:
     return "\n".join(parts) if parts else ""
 
 
+def json_blocks_to_markdown(blocks: list) -> str:
+    """Convert AI JSON blocks to Telegram Markdown."""
+    parts = []
+    for block in blocks:
+        btype = block.get("type")
+        if btype == "paragraph":
+            for item in block.get("text", []):
+                if item.get("type") == "text":
+                    parts.append(item.get("text", ""))
+                elif item.get("type") == "bold":
+                    inner = item.get("text", [])
+                    bold_text = "".join(
+                        t.get("text", "") for t in inner if t.get("type") == "text"
+                    )
+                    parts.append(f"**{bold_text}**")
+        elif btype == "list":
+            for item in block.get("items", []):
+                if item.get("type") == "text":
+                    parts.append(f"- {item.get('text', '')}")
+        elif btype == "table":
+            headers = block.get("headers", [])
+            rows = block.get("rows", [])
+            num_headers = len(headers) or 1
+            header_texts = [
+                h.get("text", "") if isinstance(h, dict) else str(h) for h in headers
+            ]
+            parts.append("| " + " | ".join(header_texts) + " |")
+            parts.append("| " + " | ".join(["---"] * len(header_texts)) + " |")
+            flat = []
+            for row in rows:
+                for cell in row:
+                    flat.append(
+                        cell.get("text", "") if isinstance(cell, dict) else str(cell)
+                    )
+            for i in range(0, len(flat), num_headers):
+                parts.append("| " + " | ".join(flat[i : i + num_headers]) + " |")
+        elif btype == "divider":
+            parts.append("---")
+        elif btype == "section_heading":
+            text = block.get("text", "")
+            if isinstance(text, list):
+                text = "".join(t.get("text", "") for t in text if isinstance(t, dict))
+            parts.append(f"## {text}")
+    return "\n".join(parts)
+
+
 def extract_rich_markdown(text: str) -> str | None:
-    """Extract markdown content from code block for rich message."""
+    """Extract markdown content from code block or JSON blocks for rich message."""
     match = re.search(r"```(?:md|markdown)?\s*\n(.*?)```", text, re.DOTALL)
     if match:
         return match.group(1).strip()
+    rich_data = extract_json(text)
+    if rich_data and "blocks" in rich_data:
+        md = json_blocks_to_markdown(rich_data["blocks"])
+        if md:
+            return md
     return None
 
 
