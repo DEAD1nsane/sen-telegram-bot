@@ -187,29 +187,37 @@ async def send_formatted_response(message: Message, content: str, auto_delete: i
 
 
 def normalize_table_blocks(blocks: list) -> list:
-    """Convert AI-generated table format (headers/rows) to Telegram API format (cells with is_header)."""
+    """Convert AI-generated table format (headers/rows) to Telegram API format."""
     normalized = []
     for block in blocks:
         if block.get("type") == "table" and "headers" in block and "rows" in block:
             headers = block.get("headers", [])
             rows = block.get("rows", [])
-            num_headers = len(headers)
-            cells = []
-            header_row = []
-            for header in headers:
-                text = (
-                    header.get("text", "") if isinstance(header, dict) else str(header)
-                )
-                header_row.append({"type": "text", "text": text, "is_header": True})
-            cells.append(header_row)
+            num_headers = len(headers) or 1
+            header_texts = [
+                h.get("text", "") if isinstance(h, dict) else str(h) for h in headers
+            ]
             flat_cells = []
             for row in rows:
                 for cell in row:
                     text = cell.get("text", "") if isinstance(cell, dict) else str(cell)
-                    flat_cells.append({"type": "text", "text": text})
+                    flat_cells.append(text)
+            data_rows = []
             for i in range(0, len(flat_cells), num_headers):
-                cells.append(flat_cells[i : i + num_headers])
-            normalized.append({"type": "table", "cells": cells})
+                data_rows.append(flat_cells[i : i + num_headers])
+            lines = []
+            if header_texts:
+                lines.append("  |  ".join(header_texts))
+                lines.append("  |  ".join(["---"] * len(header_texts)))
+            for row in data_rows:
+                lines.append("  |  ".join(row))
+            text_content = "\n".join(lines)
+            normalized.append(
+                {
+                    "type": "paragraph",
+                    "text": [{"type": "text", "text": text_content}],
+                }
+            )
         else:
             normalized.append(block)
     return normalized
