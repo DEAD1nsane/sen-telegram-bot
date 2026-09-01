@@ -6,7 +6,6 @@
   "type": "commonjs",
   "scripts": {
     "start": "node upload.js",
-    "format": "lint-staged",
     "test": "echo \"No tests configured yet\"",
     "prepare": "husky"
   },
@@ -33,10 +32,7 @@
     "lint-staged": "^15.2.9",
     "prettier": "^3.3.3"
   },
-  "lint-staged": {
-    "*.{js,json,md}": "prettier --write",
-    "*.py": "black"
-  },
+
   "allowScripts": {
     "@railway/cli@0.3.1": true
   }
