@@ -1,9 +1,7 @@
 """Railway entrypoint for Sen.
 
-Keeps Telegram polling singleton protection and installs the private Rich
-Message /help flow. The /help command is configured as an ephemeral command
-by main.py, so group replies can be private without requiring the bot to be an
-administrator.
+Provides the private Rich Message memory menu and protects Telegram polling
+with a Redis singleton lock.
 """
 
 import asyncio
@@ -11,7 +9,14 @@ import contextvars
 import uuid
 
 import main
-from aiogram.types import EphemeralMessageParameters, InputRichMessage, ReplyParameters
+from aiogram.types import (
+    BotCommand,
+    BotCommandScopeAllGroupChats,
+    BotCommandScopeAllPrivateChats,
+    EphemeralMessageParameters,
+    InputRichMessage,
+    ReplyParameters,
+)
 
 
 POLLING_LOCK_KEY = "sen:telegram:getupdates:lock"
@@ -52,8 +57,8 @@ def personalized_rich_main_menu() -> str:
 main.rich_main_menu = personalized_rich_main_menu
 
 
-async def private_help(message):
-    """Send /help as a Rich Message, privately in groups."""
+async def private_memories(message):
+    """Send /memories as a private Rich Message in groups."""
     user = message.from_user
     if user is None:
         return
@@ -74,17 +79,12 @@ async def private_help(message):
         else:
             ephemeral_id = getattr(message, "ephemeral_message_id", None)
             if ephemeral_id is None:
-                # This should only happen if Telegram delivered /help as a
-                # normal command instead of the configured ephemeral command.
-                # Do not leak a private menu into the group.
                 print(
-                    f"/help ignored: no ephemeral_message_id for user={user_id} chat={chat_id}"
+                    f"/memories ignored: no ephemeral_message_id "
+                    f"for user={user_id} chat={chat_id}"
                 )
                 return
 
-            # A reply to an incoming ephemeral command is itself ephemeral.
-            # Explicitly providing both fields avoids relying on client/server
-            # inference and keeps the Rich Message private to this user.
             sent = await main.bot.send_rich_message(
                 chat_id=chat_id,
                 rich_message=rich_message,
@@ -104,19 +104,41 @@ async def private_help(message):
             None if sent_ephemeral_id is not None else getattr(sent, "message_id", None),
         )
     except Exception as e:
-        print(f"/help Rich Message error: {type(e).__name__}: {e}")
+        print(f"/memories Rich Message error: {type(e).__name__}: {e}")
     finally:
         _current_menu_user.reset(token)
 
 
-# Replace the original /help handler instead of merely mutating its callback.
-# This makes the replacement deterministic with aiogram's HandlerObject list.
+# Replace the old help handler with the new /memories handler.
 main.router.message.handlers = [
     handler
     for handler in main.router.message.handlers
     if getattr(handler.callback, "__name__", "") != "handle_help"
 ]
-main.router.message.register(private_help, main.Command("help"))
+main.router.message.register(private_memories, main.Command("memories"))
+
+
+async def configure_memory_commands() -> None:
+    commands = [
+        BotCommand(
+            command="memories",
+            description="Open your private memory menu",
+            is_ephemeral=True,
+        ),
+    ]
+    await main.bot.set_my_commands(
+        commands,
+        scope=BotCommandScopeAllGroupChats(),
+    )
+    await main.bot.set_my_commands(
+        commands,
+        scope=BotCommandScopeAllPrivateChats(),
+    )
+
+
+# main.main() calls main.configure_commands(). Replace that function so the
+# old /help command is removed from Telegram's command list entirely.
+main.configure_commands = configure_memory_commands
 
 
 async def _wrap_callback(callback, original):
@@ -127,7 +149,6 @@ async def _wrap_callback(callback, original):
         _current_menu_user.reset(token)
 
 
-# Personalize callbacks that can return to the main menu, especially Back.
 for handler in main.router.callback_query.handlers:
     original = handler.callback
     if getattr(original, "__name__", "") in {
@@ -146,8 +167,6 @@ for handler in main.router.callback_query.handlers:
         handler.callback = wrapped
 
 
-# Public Rich menus are not expected anymore. Keep a safety guard so an
-# accidentally public menu cannot be edited or closed by another user.
 main._original_edit_menu = main.edit_menu
 main._original_close_menu = main.close_menu
 
@@ -208,7 +227,11 @@ async def refresh_polling_lock(token: str) -> None:
         await asyncio.sleep(POLLING_LOCK_REFRESH)
         try:
             result = await main.redis_client.eval(
-                script, 1, POLLING_LOCK_KEY, token, POLLING_LOCK_TTL
+                script,
+                1,
+                POLLING_LOCK_KEY,
+                token,
+                POLLING_LOCK_TTL,
             )
             if result == 0:
                 print("WARNING: Telegram polling lock was lost.")
@@ -227,7 +250,12 @@ async def release_polling_lock(token: str) -> None:
     return 0
     """
     try:
-        await main.redis_client.eval(script, 1, POLLING_LOCK_KEY, token)
+        await main.redis_client.eval(
+            script,
+            1,
+            POLLING_LOCK_KEY,
+            token,
+        )
     except Exception as e:
         print(f"Polling lock release error: {e}")
 
@@ -243,6 +271,7 @@ async def run() -> None:
 
     print("Telegram polling singleton lock acquired.")
     refresh_task = asyncio.create_task(refresh_polling_lock(token))
+
     try:
         await main.main()
     finally:
@@ -251,6 +280,7 @@ async def run() -> None:
             await refresh_task
         except asyncio.CancelledError:
             pass
+
         await release_polling_lock(token)
         print("Telegram polling singleton lock released.")
 
