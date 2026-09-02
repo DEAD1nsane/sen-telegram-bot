@@ -14,6 +14,7 @@ from aiogram.types import (
     BotCommand,
     BotCommandScopeAllGroupChats,
     BotCommandScopeAllPrivateChats,
+    BotCommandScopeAllChatAdministrators,
     ReplyParameters,
     InputRichMessage,
     InputRichBlockParagraph,
@@ -546,7 +547,7 @@ def get_memory_rich_message(
             InputRichBlockButtons(
                 buttons=[
                     RichMessageButton(
-                        text="ðŸ§  View Memories",
+                        text="🧠 View Memories",
                         callback_data="memory_view",
                         style="primary",
                     ),
@@ -557,7 +558,7 @@ def get_memory_rich_message(
             InputRichBlockButtons(
                 buttons=[
                     RichMessageButton(
-                        text="âž• New Memory",
+                        text="➕ New Memory",
                         callback_data="memory_add",
                         style="success",
                     ),
@@ -568,7 +569,7 @@ def get_memory_rich_message(
             InputRichBlockButtons(
                 buttons=[
                     RichMessageButton(
-                        text="âŒ Close",
+                        text="❌ Close",
                         callback_data="memory_close",
                         style="danger",
                     ),
@@ -582,12 +583,12 @@ def get_memory_rich_message(
             InputRichBlockButtons(
                 buttons=[
                     RichMessageButton(
-                        text="ðŸ“ Edit",
+                        text="📝 Edit",
                         callback_data="memory_edit",
                         style="primary",
                     ),
                     RichMessageButton(
-                        text="ðŸ—‘ï¸ Remove",
+                        text="🗑️ Remove",
                         callback_data="memory_forget",
                         style="danger",
                     ),
@@ -598,7 +599,7 @@ def get_memory_rich_message(
             InputRichBlockButtons(
                 buttons=[
                     RichMessageButton(
-                        text="ðŸ«¯ Clear All",
+                        text="🫯 Clear All",
                         callback_data="memory_forget_all",
                         style="danger",
                     ),
@@ -609,11 +610,11 @@ def get_memory_rich_message(
             InputRichBlockButtons(
                 buttons=[
                     RichMessageButton(
-                        text="â® Back",
+                        text="↩️ Back",
                         callback_data="memory_back",
                     ),
                     RichMessageButton(
-                        text="âŒ Close",
+                        text="❌ Close",
                         callback_data="memory_close",
                         style="danger",
                     ),
@@ -627,7 +628,7 @@ def get_memory_rich_message(
             InputRichBlockButtons(
                 buttons=[
                     RichMessageButton(
-                        text="âš ï¸ Yes, Clear Everything",
+                        text="⚠️ Yes, Clear Everything",
                         callback_data="memory_confirm_forget_all",
                         style="danger",
                     ),
@@ -638,11 +639,11 @@ def get_memory_rich_message(
             InputRichBlockButtons(
                 buttons=[
                     RichMessageButton(
-                        text="âœ–ï¸ Cancel",
+                        text="✖️ Cancel",
                         callback_data="memory_back",
                     ),
                     RichMessageButton(
-                        text="âŒ Close",
+                        text="❌ Close",
                         callback_data="memory_close",
                         style="danger",
                     ),
@@ -656,11 +657,11 @@ def get_memory_rich_message(
             InputRichBlockButtons(
                 buttons=[
                     RichMessageButton(
-                        text="â® Back",
+                        text="↩️ Back",
                         callback_data="memory_back",
                     ),
                     RichMessageButton(
-                        text="âŒ Close",
+                        text="❌ Close",
                         callback_data="memory_close",
                         style="danger",
                     ),
@@ -1041,15 +1042,15 @@ async def show_memories_command(
     )
 
     text = (
-        f"<b>Memory Center</b>"
-        f"Welcome, {safe_name}."
+        f"<b>Memory Center</b>\n\n"
+        f"Welcome, {safe_name}.\n\n"
         "Keep track of the details and "
         "instructions you've asked Sen to remember. "
         "Changes here affect how Sen responds to you."
     )
 
     # --------------------------------------
-    # GROUP / SUPERGROUP (Universal Ephemeral Fix)
+    # GROUP / SUPERGROUP
     # --------------------------------------
 
     if message.chat.type in {
@@ -1095,8 +1096,12 @@ async def show_memories_command(
                         user_id,
                         ephemeral_id,
                     )
+
             except Exception as e:
-                print(f"Forced group ephemeral error: {e}")
+                print(
+                    f"Forced group ephemeral error: {e}"
+                )
+
             return
 
         try:
@@ -1178,14 +1183,14 @@ async def handle_memory_view(
     )
 
     body = (
-        "<b>What Sen Remembers</b>"
+        "<b>What Sen Remembers</b>\n\n"
         "These are the saved instructions and details "
         "currently available to Sen."
     )
 
     if not memories:
         body += (
-            "Nothing has been saved yet."
+            "\n\nNothing has been saved yet."
         )
 
     try:
@@ -1224,7 +1229,7 @@ async def handle_memory_add(
     await callback.answer()
 
     body = (
-        "<b>Add a Memory</b>"
+        "<b>Add a Memory</b>\n\n"
         "Tell Sen what you'd like to keep in mind "
         "for future conversations.\n\n"
         "You can add several items at once by separating "
@@ -1275,7 +1280,7 @@ async def handle_memory_edit(
 
     if not memories:
         body = (
-            "<b>Edit a Memory</b>"
+            "<b>Edit a Memory</b>\n\n"
             "There aren't any saved memories to edit yet."
         )
 
@@ -2451,12 +2456,19 @@ async def health_check(
 
 async def configure_commands() -> None:
 
+    # --------------------------------------
+    # GROUP COMMANDS
+    #
+    # This scope applies to EVERYONE in every
+    # group/supergroup, including administrators.
+    #
+    # /memories is explicitly ephemeral.
+    # --------------------------------------
+
     group_commands = [
         BotCommand(
             command="memories",
-            description=(
-                "Open your private memory menu"
-            ),
+            description="Open your private memory menu",
             is_ephemeral=True,
         ),
 
@@ -2466,12 +2478,14 @@ async def configure_commands() -> None:
         ),
     ]
 
+    # --------------------------------------
+    # PRIVATE COMMANDS
+    # --------------------------------------
+
     private_commands = [
         BotCommand(
             command="memories",
-            description=(
-                "Manage your instructed memories"
-            ),
+            description="Manage your instructed memories",
         ),
 
         BotCommand(
@@ -2480,15 +2494,58 @@ async def configure_commands() -> None:
         ),
     ]
 
+    # --------------------------------------
+    # IMPORTANT:
+    #
+    # Remove any previously configured
+    # administrator-specific command list.
+    #
+    # Telegram gives AllChatAdministrators
+    # priority over AllGroupChats. If an old
+    # admin scope exists, it can override the
+    # group-wide list.
+    #
+    # Deleting that narrower scope causes admins
+    # to inherit AllGroupChats like everyone else.
+    # --------------------------------------
+
+    try:
+        await bot.delete_my_commands(
+            scope=BotCommandScopeAllChatAdministrators()
+        )
+
+        print(
+            "Cleared administrator-specific "
+            "command scope."
+        )
+
+    except Exception as e:
+        print(
+            "Could not clear administrator command "
+            f"scope: {e}"
+        )
+
+    # --------------------------------------
+    # Set the universal group command list.
+    # --------------------------------------
+
     await bot.set_my_commands(
         group_commands,
         scope=BotCommandScopeAllGroupChats(),
     )
 
+    # --------------------------------------
+    # Set private-chat commands.
+    # --------------------------------------
+
     await bot.set_my_commands(
         private_commands,
         scope=BotCommandScopeAllPrivateChats(),
     )
+
+    # --------------------------------------
+    # Verify group commands.
+    # --------------------------------------
 
     try:
         stored_group_commands = (
@@ -2511,6 +2568,37 @@ async def configure_commands() -> None:
                     )
                     for command
                     in stored_group_commands
+                ]
+            )
+        )
+
+        # ----------------------------------
+        # Verify administrator scope.
+        #
+        # This should now be empty because
+        # admins should inherit AllGroupChats.
+        # ----------------------------------
+
+        stored_admin_commands = (
+            await bot.get_my_commands(
+                scope=BotCommandScopeAllChatAdministrators()
+            )
+        )
+
+        print(
+            "Telegram administrator-specific commands: "
+            + str(
+                [
+                    (
+                        command.command,
+                        getattr(
+                            command,
+                            "is_ephemeral",
+                            None,
+                        ),
+                    )
+                    for command
+                    in stored_admin_commands
                 ]
             )
         )
