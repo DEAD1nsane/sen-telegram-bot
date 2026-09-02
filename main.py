@@ -53,17 +53,18 @@ redis_client = redis.from_url(
 )
 
 
-API_TOKEN = os.getenv("BOT_TOKEN", "")
-
+API_TOKEN = (
+    os.getenv("TELEGRAM_BOT_TOKEN")
+    or os.getenv("BOT_TOKEN")
+    or ""
+)
 if not API_TOKEN:
     raise ValueError("CRITICAL CONFIGURATION ERROR: 'BOT_TOKEN' missing.")
-
 
 SEARXNG_URL = os.getenv(
     "SEARXNG_URL",
     "http://searxng.railway.internal:8080/search",
 ).rstrip("/")
-
 
 gemini_api_key = os.getenv("GEMINI_API_KEY", "")
 
