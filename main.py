@@ -2475,6 +2475,7 @@ async def configure_commands() -> None:
         BotCommand(
             command="del",
             description="Delete a bot message",
+            is_ephemeral=True,
         ),
     ]
 
