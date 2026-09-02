@@ -323,22 +323,6 @@ def get_user_display_name(
 def rich_text_from_markup(
     text: str,
 ):
-    """
-    Convert the small amount of HTML-style markup
-    used by the memory UI into native Telegram
-    RichText nodes.
-
-    This is NOT passed to Telegram as HTML.
-
-    Instead:
-
-        <b>Hello</b>
-
-    becomes:
-
-        RichTextBold(text="Hello")
-    """
-
     pattern = re.compile(
         r"(<b>.*?</b>|"
         r"<strong>.*?</strong>|"
@@ -493,13 +477,9 @@ def get_memory_rich_message(
 
     blocks = []
 
-    # --------------------------------------
-    # Extract first bold line as native
-    # Telegram heading.
-    # --------------------------------------
-
     heading_match = re.match(
-        r"^\s*<b>(.*?)</b>\s*(?:\n|$)",
+        r"^\s*<b>(.*?)</b>\s*(?:
+|$)",
         text,
         flags=re.IGNORECASE | re.DOTALL,
     )
@@ -538,10 +518,6 @@ def get_memory_rich_message(
             )
         )
 
-    # --------------------------------------
-    # Native ordered memory list.
-    # --------------------------------------
-
     if memories:
         blocks.append(
             InputRichBlockList(
@@ -561,16 +537,12 @@ def get_memory_rich_message(
             )
         )
 
-    # --------------------------------------
-    # Main page
-    # --------------------------------------
-
     if menu_type == "main":
         blocks.extend([
             InputRichBlockButtons(
                 buttons=[
                     RichMessageButton(
-                        text="🧠 View Memories",
+                        text="ðŸ§  View Memories",
                         callback_data="memory_view",
                         style="primary",
                     ),
@@ -581,7 +553,7 @@ def get_memory_rich_message(
             InputRichBlockButtons(
                 buttons=[
                     RichMessageButton(
-                        text="➕ New Memory",
+                        text="âž• New Memory",
                         callback_data="memory_add",
                         style="success",
                     ),
@@ -592,7 +564,7 @@ def get_memory_rich_message(
             InputRichBlockButtons(
                 buttons=[
                     RichMessageButton(
-                        text="❌ Close",
+                        text="âŒ Close",
                         callback_data="memory_close",
                         style="danger",
                     ),
@@ -601,21 +573,17 @@ def get_memory_rich_message(
             ),
         ])
 
-    # --------------------------------------
-    # Saved memories page
-    # --------------------------------------
-
     elif menu_type == "view":
         blocks.extend([
             InputRichBlockButtons(
                 buttons=[
                     RichMessageButton(
-                        text="📝 Edit",
+                        text="ðŸ“ Edit",
                         callback_data="memory_edit",
                         style="primary",
                     ),
                     RichMessageButton(
-                        text="🗑️ Remove",
+                        text="ðŸ—‘ï¸ Remove",
                         callback_data="memory_forget",
                         style="danger",
                     ),
@@ -626,7 +594,7 @@ def get_memory_rich_message(
             InputRichBlockButtons(
                 buttons=[
                     RichMessageButton(
-                        text="🫯 Clear All",
+                        text="ðŸ«¯ Clear All",
                         callback_data="memory_forget_all",
                         style="danger",
                     ),
@@ -637,11 +605,11 @@ def get_memory_rich_message(
             InputRichBlockButtons(
                 buttons=[
                     RichMessageButton(
-                        text="❮ Back",
+                        text="â® Back",
                         callback_data="memory_back",
                     ),
                     RichMessageButton(
-                        text="❌ Close",
+                        text="âŒ Close",
                         callback_data="memory_close",
                         style="danger",
                     ),
@@ -650,16 +618,12 @@ def get_memory_rich_message(
             ),
         ])
 
-    # --------------------------------------
-    # Confirmation page
-    # --------------------------------------
-
     elif menu_type == "confirm_forget_all":
         blocks.extend([
             InputRichBlockButtons(
                 buttons=[
                     RichMessageButton(
-                        text="⚠️ Yes, Clear Everything",
+                        text="âš ï¸ Yes, Clear Everything",
                         callback_data="memory_confirm_forget_all",
                         style="danger",
                     ),
@@ -670,11 +634,11 @@ def get_memory_rich_message(
             InputRichBlockButtons(
                 buttons=[
                     RichMessageButton(
-                        text="✖️ Cancel",
+                        text="âœ–ï¸ Cancel",
                         callback_data="memory_back",
                     ),
                     RichMessageButton(
-                        text="❌ Close",
+                        text="âŒ Close",
                         callback_data="memory_close",
                         style="danger",
                     ),
@@ -683,20 +647,16 @@ def get_memory_rich_message(
             ),
         ])
 
-    # --------------------------------------
-    # Pages requiring user text input
-    # --------------------------------------
-
     else:
         blocks.append(
             InputRichBlockButtons(
                 buttons=[
                     RichMessageButton(
-                        text="❮ Back",
+                        text="â® Back",
                         callback_data="memory_back",
                     ),
                     RichMessageButton(
-                        text="❌ Close",
+                        text="âŒ Close",
                         callback_data="memory_close",
                         style="danger",
                     ),
@@ -732,10 +692,6 @@ async def send_memory_menu(
         menu_type,
         memories=memories,
     )
-
-    # --------------------------------------
-    # GROUP / SUPERGROUP
-    # --------------------------------------
 
     if is_group:
         if source_ephemeral_id is None:
@@ -774,10 +730,6 @@ async def send_memory_menu(
         )
 
         return message
-
-    # --------------------------------------
-    # PRIVATE CHAT
-    # --------------------------------------
 
     message = await bot.send_rich_message(
         chat_id=chat_id,
@@ -823,10 +775,6 @@ async def edit_memory_menu(
         memories=memories,
     )
 
-    # --------------------------------------
-    # GROUP / EPHEMERAL MESSAGE
-    # --------------------------------------
-
     if is_group:
         ephemeral_id = getattr(
             message,
@@ -864,10 +812,6 @@ async def edit_memory_menu(
         )
 
         return
-
-    # --------------------------------------
-    # PRIVATE CHAT
-    # --------------------------------------
 
     current_id = await get_menu_identity(
         chat_id,
@@ -913,10 +857,6 @@ async def authorize_memory_callback(
         message.chat.type
         in {"group", "supergroup"}
     )
-
-    # --------------------------------------
-    # GROUP / EPHEMERAL
-    # --------------------------------------
 
     if is_group:
         ephemeral_id = getattr(
@@ -970,10 +910,6 @@ async def authorize_memory_callback(
             return False
 
         return True
-
-    # --------------------------------------
-    # PRIVATE CHAT
-    # --------------------------------------
 
     current_id = await get_menu_identity(
         chat_id,
@@ -1082,12 +1018,6 @@ async def show_memories_command(
         f"{incoming_ephemeral_id}"
     )
 
-    print(
-        "[/memories] "
-        f"receiver_user="
-        f"{getattr(message, 'receiver_user', None)}"
-    )
-
     await clear_interaction(
         chat_id,
         user_id,
@@ -1098,8 +1028,28 @@ async def show_memories_command(
         user_id,
     )
 
+    display_name = get_user_display_name(
+        message.from_user
+    )
+
+    safe_name = html.escape(
+        display_name
+    )
+
+    text = (
+        f"<b>Memory Center</b>
+
+"
+        f"Welcome, {safe_name}.
+
+"
+        "Keep track of the details and "
+        "instructions you've asked Sen to remember. "
+        "Changes here affect how Sen responds to you."
+    )
+
     # --------------------------------------
-    # GROUP / SUPERGROUP
+    # GROUP / SUPERGROUP (Universal Ephemeral Fix)
     # --------------------------------------
 
     if message.chat.type in {
@@ -1109,28 +1059,47 @@ async def show_memories_command(
 
         if incoming_ephemeral_id is None:
             print(
-                "[/memories] Ignoring non-ephemeral "
-                "group invocation."
+                "[/memories] Manual invocation caught. "
+                "Generating standalone ephemeral window."
             )
+
+            try:
+                await message.delete()
+            except Exception:
+                pass
+
+            try:
+                rich_message = get_memory_rich_message(
+                    text,
+                    "main",
+                    memories=None,
+                )
+
+                menu_msg = await bot.send_rich_message(
+                    chat_id=chat_id,
+                    rich_message=rich_message,
+                    ephemeral_message_parameters=EphemeralMessageParameters(
+                        receiver_user_id=user_id,
+                    ),
+                )
+
+                ephemeral_id = getattr(
+                    menu_msg,
+                    "ephemeral_message_id",
+                    None,
+                )
+
+                if ephemeral_id is not None:
+                    await register_menu_identity(
+                        chat_id,
+                        user_id,
+                        ephemeral_id,
+                    )
+            except Exception as e:
+                print(f"Forced group ephemeral error: {e}")
             return
 
         try:
-            display_name = get_user_display_name(
-                message.from_user
-            )
-
-            safe_name = html.escape(
-                display_name
-            )
-
-            text = (
-                f"<b>Memory Center</b>\n\n"
-                f"Welcome, {safe_name}.\n\n"
-                "Keep track of the details and "
-                "instructions you've asked Sen to remember. "
-                "Changes here affect how Sen responds to you."
-            )
-
             await send_memory_menu(
                 chat_id=chat_id,
                 user_id=user_id,
@@ -1151,27 +1120,7 @@ async def show_memories_command(
 
         return
 
-    # --------------------------------------
-    # PRIVATE CHAT
-    # --------------------------------------
-
     try:
-        display_name = get_user_display_name(
-            message.from_user
-        )
-
-        safe_name = html.escape(
-            display_name
-        )
-
-        text = (
-            f"<b>Memory Center</b>\n\n"
-            f"Welcome, {safe_name}.\n\n"
-            "Keep track of the details and "
-            "instructions you've asked Sen to remember. "
-            "Changes here affect how Sen responds to you."
-        )
-
         await send_memory_menu(
             chat_id=chat_id,
             user_id=user_id,
@@ -1229,14 +1178,18 @@ async def handle_memory_view(
     )
 
     body = (
-        "<b>What Sen Remembers</b>\n\n"
+        "<b>What Sen Remembers</b>
+
+"
         "These are the saved instructions and details "
         "currently available to Sen."
     )
 
     if not memories:
         body += (
-            "\n\nNothing has been saved yet."
+            "
+
+Nothing has been saved yet."
         )
 
     try:
@@ -1275,7 +1228,9 @@ async def handle_memory_add(
     await callback.answer()
 
     body = (
-        "<b>Add a Memory</b>\n\n"
+        "<b>Add a Memory</b>
+
+"
         "Tell Sen what you'd like to keep in mind "
         "for future conversations.\n\n"
         "You can add several items at once by separating "
@@ -1326,7 +1281,9 @@ async def handle_memory_edit(
 
     if not memories:
         body = (
-            "<b>Edit a Memory</b>\n\n"
+            "<b>Edit a Memory</b>
+
+"
             "There aren't any saved memories to edit yet."
         )
 
@@ -1616,10 +1573,6 @@ async def process_memory_text(
     user_id_str = str(user_id)
     chat_id = message.chat.id
 
-    # --------------------------------------
-    # ADD MEMORY
-    # --------------------------------------
-
     if action == "add":
         parts = [
             p.strip()[:200]
@@ -1661,10 +1614,6 @@ async def process_memory_text(
 
         return True
 
-    # --------------------------------------
-    # EDIT MEMORY
-    # --------------------------------------
-
     if action == "edit_number":
         parts = message.text.strip().split(
             " ",
@@ -1704,10 +1653,6 @@ async def process_memory_text(
             pass
 
         return True
-
-    # --------------------------------------
-    # REMOVE MEMORIES
-    # --------------------------------------
 
     if action == "forget":
         indices = [
@@ -2285,7 +2230,7 @@ async def handle_conversation(
         if replied_context:
             context.append(
                 "Message User is Replying To:\n"
-                f"\"{replied_context}\""
+                f'"{replied_context}"'
             )
 
         if chat_history:
@@ -2334,7 +2279,7 @@ async def handle_conversation(
             "OUTPUT FORMAT: Use Telegram Rich HTML. "
             "Use <h1>-<h6>, <p>, <b>, <i>, <u>, "
             "<s>, <code>, <pre>, <table>, <details>, "
-            "<a href=\"URL\">text</a>.\n"
+            '<a href="URL">text</a>.\n'
             "Do not use Markdown asterisks for "
             "formatting. Do not use Markdown pipe "
             "tables. Return clean HTML suitable for "
@@ -2514,13 +2459,6 @@ async def health_check(
 
 async def configure_commands() -> None:
 
-    # ======================================
-    # GROUP COMMANDS
-    #
-    # /memories is explicitly ephemeral.
-    # /del is the ONLY delete command.
-    # ======================================
-
     group_commands = [
         BotCommand(
             command="memories",
@@ -2535,10 +2473,6 @@ async def configure_commands() -> None:
             description="Delete a bot message",
         ),
     ]
-
-    # ======================================
-    # PRIVATE COMMANDS
-    # ======================================
 
     private_commands = [
         BotCommand(
@@ -2563,10 +2497,6 @@ async def configure_commands() -> None:
         private_commands,
         scope=BotCommandScopeAllPrivateChats(),
     )
-
-    # ======================================
-    # Verify what Telegram actually stored.
-    # ======================================
 
     try:
         stored_group_commands = (
@@ -2672,11 +2602,6 @@ async def main():
         f"on port {port}"
     )
 
-    # ======================================
-    # Clear any existing webhook before
-    # starting long polling.
-    # ======================================
-
     try:
         print(
             "Clearing any existing webhook "
@@ -2691,10 +2616,6 @@ async def main():
         print(
             f"Non-critical webhook clearance notice: {e}"
         )
-
-    # ======================================
-    # Start polling
-    # ======================================
 
     try:
         await dp.start_polling(
