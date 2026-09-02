@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from aiohttp import web
 
 from aiogram import Bot, Dispatcher, Router, F
-from aiogram.types import Message, FSInputFile, LinkPreviewOptions
+from aiogram.types import Message, FSInputFile, LinkPreviewOptions, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from aiogram.filters import Command
 from aiogram.client.default import DefaultBotProperties
 
@@ -52,6 +52,24 @@ OWNER_ID = int(os.getenv("OWNER_ID", "0"))
 # ==========================================
 # Helpers (Interactive UI & Native HTML Blocks)
 # ==========================================
+
+def get_dismiss_keyboard(user_id: int) -> InlineKeyboardMarkup:
+    """Creates the ephemeral interactive dismiss button."""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🗑 Dismiss", callback_data=f"dismiss_{user_id}")]
+    ])
+
+@router.callback_query(F.data.startswith("dismiss_"))
+async def handle_dismiss_callback(callback: CallbackQuery):
+    target_id = int(callback.data.split("_")[1])
+    if callback.from_user.id != target_id:
+        await callback.answer("You cannot dismiss this menu.", show_alert=True)
+        return
+    try:
+        await callback.message.delete()
+        await callback.answer("Menu closed.")
+    except Exception:
+        await callback.answer("Failed to delete message.", show_alert=True)
 
 async def free_web_search(query: str) -> str:
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)", "Accept": "application/json"}
@@ -178,7 +196,7 @@ async def handle_help(message: Message):
         "</ul>"
     )
     
-    await message.answer(text=content, is_ephemeral=True)
+    await message.answer(text=content, reply_markup=get_dismiss_keyboard(message.from_user.id))
 
 def text_in(options: set):
     return lambda message: message.text and message.text.lower() in options
@@ -194,7 +212,7 @@ async def handle_what_remember(message: Message):
     user_id_str = str(message.from_user.id)
     content = await get_formatted_memories(user_id_str)
     
-    await message.answer(text=content, is_ephemeral=True)
+    await message.answer(text=content, reply_markup=get_dismiss_keyboard(message.from_user.id))
 
 @router.message(text_startswith("remember "))
 async def handle_remember(message: Message):
@@ -215,7 +233,7 @@ async def handle_remember(message: Message):
     await redis_client.ltrim(f"memory_list:{user_id_str}", -25, -1)
     content = await get_formatted_memories(user_id_str)
     
-    await message.answer(text=content, is_ephemeral=True)
+    await message.answer(text=content, reply_markup=get_dismiss_keyboard(message.from_user.id))
 
 @router.message(text_startswith("edit "))
 async def handle_edit(message: Message):
@@ -237,7 +255,7 @@ async def handle_edit(message: Message):
     else:
         content = "Usage: edit [number] [new text]"
         
-    await message.answer(text=content, is_ephemeral=True)
+    await message.answer(text=content, reply_markup=get_dismiss_keyboard(message.from_user.id))
 
 @router.message(F.text.lower() == "forget all")
 async def handle_forget_all(message: Message):
@@ -249,7 +267,7 @@ async def handle_forget_all(message: Message):
     await redis_client.delete(f"memory_list:{user_id_str}", f"chat_history:{chat_id}:{user_id_str}")
     
     content = "Cleared all your saved memories."
-    await message.answer(text=content, is_ephemeral=True)
+    await message.answer(text=content, reply_markup=get_dismiss_keyboard(message.from_user.id))
 
 @router.message(text_startswith("forget "))
 async def handle_forget(message: Message):
@@ -272,7 +290,7 @@ async def handle_forget(message: Message):
     except Exception: pass
         
     content = await get_formatted_memories(user_id_str)
-    await message.answer(text=content, is_ephemeral=True)
+    await message.answer(text=content, reply_markup=get_dismiss_keyboard(message.from_user.id))
 
 # ==========================================
 # Primary Chat, Mentions & Audio Engine
