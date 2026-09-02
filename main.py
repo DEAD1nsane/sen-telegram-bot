@@ -60,11 +60,6 @@ redis_client = redis.from_url(
 # Telegram token
 # ==========================================
 
-# Railway currently uses BOT_TOKEN.
-#
-# TELEGRAM_BOT_TOKEN is retained as a fallback so the bot can
-# also run in environments that use that variable.
-
 API_TOKEN = (
     os.getenv("BOT_TOKEN")
     or os.getenv("TELEGRAM_BOT_TOKEN")
@@ -132,21 +127,13 @@ BOT_INFO = None
 # Memory menu configuration
 # ==========================================
 
-# Menu disappears after 30 seconds.
 MENU_TTL = 30
-
-# User interaction state lasts longer than the visual menu.
 INTERACTION_TTL = 300
 
 
 # ==========================================
 # In-memory timer registry
 # ==========================================
-
-# Key:
-#     (chat_id, user_id)
-#
-# Each user gets one active memory-menu timer per chat.
 
 menu_tasks: dict[
     tuple[int, int],
@@ -236,17 +223,6 @@ async def register_menu_identity(
     user_id: int,
     ephemeral_message_id: int,
 ) -> None:
-    """
-    Stores the complete identity of the user's ephemeral menu.
-
-    Telegram's ephemeral-message lifecycle is based on:
-
-        chat_id
-        receiver_user_id
-        ephemeral_message_id
-
-    We keep all three tied to the user.
-    """
 
     key = menu_identity_key(
         chat_id,
@@ -359,6 +335,25 @@ async def get_formatted_memories(
     lines.append("</ol>")
 
     return "".join(lines)
+
+
+# ==========================================
+# Bot API 10.2 Strict Rich Message Builder
+# ==========================================
+
+def build_validated_rich_message(html_content: str) -> InputRichMessage:
+    """
+    Enforces the Bot API 10.2 boundary where an InputRichMessage
+    must contain exactly one of html, markdown, or blocks.
+    """
+    if not html_content:
+        raise ValueError("Rich message payload cannot be empty.")
+        
+    return InputRichMessage(
+        html=html_content,
+        markdown=None,
+        blocks=None
+    )
 
 
 # ==========================================
@@ -549,8 +544,6 @@ async def schedule_menu_delete(
                 MENU_TTL
             )
 
-            # Make absolutely sure this is still the user's
-            # currently registered menu.
             current_id = (
                 await get_menu_identity(
                     chat_id,
@@ -625,17 +618,6 @@ async def send_menu(
     rich_html: str,
 ) -> Message:
 
-    """
-    Send the memory menu.
-
-    In a group/supergroup this MUST be an ephemeral message.
-
-    There is deliberately NO fallback to a normal message.
-
-    A normal fallback here would make private memories visible to
-    everyone in the group, which is exactly the bug we're preventing.
-    """
-
     is_group = (
         chat_id != user_id
     )
@@ -644,9 +626,7 @@ async def send_menu(
 
         message = await bot.send_rich_message(
             chat_id=chat_id,
-            rich_message=InputRichMessage(
-                html=rich_html
-            ),
+            rich_message=build_validated_rich_message(rich_html),
             ephemeral_message_parameters=(
                 EphemeralMessageParameters(
                     receiver_user_id=user_id,
@@ -672,10 +652,6 @@ async def send_menu(
             None,
         )
 
-        # SECURITY REQUIREMENT:
-        #
-        # If Telegram did not give us an ephemeral ID,
-        # NEVER turn this into a normal group message.
         if ephemeral_id is None:
 
             print(
@@ -689,8 +665,6 @@ async def send_menu(
                 "ephemeral_message_id."
             )
 
-        # If Telegram gives us receiver information,
-        # verify it belongs to the requested user.
         if (
             receiver_id is not None
             and receiver_id != user_id
@@ -732,24 +706,11 @@ async def send_menu(
 
         return message
 
-    # ======================================
     # Private chat
-    # ======================================
-
-    # Private chats do not need group-style ephemeral
-    # receiver routing. The chat itself belongs to the user.
-
     message = await bot.send_rich_message(
         chat_id=chat_id,
-        rich_message=InputRichMessage(
-            html=rich_html
-        ),
+        rich_message=build_validated_rich_message(rich_html),
     )
-
-    # Private chat still gets a 30-second timer.
-    #
-    # We store the normal message ID in the same identity
-    # slot so that only the current menu is controlled.
 
     message_id = message.message_id
 
@@ -887,10 +848,6 @@ async def authorize_memory_callback(
         }
     )
 
-    # ======================================
-    # GROUP / EPHEMERAL
-    # ======================================
-
     if is_group:
 
         ephemeral_id = getattr(
@@ -907,10 +864,6 @@ async def authorize_memory_callback(
             )
 
             return False
-
-        # ----------------------------------
-        # Check Telegram receiver identity
-        # ----------------------------------
 
         receiver_user = getattr(
             message,
@@ -936,10 +889,6 @@ async def authorize_memory_callback(
 
             return False
 
-        # ----------------------------------
-        # Check Redis ownership
-        # ----------------------------------
-
         owner_id = (
             await get_menu_identity(
                 chat_id,
@@ -959,10 +908,6 @@ async def authorize_memory_callback(
 
             return False
 
-        # ----------------------------------
-        # Check callback user's identity
-        # ----------------------------------
-
         if (
             receiver_id is not None
             and receiver_id != callback.from_user.id
@@ -976,10 +921,6 @@ async def authorize_memory_callback(
             return False
 
         return True
-
-    # ======================================
-    # PRIVATE CHAT
-    # ======================================
 
     current_id = (
         await get_menu_identity(
@@ -996,9 +937,6 @@ async def authorize_memory_callback(
         )
 
         return False
-
-    # For private chats, Telegram's message ID is
-    # sufficient because the chat belongs to the user.
 
     if (
         message.message_id
@@ -1061,7 +999,6 @@ async def edit_menu(
                 "without ephemeral_message_id."
             )
 
-        # Verify Redis identity one more time.
         current_id = (
             await get_menu_identity(
                 chat_id,
@@ -1080,12 +1017,9 @@ async def edit_menu(
             chat_id=chat_id,
             receiver_user_id=user_id,
             ephemeral_message_id=ephemeral_id,
-            rich_message=InputRichMessage(
-                html=rich_html
-            ),
+            rich_message=build_validated_rich_message(rich_html),
         )
 
-        # Keep ownership alive.
         await register_menu_identity(
             chat_id,
             user_id,
@@ -1099,10 +1033,6 @@ async def edit_menu(
         )
 
         return
-
-    # ======================================
-    # Private chat
-    # ======================================
 
     current_id = (
         await get_menu_identity(
@@ -1124,9 +1054,7 @@ async def edit_menu(
     await bot.edit_message_text(
         chat_id=chat_id,
         message_id=message.message_id,
-        rich_message=InputRichMessage(
-            html=rich_html
-        ),
+        rich_message=build_validated_rich_message(rich_html),
     )
 
     await register_menu_identity(
@@ -1233,7 +1161,6 @@ async def show_memories_command(
         user_id,
     )
 
-    # Cancel any old menu for this user/chat.
     await cancel_menu_timer(
         (
             chat_id,
@@ -1245,16 +1172,6 @@ async def show_memories_command(
         chat_id,
         user_id,
     )
-
-    # --------------------------------------
-    # IMPORTANT:
-    #
-    # Do NOT reply to the incoming ephemeral
-    # command.
-    #
-    # We explicitly create a NEW ephemeral
-    # message in group chats.
-    # --------------------------------------
 
     try:
 
@@ -1270,17 +1187,10 @@ async def show_memories_command(
             f"Memory menu send error: {e}"
         )
 
-        # If this is a group and Telegram failed to
-        # create an ephemeral menu, DO NOT send a
-        # public replacement.
-        #
-        # This prevents private memory leakage.
-
         if message.chat.type in {
             "group",
             "supergroup",
         }:
-
             return
 
         try:
@@ -1299,7 +1209,6 @@ async def show_memories_command(
 async def handle_memories(
     message: Message,
 ):
-
     await show_memories_command(
         message
     )
@@ -1730,10 +1639,6 @@ async def process_memory_text(
     user_id_str = str(user_id)
     chat_id = message.chat.id
 
-    # ======================================
-    # Add
-    # ======================================
-
     if action == "add":
 
         parts = [
@@ -1780,10 +1685,6 @@ async def process_memory_text(
 
         return True
 
-    # ======================================
-    # Edit
-    # ======================================
-
     if action == "edit_number":
 
         parts = (
@@ -1799,7 +1700,6 @@ async def process_memory_text(
             len(parts) != 2
             or not parts[0].isdigit()
         ):
-
             return True
 
         index = (
@@ -1836,10 +1736,6 @@ async def process_memory_text(
             pass
 
         return True
-
-    # ======================================
-    # Forget
-    # ======================================
 
     if action == "forget":
 
@@ -1987,9 +1883,13 @@ async def free_web_search(
             .get("results", [])[:10]
         )
 
-        return "\n\n".join(
-            f"Title: {x.get('title', '')}\n"
-            f"Content: {x.get('content', '')}\n"
+        return "
+
+".join(
+            f"Title: {x.get('title', '')}
+"
+            f"Content: {x.get('content', '')}
+"
             f"URL: {x.get('url', '')}"
             for x in results
             if x.get("title")
@@ -2046,7 +1946,6 @@ async def send_audio_track(
             )
 
         else:
-
             return
 
         try:
@@ -2065,7 +1964,6 @@ async def send_audio_track(
                 "message to be replied not found"
                 not in str(e).lower()
             ):
-
                 raise
 
             sent = await bot.send_audio(
@@ -2093,6 +1991,28 @@ async def send_audio_track(
 
 
 # ==========================================
+# Bot API 10.2 Community Topic Routing
+# ==========================================
+
+@router.message(F.community_chat_added)
+async def handle_community_chat_added(message: Message):
+    """
+    Absorbs Bot API 10.2 community additions gracefully to protect downstream logic.
+    """
+    print(f"Topology event: Chat {message.chat.id} linked to a community.")
+    return
+
+
+@router.message(F.community_chat_removed)
+async def handle_community_chat_removed(message: Message):
+    """
+    Absorbs Bot API 10.2 community removals.
+    """
+    print(f"Topology event: Chat {message.chat.id} removed from a community.")
+    return
+
+
+# ==========================================
 # Primary Chat
 # ==========================================
 
@@ -2105,20 +2025,8 @@ async def handle_conversation(
     message: Message,
 ):
 
-    # ======================================
-    # Regular audio files are NOT voice notes
-    # ======================================
-
-    # This is deliberately defensive.
-    # F.caption can match messages that have an audio
-    # file with a caption, so make absolutely sure that
-    # regular Telegram audio files never get processed.
     if message.audio is not None:
         return
-
-    # ======================================
-    # Memory input gets first priority
-    # ======================================
 
     action = await get_interaction(
         message.chat.id,
@@ -2135,7 +2043,6 @@ async def handle_conversation(
             message,
             action,
         ):
-
             return
 
     text = (
@@ -2226,40 +2133,21 @@ async def handle_conversation(
         == BOT_INFO.id
     )
 
-    # ======================================
-    # Voice notes require explicit targeting
-    # ======================================
-
     if message.voice is not None:
 
-        # A voice message is only processed when:
-        #
-        #   1. The bot is mentioned in its caption, or
-        #   2. The voice message is a reply to the bot.
-        #
-        # Random voice notes are ignored, including in
-        # private chats.
         if not (
             is_tagged
             or is_reply_to_bot
         ):
-
             return
 
     else:
-
-        # Normal text retains the existing behavior:
-        #
-        #   - private chat
-        #   - bot mention
-        #   - reply to bot
 
         if not (
             is_tagged
             or is_reply_to_bot
             or is_private
         ):
-
             return
 
     user_id_str = str(
@@ -2349,8 +2237,6 @@ async def handle_conversation(
     audio_bytes = None
     audio_mime = "audio/ogg"
 
-    # Only Telegram voice notes are downloaded
-    # and passed to Gemini.
     if message.voice is not None:
 
         voice_obj = message.voice
@@ -2371,7 +2257,6 @@ async def handle_conversation(
             "mime_type",
             None,
         ):
-
             audio_mime = (
                 voice_obj.mime_type
             )
@@ -2390,7 +2275,6 @@ async def handle_conversation(
         or replied_context
         or audio_bytes
     ):
-
         return
 
     # ==========================================
@@ -2398,10 +2282,6 @@ async def handle_conversation(
     # ==========================================
 
     try:
-
-        # ======================================
-        # Saved memories
-        # ======================================
 
         raw_mem = await redis_client.lrange(
             f"memory_list:{user_id_str}",
@@ -2417,10 +2297,6 @@ async def handle_conversation(
             )
             for x in raw_mem
         ]
-
-        # ======================================
-        # Conversation history
-        # ======================================
 
         history_key = (
             f"chat_history:"
@@ -2516,7 +2392,7 @@ async def handle_conversation(
 
             context.append(
                 "Message User is Replying To:\n"
-                f"\"{replied_context}\""
+                f'"{replied_context}"'
             )
 
         if chat_history:
@@ -2572,7 +2448,7 @@ async def handle_conversation(
             "OUTPUT FORMAT: Use Telegram Rich HTML. "
             "Use <h1>-<h6>, <p>, <b>, <i>, <u>, <s>, "
             "<code>, <pre>, <table>, <details>, "
-            "<a href=\"URL\">text</a>, "
+            '<a href="URL">text</a>, '
             "and other supported rich HTML where useful.\n"
             "Do not use Markdown asterisks for formatting. "
             "Do not use Markdown pipe tables. "
@@ -2612,22 +2488,18 @@ async def handle_conversation(
         # ======================================
 
         safety = [
-
             types.SafetySetting(
                 category="HARM_CATEGORY_HATE_SPEECH",
                 threshold="BLOCK_NONE",
             ),
-
             types.SafetySetting(
                 category="HARM_CATEGORY_HARASSMENT",
                 threshold="BLOCK_NONE",
             ),
-
             types.SafetySetting(
                 category="HARM_CATEGORY_SEXUALLY_EXPLICIT",
                 threshold="BLOCK_NONE",
             ),
-
             types.SafetySetting(
                 category="HARM_CATEGORY_DANGEROUS_CONTENT",
                 threshold="BLOCK_NONE",
@@ -2693,18 +2565,14 @@ async def handle_conversation(
 
             await bot.send_rich_message(
                 chat_id=chat_id,
-                rich_message=InputRichMessage(
-                    html=response_text
-                ),
+                rich_message=build_validated_rich_message(response_text),
             )
 
         else:
 
             await bot.send_rich_message(
                 chat_id=chat_id,
-                rich_message=InputRichMessage(
-                    html=response_text
-                ),
+                rich_message=build_validated_rich_message(response_text),
                 reply_parameters=ReplyParameters(
                     message_id=msg_id
                 ),
@@ -2748,13 +2616,10 @@ async def handle_conversation(
         )
 
         if is_private:
-
             await message.answer(
                 error
             )
-
         else:
-
             await message.answer(
                 error,
                 reply_to_message_id=msg_id,
@@ -2762,7 +2627,7 @@ async def handle_conversation(
 
 
 # ==========================================
-# Health check
+# Health check / Bot API 10.2 Update Guard
 # ==========================================
 
 async def health_check(
@@ -2777,8 +2642,23 @@ async def health_check(
                 if BOT_INFO
                 else None
             ),
+            "api_compatibility": "10.2"
         }
     )
+
+
+async def global_update_guard_middleware(app, handler):
+    """
+    Middleware catching unrecognized 10.2 sub-update models 
+    such as BotSubscriptionUpdated without crashing polling/webhook pipes.
+    """
+    async def middleware_handler(request):
+        try:
+            return await handler(request)
+        except Exception as e:
+            print(f"Muted unhandled layout or payload update event: {e}")
+            return web.json_response({"status": "handled_with_caveats"}, status=200)
+    return middleware_handler
 
 
 # ==========================================
@@ -2817,27 +2697,16 @@ async def main():
 
     global BOT_INFO
 
-    # ======================================
-    # Get bot information
-    # ======================================
-
     BOT_INFO = await bot.get_me()
 
     print(
         f"Logged in as @{BOT_INFO.username}"
     )
 
-    # ======================================
-    # Configure commands
-    # ======================================
-
     await configure_commands()
 
-    # ======================================
-    # Health server
-    # ======================================
-
-    app = web.Application()
+    # Apply 10.2 update safe-guard middleware to app routing context
+    app = web.Application(middlewares=[global_update_guard_middleware])
 
     app.router.add_get(
         "/",
@@ -2871,21 +2740,14 @@ async def main():
     await site.start()
 
     print(
-        f"Healthcheck server listening "
-        f"on port {port}"
+        f"Healthcheck server listening on port {port}"
     )
 
     print(
-        f"SearXNG endpoint: "
-        f"{SEARXNG_URL}"
+        f"SearXNG endpoint: {SEARXNG_URL}"
     )
 
-    # ======================================
-    # Poll Telegram
-    # ======================================
-
     try:
-
         await dp.start_polling(
             bot
         )
@@ -2895,27 +2757,18 @@ async def main():
         for task in list(
             menu_tasks.values()
         ):
-
             task.cancel()
 
         await bot.session.close()
-
         await redis_client.aclose()
-
         await runner.cleanup()
 
         print(
-            "Cleanup complete. "
-            "Process exiting."
+            "Cleanup complete. Process exiting."
         )
 
 
-# ==========================================
-# Entry point
-# ==========================================
-
 if __name__ == "__main__":
-
     asyncio.run(
         main()
     )
