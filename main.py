@@ -533,11 +533,6 @@ def get_memory_rich_message(
 
     # --------------------------------------
     # Native ordered memory list.
-    #
-    # This is intentionally separate from
-    # the paragraph above so Telegram renders
-    # the numbers as an actual Rich Message
-    # ordered list.
     # --------------------------------------
 
     if memories:
@@ -1748,11 +1743,11 @@ async def process_memory_text(
 
 
 # ==========================================
-# Delete Command
+# /del Command
 # ==========================================
 
 @router.message(
-    Command("delete", "del")
+    Command("del")
 )
 async def handle_delete(
     message: Message,
@@ -2500,6 +2495,13 @@ async def health_check(
 
 async def configure_commands() -> None:
 
+    # ======================================
+    # GROUP COMMANDS
+    #
+    # /memories is explicitly ephemeral.
+    # /del is the ONLY delete command.
+    # ======================================
+
     group_commands = [
         BotCommand(
             command="memories",
@@ -2510,10 +2512,14 @@ async def configure_commands() -> None:
         ),
 
         BotCommand(
-            command="delete",
+            command="del",
             description="Delete a bot message",
         ),
     ]
+
+    # ======================================
+    # PRIVATE COMMANDS
+    # ======================================
 
     private_commands = [
         BotCommand(
@@ -2524,7 +2530,7 @@ async def configure_commands() -> None:
         ),
 
         BotCommand(
-            command="delete",
+            command="del",
             description="Delete a bot message",
         ),
     ]
@@ -2538,6 +2544,10 @@ async def configure_commands() -> None:
         private_commands,
         scope=BotCommandScopeAllPrivateChats(),
     )
+
+    # ======================================
+    # Verify what Telegram actually stored.
+    # ======================================
 
     try:
         stored_group_commands = (
@@ -2564,9 +2574,26 @@ async def configure_commands() -> None:
             )
         )
 
+        stored_private_commands = (
+            await bot.get_my_commands(
+                scope=BotCommandScopeAllPrivateChats()
+            )
+        )
+
+        print(
+            "Telegram private commands: "
+            + str(
+                [
+                    command.command
+                    for command
+                    in stored_private_commands
+                ]
+            )
+        )
+
     except Exception as e:
         print(
-            "Could not verify Telegram group "
+            "Could not verify Telegram "
             f"commands: {e}"
         )
 
