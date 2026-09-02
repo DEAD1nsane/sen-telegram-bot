@@ -1178,18 +1178,14 @@ async def handle_memory_view(
     )
 
     body = (
-        "<b>What Sen Remembers</b>
-
-"
+        "<b>What Sen Remembers</b>"
         "These are the saved instructions and details "
         "currently available to Sen."
     )
 
     if not memories:
         body += (
-            "
-
-Nothing has been saved yet."
+            "Nothing has been saved yet."
         )
 
     try:
@@ -1228,9 +1224,7 @@ async def handle_memory_add(
     await callback.answer()
 
     body = (
-        "<b>Add a Memory</b>
-
-"
+        "<b>Add a Memory</b>"
         "Tell Sen what you'd like to keep in mind "
         "for future conversations.\n\n"
         "You can add several items at once by separating "
@@ -1281,9 +1275,7 @@ async def handle_memory_edit(
 
     if not memories:
         body = (
-            "<b>Edit a Memory</b>
-
-"
+            "<b>Edit a Memory</b>"
             "There aren't any saved memories to edit yet."
         )
 
