@@ -2502,7 +2502,7 @@ async def configure_commands() -> None:
     # /del is the ONLY delete command.
     # ======================================
 
-     group_commands = [
+    group_commands = [
         BotCommand(
             command="memories",
             description=(
@@ -2517,12 +2517,11 @@ async def configure_commands() -> None:
         ),
     ]
 
-
     # ======================================
     # PRIVATE COMMANDS
     # ======================================
 
-private_commands = [
+    private_commands = [
         BotCommand(
             command="memories",
             description=(
@@ -2535,12 +2534,13 @@ private_commands = [
             description="Delete a bot message",
         ),
     ]
-await bot.set_my_commands(
+
+    await bot.set_my_commands(
         group_commands,
         scope=BotCommandScopeAllGroupChats(),
     )
 
-await bot.set_my_commands(
+    await bot.set_my_commands(
         private_commands,
         scope=BotCommandScopeAllPrivateChats(),
     )
@@ -2549,7 +2549,7 @@ await bot.set_my_commands(
     # Verify what Telegram actually stored.
     # ======================================
 
-try:
+    try:
         stored_group_commands = (
             await bot.get_my_commands(
                 scope=BotCommandScopeAllGroupChats()
