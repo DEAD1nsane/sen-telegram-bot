@@ -346,17 +346,13 @@ async def show_help(message: Message) -> None:
         await send_menu(chat_id, user_id, rich_main_menu())
         return
 
-    # Safety fallback for an old command-menu cache. Delete the public command;
-    # the configured BotCommand will become ephemeral once Telegram refreshes it.
+    # A manually typed/public /help in a group cannot be converted into an
+    # ephemeral message without an eligible ephemeral reply context or admin
+    # privileges. Never fall back to an admin-only direct ephemeral send.
     try:
         await message.delete()
     except Exception:
         pass
-
-    try:
-        await send_menu(chat_id, user_id, rich_main_menu())
-    except Exception as e:
-        print(f"Ephemeral /help fallback failed: {e}")
 
 
 @router.message(Command("help"))
