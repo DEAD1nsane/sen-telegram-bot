@@ -53,11 +53,10 @@ redis_client = redis.from_url(
 )
 
 
-API_TOKEN = (
-    os.getenv("BOT_TOKEN")
-    or os.getenv("TELEGRAM_BOT_TOKEN")
-    or ""
-)
+API_TOKEN = os.getenv("BOT_TOKEN", "")
+
+if not API_TOKEN:
+    raise ValueError("CRITICAL CONFIGURATION ERROR: 'BOT_TOKEN' missing.")
 if not API_TOKEN:
     raise ValueError("CRITICAL CONFIGURATION ERROR: 'BOT_TOKEN' missing.")
 
