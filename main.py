@@ -35,7 +35,6 @@ else:
 API_TOKEN = os.getenv("BOT_TOKEN", "")
 SEARXNG_URL = os.getenv("SEARXNG_URL", "https://searxng-railway-production-3252.up.railway.app/search")
 
-# Globally enforce HTML parsing so Telegram compiles the tags natively[span_2](start_span)[span_2](end_span)
 bot = Bot(token=API_TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
 dp = Dispatcher()
 router = Router()
@@ -51,16 +50,12 @@ gemini_client = genai.Client(api_key=gemini_api_key)
 OWNER_ID = int(os.getenv("OWNER_ID", "0"))
 
 # ==========================================
-# Helpers & Web Search Pipeline
+# Helpers (Interactive UI & Native HTML Blocks)
 # ==========================================
 
 async def free_web_search(query: str) -> str:
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
-        "Accept": "application/json"
-    }
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)", "Accept": "application/json"}
     
-    # 1. Primary: Local SearXNG Container
     try:
         params = {"q": query, "format": "json"}
         async with httpx.AsyncClient() as client:
@@ -68,12 +63,9 @@ async def free_web_search(query: str) -> str:
             if res.status_code == 200:
                 results = res.json().get("results", [])[:10]
                 snippets = [f"Title: {i.get('title', '')}\nContent: {i.get('content', '')}\nURL: {i.get('url', '')}" for i in results if i.get('title') or i.get('content')]
-                if snippets: 
-                    return "\n\n".join(snippets)
-    except Exception as e:
-        print(f"SearXNG local error: {e}")
+                if snippets: return "\n\n".join(snippets)
+    except Exception as e: print(f"SearXNG local error: {e}")
 
-    # 2. Fallback: Public SearXNG Instance
     try:
         params = {"q": query, "format": "json"}
         async with httpx.AsyncClient() as client:
@@ -81,20 +73,11 @@ async def free_web_search(query: str) -> str:
             if res.status_code == 200:
                 results = res.json().get("results", [])[:10]
                 snippets = [f"Title: {i.get('title', '')}\nContent: {i.get('content', '')}\nURL: {i.get('url', '')}" for i in results if i.get('title') or i.get('content')]
-                if snippets: 
-                    return "\n\n".join(snippets)
-    except Exception as e:
-        print(f"SearXNG public fallback error: {e}")
+                if snippets: return "\n\n".join(snippets)
+    except Exception as e: print(f"SearXNG public fallback error: {e}")
         
-    # 3. Tertiary Fallback: Wikipedia Search API 
     try:
-        params = {
-            "action": "query",
-            "list": "search",
-            "srsearch": query,
-            "format": "json",
-            "utf8": "1"
-        }
+        params = {"action": "query", "list": "search", "srsearch": query, "format": "json", "utf8": "1"}
         async with httpx.AsyncClient() as client:
             res = await client.get("https://en.wikipedia.org/w/api.php", params=params, headers=headers, timeout=5.0)
             if res.status_code == 200:
@@ -105,10 +88,8 @@ async def free_web_search(query: str) -> str:
                         title = item.get("title", "")
                         snippet = item.get("snippet", "").replace('<span class="searchmatch">', '').replace('</span>', '')
                         snippets.append(f"Title: {title}\nContent: {snippet}\nURL: https://en.wikipedia.org/wiki/{title.replace(' ', '_')}")
-                    if snippets: 
-                        return "\n\n".join(snippets)
-    except Exception as e:
-        print(f"Wikipedia API error: {e}")
+                    if snippets: return "\n\n".join(snippets)
+    except Exception as e: print(f"Wikipedia API error: {e}")
 
     return ""
 
@@ -122,38 +103,16 @@ async def get_formatted_memories(user_id_str: str) -> str:
         
         lines = [
             "<b>Active Memory Directives</b>",
-            "──────────────────────────",
             "<ul>"
         ]
-        for mem in memories:
-            lines.append(f"<li>{mem}</li>")
+        for i, mem in enumerate(memories):
+            lines.append(f"<li><b>[{i+1}]</b> {mem}</li>")
         lines.append("</ul>")
         
         return "\n".join(lines)
-    except Exception as e:
+    except Exception as e: 
         print(f"Error fetching memory list format: {e}")
         return "Could not retrieve memory list."
-
-async def collapse_message(chat_id: int, message_id: int, delay: int):
-    await asyncio.sleep(delay)
-    content = "<blockquote>Active Memories Collapsed</blockquote>"
-    try:
-        await bot.edit_message_text(
-            chat_id=chat_id, 
-            message_id=message_id, 
-            text=content
-        )
-    except Exception as e:
-        print(f"Error collapsing memory list: {e}")
-
-async def auto_delete_message(chat_id: int, bot_msg_id: int, user_msg_id: int, delay: int):
-    await asyncio.sleep(delay)
-    try:
-        await bot.delete_message(chat_id=chat_id, message_id=bot_msg_id)
-    except Exception: pass
-    try:
-        await bot.delete_message(chat_id=chat_id, message_id=user_msg_id)
-    except Exception: pass
 
 async def send_audio_track(chat_id: int, msg_id: int, key: str, file_path: str, title: str, performer: str, is_private: bool):
     try:
@@ -170,24 +129,23 @@ async def send_audio_track(chat_id: int, msg_id: int, key: str, file_path: str, 
         if cached_id:
             try:
                 await attempt_send(cached_id.decode('utf-8') if isinstance(cached_id, bytes) else cached_id)
-            except Exception as e:
+            except Exception as e: 
                 if "message to be replied not found" in str(e).lower():
                     await bot.send_audio(chat_id=chat_id, audio=(cached_id.decode('utf-8') if isinstance(cached_id, bytes) else cached_id), title=title, performer=performer)
-                else:
-                    raise e
+                else: raise e
         elif os.path.exists(file_path):
             try:
                 msg = await attempt_send(file_path)
-            except Exception as e:
+            except Exception as e: 
                 if "message to be replied not found" in str(e).lower():
                     audio_file = FSInputFile(file_path)
                     msg = await bot.send_audio(chat_id=chat_id, audio=audio_file, title=title, performer=performer)
-                else:
-                    raise e
+                else: raise e
             if msg and msg.audio and msg.audio.file_id:
                 await redis_client.set(f"audio_cache:{key}", msg.audio.file_id)
-    except Exception as send_err:
+    except Exception as send_err: 
         print(f"Error sending audio ({key}): {send_err}")
+
 
 # ==========================================
 # Aiogram Handlers
@@ -206,8 +164,11 @@ async def handle_delete(message: Message):
 
 @router.message(Command("help", "commands"))
 async def handle_help(message: Message):
+    try: await message.delete()
+    except Exception: pass
+    
     content = (
-        "<b>Sen Bot Command Hub</b>\n\n"
+        "<b>Sen Bot Command Hub</b>\n"
         "<ul>"
         "<li><b>remember [item],, [item2]</b> - Adds items to memory</li>"
         "<li><b>what do you remember</b> - Displays rules in a formatted list</li>"
@@ -217,13 +178,7 @@ async def handle_help(message: Message):
         "</ul>"
     )
     
-    if message.chat.type == "private":
-        sent_msg = await message.answer(text=content)
-    else:
-        sent_msg = await message.answer(text=content, reply_to_message_id=message.message_id)
-        
-    if sent_msg:
-        asyncio.create_task(auto_delete_message(message.chat.id, sent_msg.message_id, message.message_id, 60))
+    await message.answer(text=content, is_ephemeral=True)
 
 def text_in(options: set):
     return lambda message: message.text and message.text.lower() in options
@@ -233,19 +188,19 @@ def text_startswith(prefix: str):
 
 @router.message(text_in({"what do you remember", "how do you remember"}))
 async def handle_what_remember(message: Message):
+    try: await message.delete()
+    except Exception: pass
+    
     user_id_str = str(message.from_user.id)
     content = await get_formatted_memories(user_id_str)
     
-    if message.chat.type == "private":
-        sent_msg = await message.answer(text=content)
-    else:
-        sent_msg = await message.answer(text=content, reply_to_message_id=message.message_id)
-        
-    if sent_msg:
-        asyncio.create_task(collapse_message(message.chat.id, sent_msg.message_id, 60))
+    await message.answer(text=content, is_ephemeral=True)
 
 @router.message(text_startswith("remember "))
 async def handle_remember(message: Message):
+    try: await message.delete()
+    except Exception: pass
+    
     user_id_str = str(message.from_user.id)
     clean_prompt = message.text.strip()
     parts = [p.strip()[:200] for p in clean_prompt[9:].split(",,") if p.strip()]
@@ -260,16 +215,13 @@ async def handle_remember(message: Message):
     await redis_client.ltrim(f"memory_list:{user_id_str}", -25, -1)
     content = await get_formatted_memories(user_id_str)
     
-    if message.chat.type == "private":
-        sent_msg = await message.answer(text=content)
-    else:
-        sent_msg = await message.answer(text=content, reply_to_message_id=message.message_id)
-        
-    if sent_msg:
-        asyncio.create_task(collapse_message(message.chat.id, sent_msg.message_id, 60))
+    await message.answer(text=content, is_ephemeral=True)
 
 @router.message(text_startswith("edit "))
 async def handle_edit(message: Message):
+    try: await message.delete()
+    except Exception: pass
+    
     user_id_str = str(message.from_user.id)
     clean_prompt = message.text.strip()
     parts = clean_prompt[5:].strip().split(" ", 1)
@@ -280,38 +232,30 @@ async def handle_edit(message: Message):
         if 0 <= idx < len(raw_items):
             await redis_client.lset(f"memory_list:{user_id_str}", idx, new_val)
             content = await get_formatted_memories(user_id_str)
-            
-            if message.chat.type == "private":
-                sent_msg = await message.answer(text=content)
-            else:
-                sent_msg = await message.answer(text=content, reply_to_message_id=message.message_id)
-                
-            if sent_msg:
-                asyncio.create_task(collapse_message(message.chat.id, sent_msg.message_id, 60))
-            return
-            
-    error_content = "Usage: edit [number] [new text]"
-    sent_msg = await message.answer(text=error_content)
-    if sent_msg:
-        asyncio.create_task(auto_delete_message(message.chat.id, sent_msg.message_id, message.message_id, 10))
+        else:
+            content = "Invalid memory index.\n\n" + await get_formatted_memories(user_id_str)
+    else:
+        content = "Usage: edit [number] [new text]"
+        
+    await message.answer(text=content, is_ephemeral=True)
 
 @router.message(F.text.lower() == "forget all")
 async def handle_forget_all(message: Message):
+    try: await message.delete()
+    except Exception: pass
+    
     user_id_str = str(message.from_user.id)
     chat_id = message.chat.id
     await redis_client.delete(f"memory_list:{user_id_str}", f"chat_history:{chat_id}:{user_id_str}")
     
     content = "Cleared all your saved memories."
-    if message.chat.type == "private":
-        sent_msg = await message.answer(text=content)
-    else:
-        sent_msg = await message.answer(text=content, reply_to_message_id=message.message_id)
-        
-    if sent_msg:
-        asyncio.create_task(auto_delete_message(message.chat.id, sent_msg.message_id, message.message_id, 10))
+    await message.answer(text=content, is_ephemeral=True)
 
 @router.message(text_startswith("forget "))
 async def handle_forget(message: Message):
+    try: await message.delete()
+    except Exception: pass
+    
     user_id_str = str(message.from_user.id)
     clean_prompt = message.text.strip()
     try:
@@ -328,14 +272,7 @@ async def handle_forget(message: Message):
     except Exception: pass
         
     content = await get_formatted_memories(user_id_str)
-    
-    if message.chat.type == "private":
-        sent_msg = await message.answer(text=content)
-    else:
-        sent_msg = await message.answer(text=content, reply_to_message_id=message.message_id)
-        
-    if sent_msg:
-        asyncio.create_task(collapse_message(message.chat.id, sent_msg.message_id, 60))
+    await message.answer(text=content, is_ephemeral=True)
 
 # ==========================================
 # Primary Chat, Mentions & Audio Engine
@@ -344,7 +281,6 @@ async def handle_forget(message: Message):
 @router.message(F.text | F.caption | F.voice | F.audio)
 async def handle_conversation(message: Message):
     text = message.text or message.caption or ""
-    # Strip HTML tags internally to check for triggers without parsing breakage
     text_no_html = re.sub(r'<[^>]+>', '', text)
 
     if re.search(r'\bsen\b', text_no_html, re.IGNORECASE):
@@ -428,12 +364,13 @@ async def handle_conversation(message: Message):
                 today_str = datetime.now(timezone.utc).strftime("%A, %B %d, %Y")
                 
                 bot_instructions = (
-                    f"Today's date is {today_str}."
+                    f"Today's date is {today_str}. Keep responses structural using double line-breaks to separate ideas. "
                     "Never use standard AI pleasantries. Do not start responses with 'As an AI' or end with generic offers for help. "
-                    "Keep casual replies brief, but dynamically expand your response length when explicitly asked for details."
+                    "Keep casual replies brief, but dynamically expand your response length when explicitly asked for details or when playing interactive games. "
+                    "If the user changes the subject abruptly, drop the previous topic immediately and adapt to the new flow. "
                     "If the user is clearly joking or sarcastic, match their energy rather than taking the prompt literally. "
                     "If you do not know the answer or the provided context is insufficient, state 'I don't have enough details to answer that accurately' directly without guessing. "
-                    "Do not assume personal details about the user unless they are explicitly provided in your memory list."
+                    "Do not assume personal details about the user unless they are explicitly provided in your memory list.\n\n"
                     "CRITICAL FORMATTING RULE: You must natively structure all of your output utilizing standard Telegram HTML tags:\n"
                     "- Use <b>text</b> for bold.\n"
                     "- Use <i>text</i> for italics.\n"
@@ -446,8 +383,10 @@ async def handle_conversation(message: Message):
                 if search_context:
                     bot_instructions += (
                         "\nWhen referencing 'Web Search Context', state the information directly without saying 'According to my search' or 'I found this online'. "
-                        "CRITICAL SOURCE RULE: If the user explicitly asks for links, sources, or URLs in their prompt, you MUST cite them directly in the text as inline rich-text footnotes using standard HTML anchor tags (e.g., <a href='URL'>[1]</a>). "
-                        "If the user does not explicitly ask for sources, do not include URLs."
+                        "CRITICAL SOURCE RULE: If the user explicitly asks for links, sources, or URLs in their prompt, you MUST cite them as internal footnotes using Telegram's Rich Message formatting options. "
+                        "1. Cite the source inline using a local hash link (e.g., <a href=\"#cite1\">[1]</a>).\n"
+                        "2. At the end of your response, create the destination anchor and provide the actual URL (e.g., <a name=\"cite1\"></a> [1] <a href=\"URL\">Source Title</a>).\n"
+                        "You must use double quotes for all HTML attributes. Do NOT output raw, unformatted URLs. If the user does not explicitly ask for sources, do not include URLs."
                     )
 
                 if chat_history:
@@ -499,7 +438,6 @@ async def handle_conversation(message: Message):
 
                 response_text = response.text or ""
                 
-                # Clean up any residual markdown that might break parsing, leaving HTML untouched[span_3](start_span)[span_3](end_span)
                 response_text = response_text.replace('\u2022', '').replace('```', '')
 
                 preview_opts = LinkPreviewOptions(is_disabled=False, prefer_small_media=True)
@@ -509,7 +447,6 @@ async def handle_conversation(message: Message):
                 else:
                     await message.answer(text=response_text, reply_to_message_id=msg_id, link_preview_options=preview_opts)
 
-                # Store plain text version in Redis history so HTML tags aren't fed back into prompt context
                 clean_history_text = re.sub(r'<[^>]+>', '', response_text)
                 await redis_client.rpush(history_key, f"User: {clean_prompt or 'Voice Note'}", f"Bot: {clean_history_text}")
                 await redis_client.ltrim(history_key, -10, -1)
@@ -536,6 +473,7 @@ async def main():
     global BOT_INFO
     
     try:
+        print("Clearing conflicting webhooks from Telegram servers...")
         await bot.delete_webhook(drop_pending_updates=True)
         BOT_INFO = await bot.get_me()
         print(f"Bot authenticated as {BOT_INFO.username}")
