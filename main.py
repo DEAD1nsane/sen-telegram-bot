@@ -1,11 +1,9 @@
 import os
 import re
 import asyncio
-import html
 from datetime import datetime, timezone
 
 from aiohttp import web
-
 from aiogram import Bot, Dispatcher, Router, F
 from aiogram.types import (
     Message,
@@ -14,6 +12,7 @@ from aiogram.types import (
     InlineKeyboardMarkup,
     InlineKeyboardButton,
     CallbackQuery,
+    ForceReply,
 )
 from aiogram.filters import Command
 from aiogram.client.default import DefaultBotProperties
@@ -55,22 +54,15 @@ else:
 
 API_TOKEN = os.getenv("BOT_TOKEN", "")
 
-if not API_TOKEN:
-    raise ValueError(
-        "CRITICAL CONFIGURATION ERROR: 'BOT_TOKEN' missing."
-    )
-
-
-# Railway private networking URL for your SearXNG service.
-#
-# You can override this with:
-#
-# SEARXNG_URL=http://searxng.railway.internal:8080/search
-#
 SEARXNG_URL = os.getenv(
     "SEARXNG_URL",
     "http://searxng.railway.internal:8080/search",
 )
+
+if not API_TOKEN:
+    raise ValueError(
+        "CRITICAL CONFIGURATION ERROR: 'BOT_TOKEN' missing."
+    )
 
 
 bot = Bot(
@@ -82,16 +74,9 @@ bot = Bot(
 
 dp = Dispatcher()
 router = Router()
-
 dp.include_router(router)
 
-
 BOT_INFO = None
-
-
-# ==========================================
-# Gemini
-# ==========================================
 
 gemini_api_key = os.getenv("GEMINI_API_KEY", "")
 
@@ -105,298 +90,1399 @@ gemini_client = genai.Client(
     api_key=gemini_api_key,
 )
 
-
-# Primary model.
-PRIMARY_MODEL = "gemini-3.5-flash-lite"
-
-# Fallback model.
-#
-# We intentionally use another current 3.x model instead
-# of falling back to the old 2.5 model.
-FALLBACK_MODEL = "gemini-3.5-flash"
-
-
 OWNER_ID = int(
-    os.getenv("OWNER_ID", "0")
-)
-
-
-# ==========================================
-# Helpers
-# ==========================================
-
-def get_dismiss_keyboard(
-    user_id: int,
-) -> InlineKeyboardMarkup:
-    """Creates the interactive dismiss button."""
-
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text="🗑 Dismiss",
-                    callback_data=f"dismiss_{user_id}",
-                )
-            ]
-        ]
+    os.getenv(
+        "OWNER_ID",
+        "0",
     )
-
-
-@router.callback_query(
-    F.data.startswith("dismiss_")
 )
-async def handle_dismiss_callback(
-    callback: CallbackQuery,
+
+
+# ==========================================
+# Telegram Rich Message API
+# ==========================================
+
+TELEGRAM_API_BASE = (
+    f"https://api.telegram.org/bot{API_TOKEN}"
+)
+
+
+async def telegram_api(
+    method: str,
+    payload: dict,
+) -> dict:
+    """
+    Direct Bot API helper.
+
+    This is used for Bot API 10.3 Rich Messages because
+    installed aiogram versions may not yet expose all
+    Rich Message classes.
+    """
+
+    url = f"{TELEGRAM_API_BASE}/{method}"
+
+    async with httpx.AsyncClient(
+        timeout=15.0
+    ) as client:
+
+        response = await client.post(
+            url,
+            json=payload,
+        )
+
+        try:
+            data = response.json()
+        except Exception:
+            data = {
+                "ok": False,
+                "description": response.text,
+            }
+
+        if not data.get("ok"):
+            raise RuntimeError(
+                f"Telegram API {method} failed: "
+                f"{data}"
+            )
+
+        return data
+
+
+async def send_rich_message(
+    chat_id: int,
+    html: str,
+    *,
+    receiver_user_id: int | None = None,
+    callback_query_id: str | None = None,
+    replace_callback_query_message: bool = False,
+    reply_to_message_id: int | None = None,
 ):
-    try:
-        target_id = int(
-            callback.data.split("_", 1)[1]
-        )
-
-    except (
-        IndexError,
-        ValueError,
-        AttributeError,
-    ):
-        await callback.answer(
-            "Invalid callback data.",
-            show_alert=True,
-        )
-        return
-
-    if callback.from_user.id != target_id:
-        await callback.answer(
-            "You cannot dismiss this menu.",
-            show_alert=True,
-        )
-        return
-
-    try:
-        if callback.message:
-            await callback.message.delete()
-
-        await callback.answer(
-            "Menu closed."
-        )
-
-    except Exception:
-        await callback.answer(
-            "Failed to delete message.",
-            show_alert=True,
-        )
-
-
-# ==========================================
-# Telegram HTML Helpers
-# ==========================================
-
-def clean_telegram_html(text: str) -> str:
     """
-    Cleans common Markdown artifacts from Gemini output.
+    Sends a Rich Message using Bot API 10.3.
 
-    Gemini is instructed to return Telegram HTML, but models
-    occasionally decide Markdown is their true calling.
-    This removes the obvious offenders without destroying
-    legitimate HTML.
+    If callback_query_id is provided, the message becomes
+    an ephemeral response associated with that button press.
     """
 
-    if not text:
-        return ""
-
-    text = text.strip()
-
-    # Remove Markdown code fences.
-    text = re.sub(
-        r"```(?:html|markdown|text)?\s*",
-        "",
-        text,
-        flags=re.IGNORECASE,
-    )
-
-    text = text.replace(
-        "```",
-        "",
-    )
-
-    # Remove bullet glyphs that Gemini may insert.
-    text = text.replace(
-        "\u2022",
-        "",
-    )
-
-    # Remove Markdown heading markers.
-    text = re.sub(
-        r"(?m)^\s{0,3}#{1,6}\s+",
-        "",
-        text,
-    )
-
-    # Convert common Markdown bold/italic into HTML.
-    text = re.sub(
-        r"\*\*(.+?)\*\*",
-        r"<b>\1</b>",
-        text,
-        flags=re.DOTALL,
-    )
-
-    text = re.sub(
-        r"(?<!\*)\*([^*\n]+?)\*(?!\*)",
-        r"<i>\1</i>",
-        text,
-    )
-
-    # Remove unsupported Markdown table separators.
-    text = re.sub(
-        r"(?m)^\s*\|?(?:\s*:?-+:?\s*\|)+\s*$",
-        "",
-        text,
-    )
-
-    # Telegram accepts these common HTML tags.
-    # Nothing else should be blindly introduced.
-    allowed_tags = {
-        "b",
-        "strong",
-        "i",
-        "em",
-        "u",
-        "ins",
-        "s",
-        "strike",
-        "del",
-        "code",
-        "pre",
-        "a",
-        "blockquote",
-        "tg-spoiler",
-        "span",
+    payload = {
+        "chat_id": chat_id,
+        "rich_message": {
+            "html": html,
+        },
     }
 
-    # Remove HTML tags that Telegram doesn't support.
-    def sanitize_tag(match):
-        tag = match.group(0)
+    if reply_to_message_id is not None:
+        payload["reply_parameters"] = {
+            "message_id": reply_to_message_id,
+        }
 
-        tag_name_match = re.match(
-            r"</?\s*([a-zA-Z0-9-]+)",
-            tag,
-        )
+    if receiver_user_id is not None:
+        ephemeral = {
+            "receiver_user_id": receiver_user_id,
+        }
 
-        if not tag_name_match:
-            return ""
+        if callback_query_id:
+            ephemeral["callback_query_id"] = (
+                callback_query_id
+            )
 
-        tag_name = (
-            tag_name_match.group(1)
-            .lower()
-        )
+        if replace_callback_query_message:
+            ephemeral[
+                "replace_callback_query_message"
+            ] = True
 
-        if tag_name not in allowed_tags:
-            return html.escape(tag)
+        payload[
+            "ephemeral_message_parameters"
+        ] = ephemeral
 
-        return tag
-
-    text = re.sub(
-        r"</?[^>]+>",
-        sanitize_tag,
-        text,
+    return await telegram_api(
+        "sendRichMessage",
+        payload,
     )
 
-    return text.strip()
 
-
-async def safe_answer(
-    message: Message,
-    text: str,
-    reply_to: int | None = None,
+async def answer_callback(
+    callback: CallbackQuery,
+    text: str | None = None,
+    show_alert: bool = False,
 ):
-    """
-    Sends Telegram HTML.
-
-    If Gemini accidentally generates malformed HTML,
-    retry once as plain text instead of letting the bot
-    explode over a formatting tag.
-    """
-
-    text = clean_telegram_html(text)
-
-    if not text:
-        text = "I didn't receive a response."
-
-    preview_opts = LinkPreviewOptions(
-        is_disabled=False,
-        prefer_small_media=True,
-    )
-
     try:
-        if reply_to is not None:
-            return await message.answer(
-                text=text,
-                reply_to_message_id=reply_to,
-                link_preview_options=preview_opts,
-            )
-
-        return await message.answer(
+        await bot.answer_callback_query(
+            callback.id,
             text=text,
-            link_preview_options=preview_opts,
+            show_alert=show_alert,
         )
-
-    except Exception as first_error:
+    except Exception as e:
         print(
-            "Telegram HTML send failed: "
-            f"{first_error}"
-        )
-
-        # Fall back to plain text.
-        plain_text = re.sub(
-            r"<[^>]+>",
-            "",
-            text,
-        )
-
-        plain_text = html.unescape(
-            plain_text
-        )
-
-        if reply_to is not None:
-            return await message.answer(
-                text=plain_text,
-                reply_to_message_id=reply_to,
-            )
-
-        return await message.answer(
-            text=plain_text,
+            f"Callback answer error: {e}"
         )
 
 
 # ==========================================
-# SearXNG Search
+# Rich UI
+# ==========================================
+
+def rich_button(
+    text: str,
+    callback_data: str,
+    style: str = "primary",
+) -> str:
+    """
+    Creates a Telegram Rich Message callback button.
+    """
+
+    return (
+        f'<tg-button '
+        f'type="callback_data" '
+        f'style="{style}" '
+        f'data="{callback_data}">'
+        f'{text}'
+        f'</tg-button>'
+    )
+
+
+def rich_row(*buttons: str) -> str:
+    return (
+        "<tg-button-row>"
+        + "".join(buttons)
+        + "</tg-button-row>"
+    )
+
+
+def escape_html(text: str) -> str:
+    return (
+        text.replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+    )
+
+
+def get_help_rich_message() -> str:
+    return (
+        "<h1>Sen Bot</h1>"
+        "<p>Memory and bot controls</p>"
+
+        + rich_row(
+            rich_button(
+                "Remember",
+                "mem_remember",
+                "success",
+            ),
+            rich_button(
+                "View Memories",
+                "mem_view",
+                "primary",
+            ),
+        )
+
+        + rich_row(
+            rich_button(
+                "Edit Memory",
+                "mem_edit",
+                "primary",
+            ),
+            rich_button(
+                "Forget Memory",
+                "mem_forget",
+                "danger",
+            ),
+        )
+
+        + rich_row(
+            rich_button(
+                "Forget All",
+                "mem_forget_all",
+                "danger",
+            ),
+            rich_button(
+                "Dismiss",
+                "menu_dismiss",
+                "link",
+            ),
+        )
+    )
+
+
+def get_back_menu_message() -> str:
+    return (
+        "<p><b>Memory Controls</b></p>"
+        "<p>Choose an action below.</p>"
+
+        + rich_row(
+            rich_button(
+                "Remember",
+                "mem_remember",
+                "success",
+            ),
+            rich_button(
+                "View Memories",
+                "mem_view",
+                "primary",
+            ),
+        )
+
+        + rich_row(
+            rich_button(
+                "Edit Memory",
+                "mem_edit",
+                "primary",
+            ),
+            rich_button(
+                "Forget Memory",
+                "mem_forget",
+                "danger",
+            ),
+        )
+
+        + rich_row(
+            rich_button(
+                "Forget All",
+                "mem_forget_all",
+                "danger",
+            ),
+            rich_button(
+                "Dismiss",
+                "menu_dismiss",
+                "link",
+            ),
+        )
+    )
+
+
+# ==========================================
+# Memory Helpers
+# ==========================================
+
+async def get_memories(
+    user_id_str: str,
+) -> list[str]:
+
+    raw_items = await redis_client.lrange(
+        f"memory_list:{user_id_str}",
+        0,
+        -1,
+    )
+
+    return [
+        item.decode("utf-8")
+        if isinstance(item, bytes)
+        else item
+        for item in raw_items
+    ]
+
+
+async def get_formatted_memories(
+    user_id_str: str,
+) -> str:
+
+    try:
+        memories = await get_memories(
+            user_id_str
+        )
+
+        if not memories:
+            return (
+                "<b>Active Memories</b>"
+                "<p>Your memory list is currently empty.</p>"
+                + rich_row(
+                    rich_button(
+                        "Remember Something",
+                        "mem_remember",
+                        "success",
+                    ),
+                    rich_button(
+                        "Back",
+                        "mem_menu",
+                        "link",
+                    ),
+                )
+            )
+
+        lines = [
+            "<h2>Active Memories</h2>",
+        ]
+
+        for index, memory in enumerate(
+            memories,
+            start=1,
+        ):
+            safe_memory = escape_html(
+                memory
+            )
+
+            lines.append(
+                f"<p><b>{index}.</b> "
+                f"{safe_memory}</p>"
+            )
+
+        return (
+            "".join(lines)
+
+            + rich_row(
+                rich_button(
+                    "Remember",
+                    "mem_remember",
+                    "success",
+                ),
+                rich_button(
+                    "Edit",
+                    "mem_edit",
+                    "primary",
+                ),
+            )
+
+            + rich_row(
+                rich_button(
+                    "Forget",
+                    "mem_forget",
+                    "danger",
+                ),
+                rich_button(
+                    "Back",
+                    "mem_menu",
+                    "link",
+                ),
+            )
+        )
+
+    except Exception as e:
+        print(
+            f"Error fetching memory list: {e}"
+        )
+
+        return (
+            "<b>Memory Error</b>"
+            "<p>Could not retrieve your memory list.</p>"
+            + rich_row(
+                rich_button(
+                    "Back",
+                    "mem_menu",
+                    "link",
+                )
+            )
+        )
+
+
+async def clear_memory_state(
+    user_id_str: str,
+):
+    await redis_client.delete(
+        f"memory_state:{user_id_str}"
+    )
+
+
+async def set_memory_state(
+    user_id_str: str,
+    state: str,
+    extra: str = "",
+):
+    await redis_client.hset(
+        f"memory_state:{user_id_str}",
+        mapping={
+            "state": state,
+            "extra": extra,
+        },
+    )
+
+    await redis_client.expire(
+        f"memory_state:{user_id_str}",
+        120,
+    )
+
+
+async def get_memory_state(
+    user_id_str: str,
+):
+    data = await redis_client.hgetall(
+        f"memory_state:{user_id_str}"
+    )
+
+    if not data:
+        return None
+
+    def decode(value):
+        if isinstance(value, bytes):
+            return value.decode(
+                "utf-8",
+                errors="replace",
+            )
+        return value
+
+    return {
+        decode(k): decode(v)
+        for k, v in data.items()
+    }
+
+
+# ==========================================
+# Interactive Memory UI
+# ==========================================
+
+@router.callback_query(
+    F.data.startswith("mem_")
+    | F.data.startswith("menu_")
+)
+async def handle_rich_memory_callback(
+    callback: CallbackQuery,
+):
+    if not callback.data:
+        await answer_callback(
+            callback,
+            "Invalid button.",
+            True,
+        )
+        return
+
+    action = callback.data
+
+    user_id = callback.from_user.id
+    user_id_str = str(user_id)
+
+    message = callback.message
+
+    if not message:
+        await answer_callback(
+            callback,
+            "This menu is no longer available.",
+            True,
+        )
+        return
+
+    chat_id = message.chat.id
+
+    try:
+        # --------------------------------------
+        # Main menu
+        # --------------------------------------
+
+        if action == "mem_menu":
+
+            await answer_callback(
+                callback,
+                "Opening memory controls...",
+            )
+
+            await send_rich_message(
+                chat_id,
+                get_back_menu_message(),
+                receiver_user_id=user_id,
+                callback_query_id=callback.id,
+                replace_callback_query_message=True,
+            )
+
+            return
+
+        # --------------------------------------
+        # View memories
+        # --------------------------------------
+
+        if action == "mem_view":
+
+            await answer_callback(
+                callback,
+                "Loading memories...",
+            )
+
+            content = (
+                await get_formatted_memories(
+                    user_id_str
+                )
+            )
+
+            await send_rich_message(
+                chat_id,
+                content,
+                receiver_user_id=user_id,
+                callback_query_id=callback.id,
+                replace_callback_query_message=True,
+            )
+
+            return
+
+        # --------------------------------------
+        # Remember
+        # --------------------------------------
+
+        if action == "mem_remember":
+
+            await set_memory_state(
+                user_id_str,
+                "remember",
+            )
+
+            await answer_callback(
+                callback,
+                "Memory mode enabled.",
+            )
+
+            prompt = (
+                "<h2>Remember Something</h2>"
+                "<p>Send me the fact you want me "
+                "to remember.</p>"
+                "<p>You can add multiple memories by "
+                "separating them with <code>,,</code>.</p>"
+                "<p><i>This interaction expires "
+                "automatically.</i></p>"
+                + rich_row(
+                    rich_button(
+                        "Cancel",
+                        "mem_cancel",
+                        "link",
+                    )
+                )
+            )
+
+            await send_rich_message(
+                chat_id,
+                prompt,
+                receiver_user_id=user_id,
+                callback_query_id=callback.id,
+                replace_callback_query_message=True,
+            )
+
+            return
+
+        # --------------------------------------
+        # Edit
+        # --------------------------------------
+
+        if action == "mem_edit":
+
+            memories = await get_memories(
+                user_id_str
+            )
+
+            if not memories:
+
+                await answer_callback(
+                    callback,
+                    "You don't have any memories.",
+                    True,
+                )
+
+                return
+
+            await set_memory_state(
+                user_id_str,
+                "edit_index",
+            )
+
+            await answer_callback(
+                callback,
+                "Choose a memory number.",
+            )
+
+            lines = [
+                "<h2>Edit Memory</h2>",
+                "<p>Send the number of the memory "
+                "you want to edit.</p>",
+                "",
+            ]
+
+            for index, memory in enumerate(
+                memories,
+                start=1,
+            ):
+                lines.append(
+                    f"<p><b>{index}.</b> "
+                    f"{escape_html(memory)}</p>"
+                )
+
+            lines.append(
+                "<p><i>Example: "
+                "<code>2</code></i></p>"
+            )
+
+            lines.append(
+                rich_row(
+                    rich_button(
+                        "Cancel",
+                        "mem_cancel",
+                        "link",
+                    )
+                )
+            )
+
+            await send_rich_message(
+                chat_id,
+                "".join(lines),
+                receiver_user_id=user_id,
+                callback_query_id=callback.id,
+                replace_callback_query_message=True,
+            )
+
+            return
+
+        # --------------------------------------
+        # Forget
+        # --------------------------------------
+
+        if action == "mem_forget":
+
+            memories = await get_memories(
+                user_id_str
+            )
+
+            if not memories:
+
+                await answer_callback(
+                    callback,
+                    "You don't have any memories.",
+                    True,
+                )
+
+                return
+
+            await set_memory_state(
+                user_id_str,
+                "forget_index",
+            )
+
+            await answer_callback(
+                callback,
+                "Choose a memory number.",
+            )
+
+            lines = [
+                "<h2>Forget Memory</h2>",
+                "<p>Send the number of the memory "
+                "you want to remove.</p>",
+                "",
+            ]
+
+            for index, memory in enumerate(
+                memories,
+                start=1,
+            ):
+                lines.append(
+                    f"<p><b>{index}.</b> "
+                    f"{escape_html(memory)}</p>"
+                )
+
+            lines.append(
+                "<p>You can remove multiple memories "
+                "using <code>1,, 3,, 5</code>.</p>"
+            )
+
+            lines.append(
+                rich_row(
+                    rich_button(
+                        "Cancel",
+                        "mem_cancel",
+                        "link",
+                    )
+                )
+            )
+
+            await send_rich_message(
+                chat_id,
+                "".join(lines),
+                receiver_user_id=user_id,
+                callback_query_id=callback.id,
+                replace_callback_query_message=True,
+            )
+
+            return
+
+        # --------------------------------------
+        # Forget all
+        # --------------------------------------
+
+        if action == "mem_forget_all":
+
+            await set_memory_state(
+                user_id_str,
+                "confirm_forget_all",
+            )
+
+            await answer_callback(
+                callback,
+                "Confirmation required.",
+            )
+
+            confirmation = (
+                "<h2>Forget Everything?</h2>"
+                "<p>This will permanently remove "
+                "all saved memories.</p>"
+                "<p>Your normal chat history is not "
+                "deleted by this action.</p>"
+
+                + rich_row(
+                    rich_button(
+                        "Yes, Forget All",
+                        "mem_confirm_all",
+                        "danger",
+                    ),
+                    rich_button(
+                        "Cancel",
+                        "mem_cancel",
+                        "link",
+                    ),
+                )
+            )
+
+            await send_rich_message(
+                chat_id,
+                confirmation,
+                receiver_user_id=user_id,
+                callback_query_id=callback.id,
+                replace_callback_query_message=True,
+            )
+
+            return
+
+        # --------------------------------------
+        # Confirm forget all
+        # --------------------------------------
+
+        if action == "mem_confirm_all":
+
+            await redis_client.delete(
+                f"memory_list:{user_id_str}"
+            )
+
+            await clear_memory_state(
+                user_id_str
+            )
+
+            await answer_callback(
+                callback,
+                "All memories deleted.",
+            )
+
+            await send_rich_message(
+                chat_id,
+                (
+                    "<h2>Memories Cleared</h2>"
+                    "<p>All of your saved memories "
+                    "have been deleted.</p>"
+
+                    + rich_row(
+                        rich_button(
+                            "Memory Menu",
+                            "mem_menu",
+                            "primary",
+                        ),
+                        rich_button(
+                            "Dismiss",
+                            "menu_dismiss",
+                            "link",
+                        ),
+                    )
+                ),
+                receiver_user_id=user_id,
+                callback_query_id=callback.id,
+                replace_callback_query_message=True,
+            )
+
+            return
+
+        # --------------------------------------
+        # Cancel
+        # --------------------------------------
+
+        if action == "mem_cancel":
+
+            await clear_memory_state(
+                user_id_str
+            )
+
+            await answer_callback(
+                callback,
+                "Cancelled.",
+            )
+
+            await send_rich_message(
+                chat_id,
+                get_back_menu_message(),
+                receiver_user_id=user_id,
+                callback_query_id=callback.id,
+                replace_callback_query_message=True,
+            )
+
+            return
+
+        # --------------------------------------
+        # Dismiss
+        # --------------------------------------
+
+        if action == "menu_dismiss":
+
+            await clear_memory_state(
+                user_id_str
+            )
+
+            await answer_callback(
+                callback,
+                "Closed.",
+            )
+
+            return
+
+    except Exception as e:
+
+        print(
+            f"Rich memory callback error: {e}"
+        )
+
+        await answer_callback(
+            callback,
+            "Something went wrong.",
+            True,
+        )
+
+
+# ==========================================
+# Interactive Memory Text Input
+# ==========================================
+
+@router.message(
+    F.text
+)
+async def handle_memory_input(
+    message: Message,
+):
+    """
+    Handles text input only when the user is currently
+    inside a memory interaction.
+
+    Normal Gemini conversation is handled later by the
+    primary conversation handler.
+    """
+
+    user_id_str = str(
+        message.from_user.id
+    )
+
+    state_data = await get_memory_state(
+        user_id_str
+    )
+
+    if not state_data:
+        return
+
+    state = state_data.get(
+        "state",
+        "",
+    )
+
+    if state not in {
+        "remember",
+        "edit_index",
+        "edit_value",
+        "forget_index",
+    }:
+        return
+
+    # --------------------------------------
+    # Delete the user's command/input in groups
+    # --------------------------------------
+
+    if message.chat.type != "private":
+        try:
+            await message.delete()
+        except Exception:
+            pass
+
+    text = message.text.strip()
+
+    if not text:
+        return
+
+    # --------------------------------------
+    # Remember
+    # --------------------------------------
+
+    if state == "remember":
+
+        parts = [
+            part.strip()[:200]
+            for part in text.split(",,")
+            if part.strip()
+        ]
+
+        saved = []
+
+        for part in parts[:10]:
+
+            try:
+                position = await redis_client.lpos(
+                    f"memory_list:{user_id_str}",
+                    part,
+                )
+
+                if position is None:
+
+                    await redis_client.rpush(
+                        f"memory_list:{user_id_str}",
+                        part,
+                    )
+
+                    saved.append(part)
+
+            except Exception as e:
+
+                print(
+                    f"Memory save error: {e}"
+                )
+
+        await redis_client.ltrim(
+            f"memory_list:{user_id_str}",
+            -25,
+            -1,
+        )
+
+        await clear_memory_state(
+            user_id_str
+        )
+
+        content = (
+            "<h2>Memory Updated</h2>"
+            f"<p>Saved <b>{len(saved)}</b> "
+            "new memory item(s).</p>"
+
+            + rich_row(
+                rich_button(
+                    "View Memories",
+                    "mem_view",
+                    "primary",
+                ),
+                rich_button(
+                    "Memory Menu",
+                    "mem_menu",
+                    "link",
+                ),
+            )
+        )
+
+        if message.chat.type == "private":
+
+            await send_rich_message(
+                message.chat.id,
+                content,
+            )
+
+        else:
+
+            await send_rich_message(
+                message.chat.id,
+                content,
+                receiver_user_id=message.from_user.id,
+            )
+
+        return
+
+    # --------------------------------------
+    # Edit index
+    # --------------------------------------
+
+    if state == "edit_index":
+
+        if not text.isdigit():
+
+            content = (
+                "<b>Invalid memory number.</b>"
+                "<p>Send a number from the memory "
+                "list.</p>"
+                + rich_row(
+                    rich_button(
+                        "Cancel",
+                        "mem_cancel",
+                        "link",
+                    )
+                )
+            )
+
+            if message.chat.type == "private":
+                await send_rich_message(
+                    message.chat.id,
+                    content,
+                )
+            else:
+                await send_rich_message(
+                    message.chat.id,
+                    content,
+                    receiver_user_id=message.from_user.id,
+                )
+
+            return
+
+        index = int(text) - 1
+
+        memories = await get_memories(
+            user_id_str
+        )
+
+        if not (
+            0 <= index < len(memories)
+        ):
+
+            content = (
+                "<b>Invalid memory number.</b>"
+                "<p>That memory doesn't exist.</p>"
+                + rich_row(
+                    rich_button(
+                        "Cancel",
+                        "mem_cancel",
+                        "link",
+                    )
+                )
+            )
+
+            if message.chat.type == "private":
+                await send_rich_message(
+                    message.chat.id,
+                    content,
+                )
+            else:
+                await send_rich_message(
+                    message.chat.id,
+                    content,
+                    receiver_user_id=message.from_user.id,
+                )
+
+            return
+
+        await set_memory_state(
+            user_id_str,
+            "edit_value",
+            str(index),
+        )
+
+        content = (
+            "<h2>Edit Memory</h2>"
+            f"<p>Current value:</p>"
+            f"<p><code>"
+            f"{escape_html(memories[index])}"
+            f"</code></p>"
+            "<p>Now send the new value.</p>"
+
+            + rich_row(
+                rich_button(
+                    "Cancel",
+                    "mem_cancel",
+                    "link",
+                )
+            )
+        )
+
+        if message.chat.type == "private":
+
+            await send_rich_message(
+                message.chat.id,
+                content,
+            )
+
+        else:
+
+            await send_rich_message(
+                message.chat.id,
+                content,
+                receiver_user_id=message.from_user.id,
+            )
+
+        return
+
+    # --------------------------------------
+    # Edit value
+    # --------------------------------------
+
+    if state == "edit_value":
+
+        try:
+            index = int(
+                state_data.get(
+                    "extra",
+                    "-1",
+                )
+            )
+        except ValueError:
+            index = -1
+
+        memories = await get_memories(
+            user_id_str
+        )
+
+        if not (
+            0 <= index < len(memories)
+        ):
+
+            await clear_memory_state(
+                user_id_str
+            )
+
+            return
+
+        new_value = text[:200]
+
+        await redis_client.lset(
+            f"memory_list:{user_id_str}",
+            index,
+            new_value,
+        )
+
+        await clear_memory_state(
+            user_id_str
+        )
+
+        content = (
+            "<h2>Memory Updated</h2>"
+            "<p>The memory has been edited.</p>"
+
+            + rich_row(
+                rich_button(
+                    "View Memories",
+                    "mem_view",
+                    "primary",
+                ),
+                rich_button(
+                    "Memory Menu",
+                    "mem_menu",
+                    "link",
+                ),
+            )
+        )
+
+        if message.chat.type == "private":
+
+            await send_rich_message(
+                message.chat.id,
+                content,
+            )
+
+        else:
+
+            await send_rich_message(
+                message.chat.id,
+                content,
+                receiver_user_id=message.from_user.id,
+            )
+
+        return
+
+    # --------------------------------------
+    # Forget index
+    # --------------------------------------
+
+    if state == "forget_index":
+
+        raw_numbers = [
+            number.strip()
+            for number in text.split(",,")
+            if number.strip().isdigit()
+        ]
+
+        if not raw_numbers:
+
+            content = (
+                "<b>Invalid memory number.</b>"
+                "<p>Example: "
+                "<code>1,, 3,, 5</code></p>"
+
+                + rich_row(
+                    rich_button(
+                        "Cancel",
+                        "mem_cancel",
+                        "link",
+                    )
+                )
+            )
+
+            if message.chat.type == "private":
+                await send_rich_message(
+                    message.chat.id,
+                    content,
+                )
+            else:
+                await send_rich_message(
+                    message.chat.id,
+                    content,
+                    receiver_user_id=message.from_user.id,
+                )
+
+            return
+
+        indices = [
+            int(number) - 1
+            for number in raw_numbers
+        ]
+
+        memories = await get_memories(
+            user_id_str
+        )
+
+        if not memories:
+
+            await clear_memory_state(
+                user_id_str
+            )
+
+            return
+
+        removed = 0
+
+        for index in sorted(
+            set(indices),
+            reverse=True,
+        ):
+
+            if 0 <= index < len(memories):
+
+                memories.pop(index)
+                removed += 1
+
+        await redis_client.delete(
+            f"memory_list:{user_id_str}"
+        )
+
+        if memories:
+
+            await redis_client.rpush(
+                f"memory_list:{user_id_str}",
+                *memories,
+            )
+
+        await clear_memory_state(
+            user_id_str
+        )
+
+        content = (
+            "<h2>Memory Updated</h2>"
+            f"<p>Removed <b>{removed}</b> "
+            "memory item(s).</p>"
+
+            + rich_row(
+                rich_button(
+                    "View Memories",
+                    "mem_view",
+                    "primary",
+                ),
+                rich_button(
+                    "Memory Menu",
+                    "mem_menu",
+                    "link",
+                ),
+            )
+        )
+
+        if message.chat.type == "private":
+
+            await send_rich_message(
+                message.chat.id,
+                content,
+            )
+
+        else:
+
+            await send_rich_message(
+                message.chat.id,
+                content,
+                receiver_user_id=message.from_user.id,
+            )
+
+        return
+
+
+# ==========================================
+# Help / Commands
+# ==========================================
+
+@router.message(
+    Command("help", "commands")
+)
+async def handle_help(
+    message: Message,
+):
+
+    try:
+        await message.delete()
+    except Exception:
+        pass
+
+    try:
+
+        if message.chat.type == "private":
+
+            await send_rich_message(
+                message.chat.id,
+                get_help_rich_message(),
+            )
+
+        else:
+
+            await send_rich_message(
+                message.chat.id,
+                get_help_rich_message(),
+            )
+
+    except Exception as e:
+
+        print(
+            f"Rich help error: {e}"
+        )
+
+        await message.answer(
+            "The interactive menu could not be loaded."
+        )
+
+
+# ==========================================
+# Delete Command
+# ==========================================
+
+@router.message(
+    Command("delete", "del")
+)
+async def handle_delete(
+    message: Message,
+):
+
+    if message.from_user.id != OWNER_ID:
+        return
+
+    chat_id = message.chat.id
+
+    reply_msg = (
+        message.reply_to_message
+    )
+
+    if (
+        reply_msg
+        and BOT_INFO
+        and reply_msg.from_user
+        and reply_msg.from_user.id
+        == BOT_INFO.id
+    ):
+
+        try:
+            await bot.delete_message(
+                chat_id,
+                reply_msg.message_id,
+            )
+        except Exception:
+            pass
+
+    try:
+        await bot.delete_message(
+            chat_id,
+            message.message_id,
+        )
+    except Exception:
+        pass
+
+
+# ==========================================
+# Web Search
 # ==========================================
 
 async def free_web_search(
     query: str,
 ) -> str:
-    """
-    Searches the Railway-hosted SearXNG instance.
-
-    SearXNG_URL should point directly to:
-        /search
-
-    Example:
-        http://searxng.railway.internal:8080/search
-    """
-
-    query = query.strip()
-
-    if not query:
-        return ""
 
     headers = {
         "User-Agent": (
             "Mozilla/5.0 "
-            "(Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 "
-            "(KHTML, like Gecko) "
-            "Chrome/137.0.0.0 "
-            "Safari/537.36"
+            "(Windows NT 10.0; Win64; x64)"
         ),
         "Accept": "application/json",
     }
@@ -404,41 +1490,31 @@ async def free_web_search(
     params = {
         "q": query,
         "format": "json",
-        "language": "en",
-        "safesearch": 0,
     }
 
     try:
+
         async with httpx.AsyncClient(
-            follow_redirects=True,
+            timeout=8.0
         ) as client:
 
             response = await client.get(
                 SEARXNG_URL,
                 params=params,
                 headers=headers,
-                timeout=10.0,
             )
 
         if response.status_code != 200:
+
             print(
-                "SearXNG returned HTTP "
-                f"{response.status_code}: "
+                "SearXNG HTTP error: "
+                f"{response.status_code} "
                 f"{response.text[:500]}"
             )
+
             return ""
 
-        try:
-            data = response.json()
-
-        except Exception as json_error:
-            print(
-                "SearXNG returned invalid JSON: "
-                f"{json_error}"
-            )
-            return ""
-
-        results = data.get(
+        results = response.json().get(
             "results",
             [],
         )[:10]
@@ -446,110 +1522,45 @@ async def free_web_search(
         snippets = []
 
         for item in results:
+
             title = item.get(
                 "title",
                 "",
-            ).strip()
+            )
 
             content = item.get(
                 "content",
                 "",
-            ).strip()
+            )
 
             url = item.get(
                 "url",
                 "",
-            ).strip()
-
-            if not (
-                title
-                or content
-                or url
-            ):
-                continue
-
-            snippets.append(
-                f"Title: {title}\n"
-                f"Content: {content}\n"
-                f"URL: {url}"
             )
 
-        if snippets:
-            return "\n\n".join(
-                snippets
-            )
+            if title or content:
 
-        print(
-            f"SearXNG returned no results "
-            f"for query: {query}"
+                snippets.append(
+                    f"Title: {title}\n"
+                    f"Content: {content}\n"
+                    f"URL: {url}"
+                )
+
+        return "\n\n".join(
+            snippets
         )
 
-    except Exception as error:
+    except Exception as e:
+
         print(
-            "SearXNG request failed: "
-            f"{error}"
+            f"SearXNG error: {e}"
         )
 
-    return ""
+        return ""
 
 
 # ==========================================
-# Memory
-# ==========================================
-
-async def get_formatted_memories(
-    user_id_str: str,
-) -> str:
-
-    try:
-        raw_items = await redis_client.lrange(
-            f"memory_list:{user_id_str}",
-            0,
-            -1,
-        )
-
-        if not raw_items:
-            return (
-                "<b>Active Memory Directives</b>\n\n"
-                "Your memory list is currently empty."
-            )
-
-        memories = [
-            item.decode("utf-8")
-            if isinstance(item, bytes)
-            else item
-            for item in raw_items
-        ]
-
-        lines = [
-            "<b>Active Memory Directives</b>",
-            "",
-        ]
-
-        for index, memory in enumerate(
-            memories,
-            start=1,
-        ):
-            lines.append(
-                f"<b>[{index}]</b> "
-                f"{html.escape(memory)}"
-            )
-
-        return "\n".join(lines)
-
-    except Exception as error:
-        print(
-            "Error fetching memory list: "
-            f"{error}"
-        )
-
-        return (
-            "Could not retrieve memory list."
-        )
-
-
-# ==========================================
-# Audio Engine
+# Audio
 # ==========================================
 
 async def send_audio_track(
@@ -563,6 +1574,7 @@ async def send_audio_track(
 ):
 
     try:
+
         cached_id = await redis_client.get(
             f"audio_cache:{key}"
         )
@@ -578,10 +1590,12 @@ async def send_audio_track(
         async def attempt_send(
             audio_payload,
         ):
+
             if isinstance(
                 audio_payload,
                 str,
             ):
+
                 return await bot.send_audio(
                     chat_id=chat_id,
                     audio=audio_payload,
@@ -605,7 +1619,9 @@ async def send_audio_track(
         if cached_id:
 
             cached_value = (
-                cached_id.decode("utf-8")
+                cached_id.decode(
+                    "utf-8"
+                )
                 if isinstance(
                     cached_id,
                     bytes,
@@ -614,47 +1630,58 @@ async def send_audio_track(
             )
 
             try:
+
                 msg = await attempt_send(
                     cached_value
                 )
 
-            except Exception as error:
+            except Exception as e:
 
                 if (
                     "message to be replied not found"
-                    in str(error).lower()
+                    in str(e).lower()
                 ):
-                    msg = await bot.send_audio(
-                        chat_id=chat_id,
-                        audio=cached_value,
-                        title=title,
-                        performer=performer,
+
+                    msg = (
+                        await bot.send_audio(
+                            chat_id=chat_id,
+                            audio=cached_value,
+                            title=title,
+                            performer=performer,
+                        )
                     )
+
                 else:
                     raise
 
-        elif os.path.exists(file_path):
+        elif os.path.exists(
+            file_path
+        ):
 
             try:
+
                 msg = await attempt_send(
                     file_path
                 )
 
-            except Exception as error:
+            except Exception as e:
 
                 if (
                     "message to be replied not found"
-                    in str(error).lower()
+                    in str(e).lower()
                 ):
+
                     audio_file = FSInputFile(
                         file_path
                     )
 
-                    msg = await bot.send_audio(
-                        chat_id=chat_id,
-                        audio=audio_file,
-                        title=title,
-                        performer=performer,
+                    msg = (
+                        await bot.send_audio(
+                            chat_id=chat_id,
+                            audio=audio_file,
+                            title=title,
+                            performer=performer,
+                        )
                     )
 
                 else:
@@ -665,430 +1692,44 @@ async def send_audio_track(
             and msg.audio
             and msg.audio.file_id
         ):
+
             await redis_client.set(
                 f"audio_cache:{key}",
                 msg.audio.file_id,
             )
 
-    except Exception as error:
+    except Exception as e:
+
         print(
-            f"Error sending audio ({key}): "
-            f"{error}"
+            f"Error sending audio "
+            f"({key}): {e}"
         )
 
 
 # ==========================================
-# Aiogram Handlers
+# Primary Conversation
 # ==========================================
 
 @router.message(
-    Command("delete", "del")
-)
-async def handle_delete(
-    message: Message,
-):
-
-    if (
-        not message.from_user
-        or message.from_user.id != OWNER_ID
-    ):
-        return
-
-    chat_id = message.chat.id
-    reply_msg = message.reply_to_message
-
-    if (
-        reply_msg
-        and BOT_INFO
-        and reply_msg.from_user
-        and reply_msg.from_user.id
-        == BOT_INFO.id
-    ):
-        try:
-            await bot.delete_message(
-                chat_id,
-                reply_msg.message_id,
-            )
-        except Exception:
-            pass
-
-    try:
-        await bot.delete_message(
-            chat_id,
-            message.message_id,
-        )
-    except Exception:
-        pass
-
-
-@router.message(
-    Command("help", "commands")
-)
-async def handle_help(
-    message: Message,
-):
-
-    try:
-        await message.delete()
-    except Exception:
-        pass
-
-    content = (
-        "<b>Sen Bot Command Hub</b>\n\n"
-
-        "<code>remember [item],, [item2]</code>\n"
-        "Adds items to memory\n\n"
-
-        "<code>what do you remember</code>\n"
-        "Displays memories in a formatted list\n\n"
-
-        "<code>edit [number] [new fact]</code>\n"
-        "Edits a specific memory\n\n"
-
-        "<code>forget [number],, [number2]</code>\n"
-        "Removes memories\n\n"
-
-        "<code>forget all</code>\n"
-        "Clears all memory"
-    )
-
-    await message.answer(
-        text=content,
-        reply_markup=get_dismiss_keyboard(
-            message.from_user.id
-        ),
-    )
-
-
-def text_in(
-    options: set,
-):
-    return lambda message: (
-        message.text
-        and message.text.lower()
-        in options
-    )
-
-
-def text_startswith(
-    prefix: str,
-):
-    return lambda message: (
-        message.text
-        and message.text.lower()
-        .startswith(prefix)
-    )
-
-
-@router.message(
-    text_in(
-        {
-            "what do you remember",
-            "how do you remember",
-        }
-    )
-)
-async def handle_what_remember(
-    message: Message,
-):
-
-    try:
-        await message.delete()
-    except Exception:
-        pass
-
-    user_id_str = str(
-        message.from_user.id
-    )
-
-    content = await get_formatted_memories(
-        user_id_str
-    )
-
-    await message.answer(
-        text=content,
-        reply_markup=get_dismiss_keyboard(
-            message.from_user.id
-        ),
-    )
-
-
-@router.message(
-    text_startswith("remember ")
-)
-async def handle_remember(
-    message: Message,
-):
-
-    try:
-        await message.delete()
-    except Exception:
-        pass
-
-    user_id_str = str(
-        message.from_user.id
-    )
-
-    clean_prompt = (
-        message.text.strip()
-    )
-
-    parts = [
-        part.strip()[:200]
-        for part in clean_prompt[9:]
-        .split(",,")
-        if part.strip()
-    ]
-
-    for part in parts[:10]:
-
-        try:
-            position = await redis_client.lpos(
-                f"memory_list:{user_id_str}",
-                part,
-            )
-
-            if position is None:
-                await redis_client.rpush(
-                    f"memory_list:{user_id_str}",
-                    part,
-                )
-
-        except Exception as error:
-            print(
-                f"Memory save error: {error}"
-            )
-
-    await redis_client.ltrim(
-        f"memory_list:{user_id_str}",
-        -25,
-        -1,
-    )
-
-    content = await get_formatted_memories(
-        user_id_str
-    )
-
-    await message.answer(
-        text=content,
-        reply_markup=get_dismiss_keyboard(
-            message.from_user.id
-        ),
-    )
-
-
-@router.message(
-    text_startswith("edit ")
-)
-async def handle_edit(
-    message: Message,
-):
-
-    try:
-        await message.delete()
-    except Exception:
-        pass
-
-    user_id_str = str(
-        message.from_user.id
-    )
-
-    clean_prompt = (
-        message.text.strip()
-    )
-
-    parts = (
-        clean_prompt[5:]
-        .strip()
-        .split(" ", 1)
-    )
-
-    if (
-        len(parts) == 2
-        and parts[0].isdigit()
-    ):
-
-        index = (
-            int(parts[0]) - 1
-        )
-
-        new_value = (
-            parts[1]
-            .strip()
-            [:200]
-        )
-
-        raw_items = await redis_client.lrange(
-            f"memory_list:{user_id_str}",
-            0,
-            -1,
-        )
-
-        if 0 <= index < len(raw_items):
-
-            await redis_client.lset(
-                f"memory_list:{user_id_str}",
-                index,
-                new_value,
-            )
-
-            content = (
-                await get_formatted_memories(
-                    user_id_str
-                )
-            )
-
-        else:
-
-            content = (
-                "Invalid memory index.\n\n"
-                + await get_formatted_memories(
-                    user_id_str
-                )
-            )
-
-    else:
-
-        content = (
-            "Usage: "
-            "<code>edit [number] [new text]</code>"
-        )
-
-    await message.answer(
-        text=content,
-        reply_markup=get_dismiss_keyboard(
-            message.from_user.id
-        ),
-    )
-
-
-@router.message(
-    F.text.func(
-        lambda text: (
-            text
-            and text.lower()
-            == "forget all"
-        )
-    )
-)
-async def handle_forget_all(
-    message: Message,
-):
-
-    try:
-        await message.delete()
-    except Exception:
-        pass
-
-    user_id_str = str(
-        message.from_user.id
-    )
-
-    chat_id = message.chat.id
-
-    await redis_client.delete(
-        f"memory_list:{user_id_str}",
-        f"chat_history:{chat_id}:{user_id_str}",
-    )
-
-    await message.answer(
-        text="Cleared all your saved memories.",
-        reply_markup=get_dismiss_keyboard(
-            message.from_user.id
-        ),
-    )
-
-
-@router.message(
-    text_startswith("forget ")
-)
-async def handle_forget(
-    message: Message,
-):
-
-    try:
-        await message.delete()
-    except Exception:
-        pass
-
-    user_id_str = str(
-        message.from_user.id
-    )
-
-    clean_prompt = (
-        message.text.strip()
-    )
-
-    try:
-
-        indices = [
-            int(number.strip()) - 1
-            for number in (
-                clean_prompt[7:]
-                .split(",,")
-            )
-            if number.strip().isdigit()
-        ]
-
-        raw_items = await redis_client.lrange(
-            f"memory_list:{user_id_str}",
-            0,
-            -1,
-        )
-
-        if raw_items and indices:
-
-            memories = [
-                item.decode("utf-8")
-                if isinstance(item, bytes)
-                else item
-                for item in raw_items
-            ]
-
-            for index in sorted(
-                set(indices),
-                reverse=True,
-            ):
-                if 0 <= index < len(memories):
-                    memories.pop(index)
-
-            await redis_client.delete(
-                f"memory_list:{user_id_str}"
-            )
-
-            if memories:
-                await redis_client.rpush(
-                    f"memory_list:{user_id_str}",
-                    *memories,
-                )
-
-    except Exception as error:
-        print(
-            f"Memory deletion error: {error}"
-        )
-
-    content = await get_formatted_memories(
-        user_id_str
-    )
-
-    await message.answer(
-        text=content,
-        reply_markup=get_dismiss_keyboard(
-            message.from_user.id
-        ),
-    )
-
-
-# ==========================================
-# Primary Chat
-# ==========================================
-
-@router.message(
-    F.text | F.caption | F.voice | F.audio
+    F.text
+    | F.caption
+    | F.voice
+    | F.audio
 )
 async def handle_conversation(
     message: Message,
 ):
+
+    # Memory interaction messages have already
+    # been handled by the memory handler.
+    if message.text:
+
+        state = await get_memory_state(
+            str(message.from_user.id)
+        )
+
+        if state:
+            return
 
     text = (
         message.text
@@ -1102,9 +1743,9 @@ async def handle_conversation(
         text,
     )
 
-    # ------------------------------------------
-    # Audio triggers
-    # ------------------------------------------
+    # --------------------------------------
+    # Audio keyword triggers
+    # --------------------------------------
 
     if re.search(
         r"\bsen\b",
@@ -1120,8 +1761,7 @@ async def handle_conversation(
                 "Devin_The_Dude_Anythang.mp3",
                 "Anythang",
                 "Devin The Dude",
-                message.chat.type
-                == "private",
+                message.chat.type == "private",
             )
         )
 
@@ -1139,14 +1779,13 @@ async def handle_conversation(
                 "Do You Believe In Magic.mp3",
                 "Do You Believe In Magic",
                 "The Lovin' Spoonful",
-                message.chat.type
-                == "private",
+                message.chat.type == "private",
             )
         )
 
-    # ------------------------------------------
-    # Determine whether bot should respond
-    # ------------------------------------------
+    # --------------------------------------
+    # Bot targeting
+    # --------------------------------------
 
     bot_username = (
         f"@{BOT_INFO.username}"
@@ -1184,7 +1823,10 @@ async def handle_conversation(
         or is_reply_to_bot
         or is_private
         or message.content_type
-        in ["voice", "audio"]
+        in [
+            "voice",
+            "audio",
+        ]
     ):
         return
 
@@ -1195,13 +1837,14 @@ async def handle_conversation(
     chat_id = message.chat.id
     msg_id = message.message_id
 
-    # ------------------------------------------
+    # --------------------------------------
     # Clean prompt
-    # ------------------------------------------
+    # --------------------------------------
 
     clean_prompt = text
 
     if bot_username:
+
         clean_prompt = re.sub(
             re.escape(bot_username),
             "",
@@ -1216,9 +1859,9 @@ async def handle_conversation(
         flags=re.IGNORECASE,
     ).strip()
 
-    # ------------------------------------------
+    # --------------------------------------
     # Cooldown
-    # ------------------------------------------
+    # --------------------------------------
 
     cooldown_key = (
         f"cooldown:{user_id_str}"
@@ -1253,9 +1896,9 @@ async def handle_conversation(
         ex=4,
     )
 
-    # ------------------------------------------
+    # --------------------------------------
     # Reply context
-    # ------------------------------------------
+    # --------------------------------------
 
     replied = (
         message.reply_to_message
@@ -1271,9 +1914,9 @@ async def handle_conversation(
             or ""
         )
 
-    # ------------------------------------------
-    # Voice/audio processing
-    # ------------------------------------------
+    # --------------------------------------
+    # Voice/audio
+    # --------------------------------------
 
     audio_bytes = None
     audio_mime = "audio/ogg"
@@ -1303,6 +1946,7 @@ async def handle_conversation(
             )
 
             if audio_stream:
+
                 audio_bytes = (
                     audio_stream.read()
                 )
@@ -1314,6 +1958,7 @@ async def handle_conversation(
                 )
                 and audio_obj.mime_type
             ):
+
                 audio_mime = (
                     audio_obj.mime_type
                 )
@@ -1334,32 +1979,19 @@ async def handle_conversation(
     ):
         return
 
-    # ==========================================
-    # Gemini Processing
-    # ==========================================
-
     try:
 
-        # ------------------------------------------
+        # --------------------------------------
         # Memories
-        # ------------------------------------------
+        # --------------------------------------
 
-        raw_mem = await redis_client.lrange(
-            f"memory_list:{user_id_str}",
-            0,
-            -1,
+        saved_facts = await get_memories(
+            user_id_str
         )
 
-        saved_facts = [
-            item.decode("utf-8")
-            if isinstance(item, bytes)
-            else item
-            for item in raw_mem
-        ]
-
-        # ------------------------------------------
+        # --------------------------------------
         # Chat history
-        # ------------------------------------------
+        # --------------------------------------
 
         history_key = (
             f"chat_history:"
@@ -1367,22 +1999,29 @@ async def handle_conversation(
             f"{user_id_str}"
         )
 
-        raw_hist = await redis_client.lrange(
-            history_key,
-            0,
-            -1,
+        raw_hist = (
+            await redis_client.lrange(
+                history_key,
+                0,
+                -1,
+            )
         )
 
         chat_history = [
-            item.decode("utf-8")
-            if isinstance(item, bytes)
+            item.decode(
+                "utf-8"
+            )
+            if isinstance(
+                item,
+                bytes,
+            )
             else item
             for item in raw_hist
         ]
 
-        # ------------------------------------------
+        # --------------------------------------
         # Search detection
-        # ------------------------------------------
+        # --------------------------------------
 
         search_keywords = {
             "search",
@@ -1397,13 +2036,9 @@ async def handle_conversation(
             "info",
         }
 
-        lower_prompt = (
-            clean_prompt.lower()
-        )
-
         explicit_search = any(
-            keyword in lower_prompt
-            for keyword in search_keywords
+            word in clean_prompt.lower()
+            for word in search_keywords
         )
 
         search_query = (
@@ -1467,9 +2102,9 @@ async def handle_conversation(
                 )
             )
 
-        # ------------------------------------------
-        # Context
-        # ------------------------------------------
+        # --------------------------------------
+        # Build context
+        # --------------------------------------
 
         context_parts = []
 
@@ -1512,110 +2147,100 @@ async def handle_conversation(
                 + final_prompt
             )
 
-        # ------------------------------------------
-        # System instructions
-        # ------------------------------------------
+        # --------------------------------------
+        # Gemini instructions
+        # --------------------------------------
 
-        today_str = datetime.now(
-            timezone.utc
-        ).strftime(
-            "%A, %B %d, %Y"
+        today_str = (
+            datetime.now(
+                timezone.utc
+            ).strftime(
+                "%A, %B %d, %Y"
+            )
         )
 
         bot_instructions = (
             f"Today's date is {today_str}.\n\n"
 
-            "Keep responses structural using double "
-            "line-breaks to separate ideas.\n"
+            "Keep responses structural using "
+            "double line-breaks to separate ideas.\n"
 
             "Never use standard AI pleasantries.\n"
 
-            "Do not start responses with 'As an AI' "
-            "or end with generic offers for help.\n"
+            "Do not start responses with "
+            "'As an AI' or end with generic "
+            "offers for help.\n"
 
-            "Keep casual replies brief, but dynamically "
-            "expand your response length when explicitly "
-            "asked for details or when playing "
-            "interactive games.\n"
+            "Keep casual replies brief, but "
+            "dynamically expand your response "
+            "length when explicitly asked for "
+            "details or when playing interactive "
+            "games.\n"
 
-            "If the user changes the subject abruptly, "
-            "drop the previous topic immediately and "
-            "adapt to the new flow.\n"
+            "If the user changes the subject "
+            "abruptly, drop the previous topic "
+            "immediately and adapt to the new flow.\n"
 
-            "If the user is clearly joking or sarcastic, "
-            "match their energy rather than taking the "
-            "prompt literally.\n"
+            "If the user is clearly joking or "
+            "sarcastic, match their energy rather "
+            "than taking the prompt literally.\n"
 
-            "If you do not know the answer or the provided "
-            "context is insufficient, state exactly: "
-            "'I don't have enough details to answer that "
-            "accurately' without guessing.\n"
+            "If you do not know the answer or "
+            "the provided context is insufficient, "
+            "state exactly: "
+            "'I don't have enough details to "
+            "answer that accurately' without guessing.\n"
 
-            "Do not assume personal details about the user "
-            "unless they are explicitly provided in the "
-            "memory list.\n\n"
+            "Do not assume personal details about "
+            "the user unless they are explicitly "
+            "provided in the memory list.\n\n"
 
             "CRITICAL FORMATTING RULE:\n"
-            "Return valid Telegram HTML only.\n\n"
+            "Generate valid Telegram HTML.\n\n"
 
             "Use <b>text</b> for bold.\n"
             "Use <i>text</i> for italics.\n"
-            "Use <u>text</u> for underline.\n"
-            "Use <s>text</s> for strikethrough.\n"
             "Use <code>text</code> for inline code.\n"
             "Use <pre>text</pre> for fixed-width blocks.\n"
             "Use <a href=\"URL\">text</a> for hyperlinks.\n\n"
 
             "Do NOT use Markdown syntax such as "
-            "**, ##, backticks, or pipe tables.\n\n"
+            "** or ## in normal responses.\n"
 
-            "Do not wrap the entire answer in a code block.\n"
-
-            "Generate clean Telegram-compatible HTML."
+            "Generate clean HTML strings only."
         )
-
-        # ------------------------------------------
-        # Search instructions
-        # ------------------------------------------
 
         if search_context:
 
             bot_instructions += (
-                "\n\nWhen referencing Web Search Context, "
-                "state the information directly without "
-                "saying 'According to my search' or "
+                "\n\nWhen referencing Web Search "
+                "Context, state the information "
+                "directly without saying "
+                "'According to my search' or "
                 "'I found this online'.\n\n"
 
-                "If the user explicitly asks for links, "
-                "sources, or URLs, cite them using "
-                "Telegram HTML hyperlinks.\n\n"
+                "If the user explicitly asks for "
+                "links, sources, or URLs, cite them "
+                "using Telegram HTML hyperlinks.\n\n"
 
-                "Use this format:\n"
+                "Use:\n"
                 "<a href=\"URL\">Source Title</a>\n\n"
 
-                "Do not output raw URLs when a hyperlink "
-                "can be used.\n\n"
+                "Do not output raw URLs when "
+                "hyperlinks can be used.\n"
 
-                "If the user does not explicitly ask for "
-                "sources, do not include URLs."
+                "If the user does not explicitly "
+                "ask for sources, do not include URLs."
             )
-
-        # ------------------------------------------
-        # Chat history instructions
-        # ------------------------------------------
 
         if chat_history:
 
             bot_instructions += (
-                "\n\nUse the Recent Conversation Context "
-                "to track pronouns and subjects, but "
-                "never summarize or repeat the history "
-                "back to the user."
+                "\n\nUse Recent Conversation Context "
+                "to track pronouns and subjects, "
+                "but never summarize or repeat the "
+                "history back to the user."
             )
-
-        # ------------------------------------------
-        # Saved memories
-        # ------------------------------------------
 
         if saved_facts:
 
@@ -1628,29 +2253,33 @@ async def handle_conversation(
                 )
             )
 
-        # ------------------------------------------
+        # --------------------------------------
         # Safety settings
-        # ------------------------------------------
+        # --------------------------------------
 
         safety_overrides = [
+
             types.SafetySetting(
                 category=(
                     "HARM_CATEGORY_HATE_SPEECH"
                 ),
                 threshold="BLOCK_NONE",
             ),
+
             types.SafetySetting(
                 category=(
                     "HARM_CATEGORY_HARASSMENT"
                 ),
                 threshold="BLOCK_NONE",
             ),
+
             types.SafetySetting(
                 category=(
                     "HARM_CATEGORY_SEXUALLY_EXPLICIT"
                 ),
                 threshold="BLOCK_NONE",
             ),
+
             types.SafetySetting(
                 category=(
                     "HARM_CATEGORY_DANGEROUS_CONTENT"
@@ -1659,230 +2288,134 @@ async def handle_conversation(
             ),
         ]
 
-        # ==========================================
-        # Generate response
-        # ==========================================
-
-        response = None
-        used_model = None
-
-        # ------------------------------------------
-        # Audio
-        # ------------------------------------------
+        # --------------------------------------
+        # Gemini generation
+        # --------------------------------------
 
         if audio_bytes:
 
             contents = [
+
                 types.Part.from_bytes(
                     data=audio_bytes,
                     mime_type=audio_mime,
                 ),
+
                 final_prompt,
             ]
 
-            try:
-
-                response = (
-                    await gemini_client
-                    .aio
-                    .models
-                    .generate_content(
-                        model=PRIMARY_MODEL,
-                        contents=contents,
-                        config=(
-                            types.GenerateContentConfig(
-                                system_instruction=(
-                                    bot_instructions
-                                ),
-                                safety_settings=(
-                                    safety_overrides
-                                ),
-                            )
-                        ),
-                    )
+            response = (
+                await gemini_client.aio.models
+                .generate_content(
+                    model=(
+                        "gemini-3.5-flash-lite"
+                    ),
+                    contents=contents,
+                    config=(
+                        types.GenerateContentConfig(
+                            system_instruction=(
+                                bot_instructions
+                            ),
+                            safety_settings=(
+                                safety_overrides
+                            ),
+                        )
+                    ),
                 )
-
-                used_model = (
-                    PRIMARY_MODEL
-                )
-
-            except Exception as primary_error:
-
-                print(
-                    "Primary audio model failed: "
-                    f"{primary_error}"
-                )
-
-                print(
-                    f"Trying fallback model "
-                    f"{FALLBACK_MODEL}..."
-                )
-
-                response = (
-                    await gemini_client
-                    .aio
-                    .models
-                    .generate_content(
-                        model=FALLBACK_MODEL,
-                        contents=contents,
-                        config=(
-                            types.GenerateContentConfig(
-                                system_instruction=(
-                                    bot_instructions
-                                ),
-                                safety_settings=(
-                                    safety_overrides
-                                ),
-                            )
-                        ),
-                    )
-                )
-
-                used_model = (
-                    FALLBACK_MODEL
-                )
-
-        # ------------------------------------------
-        # Normal text
-        # ------------------------------------------
+            )
 
         else:
 
-            try:
-
-                chat = (
-                    gemini_client
-                    .aio
-                    .chats
-                    .create(
-                        model=PRIMARY_MODEL,
-                        config=(
-                            types.GenerateContentConfig(
-                                system_instruction=(
-                                    bot_instructions
-                                ),
-                                safety_settings=(
-                                    safety_overrides
-                                ),
-                            )
-                        ),
-                    )
+            chat = (
+                gemini_client.aio.chats.create(
+                    model=(
+                        "gemini-3.5-flash-lite"
+                    ),
+                    config=(
+                        types.GenerateContentConfig(
+                            system_instruction=(
+                                bot_instructions
+                            ),
+                            safety_settings=(
+                                safety_overrides
+                            ),
+                        )
+                    ),
                 )
-
-                response = (
-                    await chat.send_message(
-                        final_prompt
-                    )
-                )
-
-                used_model = (
-                    PRIMARY_MODEL
-                )
-
-            except Exception as primary_error:
-
-                print(
-                    "Primary model failed: "
-                    f"{primary_error}"
-                )
-
-                print(
-                    f"Trying fallback model "
-                    f"{FALLBACK_MODEL}..."
-                )
-
-                chat = (
-                    gemini_client
-                    .aio
-                    .chats
-                    .create(
-                        model=FALLBACK_MODEL,
-                        config=(
-                            types.GenerateContentConfig(
-                                system_instruction=(
-                                    bot_instructions
-                                ),
-                                safety_settings=(
-                                    safety_overrides
-                                ),
-                            )
-                        ),
-                    )
-                )
-
-                response = (
-                    await chat.send_message(
-                        final_prompt
-                    )
-                )
-
-                used_model = (
-                    FALLBACK_MODEL
-                )
-
-        # ------------------------------------------
-        # Response extraction
-        # ------------------------------------------
-
-        response_text = ""
-
-        if response:
-
-            try:
-                response_text = (
-                    response.text
-                    or ""
-                )
-            except Exception:
-                response_text = ""
-
-        if not response_text:
-
-            response_text = (
-                "I didn't receive a response."
             )
 
-        print(
-            f"Gemini response generated using "
-            f"{used_model}"
+            response = (
+                await chat.send_message(
+                    final_prompt
+                )
+            )
+
+        response_text = (
+            response.text
+            if response
+            and response.text
+            else "I didn't receive a response."
         )
 
-        # ------------------------------------------
-        # Send Telegram response
-        #
-        # NO DRAFT API.
-        # Just normal sendMessage through aiogram.
-        # ------------------------------------------
+        # --------------------------------------
+        # Cleanup Gemini output
+        # --------------------------------------
+
+        response_text = (
+            response_text
+            .replace(
+                "\u2022",
+                "",
+            )
+            .replace(
+                "```html",
+                "",
+            )
+            .replace(
+                "```",
+                "",
+            )
+            .strip()
+        )
+
+        # --------------------------------------
+        # Send normal Gemini response
+        # --------------------------------------
+
+        preview_opts = (
+            LinkPreviewOptions(
+                is_disabled=False,
+                prefer_small_media=True,
+            )
+        )
 
         if is_private:
 
-            await safe_answer(
-                message,
-                response_text,
+            await message.answer(
+                text=response_text,
+                link_preview_options=(
+                    preview_opts
+                ),
             )
 
         else:
 
-            await safe_answer(
-                message,
-                response_text,
-                reply_to=msg_id,
+            await message.answer(
+                text=response_text,
+                reply_to_message_id=msg_id,
+                link_preview_options=(
+                    preview_opts
+                ),
             )
 
-        # ------------------------------------------
+        # --------------------------------------
         # Save history
-        # ------------------------------------------
+        # --------------------------------------
 
         clean_history_text = re.sub(
             r"<[^>]+>",
             "",
             response_text,
-        )
-
-        clean_history_text = (
-            html.unescape(
-                clean_history_text
-            )
         )
 
         await redis_client.rpush(
@@ -1906,35 +2439,26 @@ async def handle_conversation(
             -1,
         )
 
-    except Exception as ai_error:
+    except Exception as ai_err:
 
         print(
-            "Gemini API error: "
-            f"{ai_error}"
+            f"Gemini API error: "
+            f"{ai_err}"
         )
 
-        error_string = (
-            str(ai_error)
-            .lower()
+        error_content = (
+            "I am currently broken right now, "
+            "the owner needs to fix me."
         )
 
-        if (
-            "429" in error_string
-            or "resource exhausted"
-            in error_string
+        if "429" in str(
+            ai_err
         ):
 
             error_content = (
                 "Whoa, I'm getting a little "
                 "overwhelmed! Let me catch my "
                 "breath for a minute."
-            )
-
-        else:
-
-            error_content = (
-                "I am currently broken right now, "
-                "the owner needs to fix me."
             )
 
         if is_private:
@@ -1992,26 +2516,10 @@ async def main():
             f"@{BOT_INFO.username}"
         )
 
-        print(
-            "Gemini primary model: "
-            f"{PRIMARY_MODEL}"
-        )
+    except Exception as e:
 
         print(
-            "Gemini fallback model: "
-            f"{FALLBACK_MODEL}"
-        )
-
-        print(
-            "SearXNG endpoint: "
-            f"{SEARXNG_URL}"
-        )
-
-    except Exception as error:
-
-        print(
-            "Failed to initialize bot: "
-            f"{error}"
+            f"Failed to fetch bot info: {e}"
         )
 
     app = web.Application()
@@ -2052,6 +2560,15 @@ async def main():
         f"on port {port}"
     )
 
+    print(
+        "Rich Message API enabled "
+        "(Bot API 10.3)"
+    )
+
+    print(
+        f"SearXNG endpoint: {SEARXNG_URL}"
+    )
+
     try:
 
         await dp.start_polling(
@@ -2061,8 +2578,8 @@ async def main():
     finally:
 
         print(
-            "SIGTERM received! "
-            "Cleaning up connections..."
+            "SIGTERM received! Cleaning "
+            "up database connections..."
         )
 
         await bot.session.close()
@@ -2077,7 +2594,9 @@ async def main():
         )
 
 
+# ==========================================
+# Entry Point
+# ==========================================
+
 if __name__ == "__main__":
-    asyncio.run(
-        main()
-    )
+    asyncio.run(main())
