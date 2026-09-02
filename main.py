@@ -5,7 +5,6 @@ import html
 from datetime import datetime, timezone
 
 from aiohttp import web
-
 from aiogram import Bot, Dispatcher, Router, F
 from aiogram.types import (
     Message,
@@ -28,9 +27,9 @@ from google import genai
 from google.genai import types
 
 
-# ==========================================
-# Environment & Config
-# ==========================================
+# ============================================================
+# CONFIGURATION
+# ============================================================
 
 redis_url = os.environ.get("REDIS_URL", "")
 
@@ -50,9 +49,7 @@ if "upstash" in redis_url.lower() and redis_url.startswith("redis://"):
 
 redis_client = redis.from_url(
     redis_url,
-    ssl_cert_reqs=None
-    if redis_url.startswith("rediss://")
-    else "required",
+    ssl_cert_reqs=None if redis_url.startswith("rediss://") else "required",
 )
 
 API_TOKEN = os.getenv("BOT_TOKEN", "")
@@ -61,9 +58,6 @@ if not API_TOKEN:
     raise ValueError(
         "CRITICAL CONFIGURATION ERROR: 'BOT_TOKEN' missing."
     )
-
-# Railway variable:
-# SEARXNG_URL=http://searxng.railway.internal:8080/search
 
 SEARXNG_URL = os.getenv(
     "SEARXNG_URL",
@@ -77,54 +71,53 @@ if not gemini_api_key:
         "CRITICAL CONFIGURATION ERROR: 'GEMINI_API_KEY' missing."
     )
 
-gemini_client = genai.Client(
-    api_key=gemini_api_key
-)
+gemini_client = genai.Client(api_key=gemini_api_key)
 
-OWNER_ID = int(
-    os.getenv("OWNER_ID", "0")
-)
+OWNER_ID = int(os.getenv("OWNER_ID", "0"))
+
+
+# ============================================================
+# TELEGRAM
+# ============================================================
 
 bot = Bot(
     token=API_TOKEN,
-    default=DefaultBotProperties(
-        parse_mode="HTML"
-    ),
+    default=DefaultBotProperties(parse_mode="HTML"),
 )
 
 dp = Dispatcher()
 router = Router()
-
 dp.include_router(router)
 
 BOT_INFO = None
 
 
-# ==========================================
-# Menu / interaction configuration
-# ==========================================
+# ============================================================
+# MEMORY MENU SETTINGS
+# ============================================================
 
+# Menu disappears after 30 seconds of inactivity.
 MENU_TTL = 30
+
+# How long an add/edit/forget interaction remains active.
 INTERACTION_TTL = 300
 
-menu_tasks: dict[
-    tuple[int, int],
-    asyncio.Task
-] = {}
+# Redis ownership records live slightly longer than the menu.
+MENU_OWNER_TTL = MENU_TTL + 60
+
+# (chat_id, user_id) -> asyncio.Task
+menu_tasks: dict[tuple[int, int], asyncio.Task] = {}
 
 
-# ==========================================
-# Redis interaction state
-# ==========================================
+# ============================================================
+# USER / MEMORY HELPERS
+# ============================================================
 
 def interaction_key(user_id: int) -> str:
     return f"memory_interaction:{user_id}"
 
 
-async def set_interaction(
-    user_id: int,
-    action: str,
-) -> None:
+async def set_interaction(user_id: int, action: str) -> None:
     await redis_client.set(
         interaction_key(user_id),
         action,
@@ -132,13 +125,8 @@ async def set_interaction(
     )
 
 
-async def get_interaction(
-    user_id: int,
-) -> str | None:
-
-    value = await redis_client.get(
-        interaction_key(user_id)
-    )
+async def get_interaction(user_id: int) -> str | None:
+    value = await redis_client.get(interaction_key(user_id))
 
     if isinstance(value, bytes):
         return value.decode("utf-8")
@@ -146,23 +134,26 @@ async def get_interaction(
     return value
 
 
-async def clear_interaction(
-    user_id: int,
-) -> None:
-
-    await redis_client.delete(
-        interaction_key(user_id)
-    )
+async def clear_interaction(user_id: int) -> None:
+    await redis_client.delete(interaction_key(user_id))
 
 
-# ==========================================
-# Memory helpers
-# ==========================================
+def user_display_name(user) -> str:
+    """
+    Return a safely escaped display name for Rich Message HTML.
+    """
+    name = (user.full_name or "").strip()
 
-async def get_memories(
-    user_id_str: str,
-) -> list[str]:
+    if not name:
+        name = (user.username or "").strip()
 
+    if not name:
+        name = "Your"
+
+    return html.escape(name, quote=False)
+
+
+async def get_memories(user_id_str: str) -> list[str]:
     try:
         raw = await redis_client.lrange(
             f"memory_list:{user_id_str}",
@@ -171,9 +162,7 @@ async def get_memories(
         )
 
         return [
-            x.decode("utf-8")
-            if isinstance(x, bytes)
-            else str(x)
+            x.decode("utf-8") if isinstance(x, bytes) else str(x)
             for x in raw
         ]
 
@@ -184,20 +173,24 @@ async def get_memories(
 
 async def get_formatted_memories(
     user_id_str: str,
+    user_name: str,
 ) -> str:
 
-    memories = await get_memories(
-        user_id_str
+    memories = await get_memories(user_id_str)
+
+    safe_name = html.escape(
+        user_name,
+        quote=False,
     )
 
     if not memories:
         return (
-            "<h2>Your Memories</h2>"
-            "<p>Your memory list is currently empty.</p>"
+            f"<h2>{safe_name}'s Instructions</h2>"
+            "<p>You don't have any saved instructions yet.</p>"
         )
 
     lines = [
-        "<h2>Your Memories</h2>",
+        f"<h2>{safe_name}'s Instructions</h2>",
         "<ol>",
     ]
 
@@ -211,56 +204,137 @@ async def get_formatted_memories(
     return "".join(lines)
 
 
-# ==========================================
-# Rich-message UI
-# ==========================================
+# ============================================================
+# MEMORY MENU OWNERSHIP
+# ============================================================
 
-def get_user_display_name(
-    user,
+def menu_owner_key(
+    chat_id: int,
+    menu_id: int,
 ) -> str:
+    return f"memory_menu_owner:{chat_id}:{menu_id}"
 
-    if user is None:
-        return "Your"
 
-    name = (
-        getattr(user, "first_name", None)
-        or getattr(user, "username", None)
-        or "Your"
+async def set_menu_owner(
+    chat_id: int,
+    menu_id: int,
+    user_id: int,
+) -> None:
+    """
+    Store exactly which Telegram user owns this menu.
+    """
+    await redis_client.set(
+        menu_owner_key(chat_id, menu_id),
+        str(user_id),
+        ex=MENU_OWNER_TTL,
     )
 
-    name = str(name).strip()
 
-    if not name:
-        return "Your"
+async def get_menu_owner(
+    chat_id: int,
+    menu_id: int,
+) -> int | None:
 
-    return html.escape(name)
+    value = await redis_client.get(
+        menu_owner_key(chat_id, menu_id)
+    )
+
+    if value is None:
+        return None
+
+    if isinstance(value, bytes):
+        value = value.decode("utf-8")
+
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
-def get_user_possessive_name(
-    user,
-) -> str:
+async def clear_menu_owner(
+    chat_id: int,
+    menu_id: int,
+) -> None:
 
-    name = get_user_display_name(user)
-
-    plain_name = html.unescape(name)
-
-    if plain_name.lower().endswith("s"):
-        return f"{name}'"
-
-    return f"{name}'s"
+    await redis_client.delete(
+        menu_owner_key(chat_id, menu_id)
+    )
 
 
-def rich_main_menu(
-    user,
-) -> str:
+async def is_menu_owner(callback: CallbackQuery) -> bool:
+    """
+    SECURITY CHECK.
 
-    possessive_name = (
-        get_user_possessive_name(user)
+    A callback is allowed to operate on a memory menu only if
+    the user pressing the button is the same user who owns it.
+    """
+
+    message = callback.message
+
+    if not message:
+        return False
+
+    chat_id = message.chat.id
+
+    # Ephemeral messages have a dedicated ephemeral_message_id.
+    # Normal messages use message_id.
+    menu_id = message.ephemeral_message_id
+
+    if menu_id is None:
+        menu_id = message.message_id
+
+    owner_id = await get_menu_owner(
+        chat_id,
+        menu_id,
+    )
+
+    if owner_id is None:
+        return False
+
+    return owner_id == callback.from_user.id
+
+
+async def reject_unauthorized_callback(
+    callback: CallbackQuery,
+) -> bool:
+    """
+    Returns True when the callback is NOT authorized.
+
+    This deliberately performs no memory operation.
+    """
+
+    if await is_menu_owner(callback):
+        return False
+
+    try:
+        await callback.answer(
+            "This memory menu belongs to another user.",
+            show_alert=True,
+        )
+    except Exception as e:
+        print(f"Unauthorized callback answer error: {e}")
+
+    print(
+        "Blocked unauthorized memory-menu callback: "
+        f"user={callback.from_user.id}"
+    )
+
+    return True
+
+
+# ============================================================
+# RICH MESSAGE MENUS
+# ============================================================
+
+def rich_main_menu(user_name: str) -> str:
+    safe_name = html.escape(
+        user_name,
+        quote=False,
     )
 
     return f"""
-<h2>{possessive_name} Instructions</h2>
-<p>Manage your personal memory without cluttering the chat.</p>
+<h2>{safe_name}'s Instructions</h2>
+<p>Manage your personal memories and instructions.</p>
 
 <tg-button-row align="center">
   <tg-button
@@ -330,10 +404,7 @@ def rich_memory_menu(
 """.strip()
 
 
-def rich_back_close(
-    prompt: str,
-) -> str:
-
+def rich_back_close(prompt: str) -> str:
     return f"""
 {prompt}
 
@@ -354,11 +425,17 @@ def rich_back_close(
 
 
 def rich_forget_all_confirm() -> str:
-
     return """
 <h2>Forget everything?</h2>
-<p>This permanently clears all saved memories and this chat's stored conversation history.</p>
-<p><b>This cannot be undone.</b></p>
+
+<p>
+This permanently clears all saved memories and this
+conversation's stored history.
+</p>
+
+<p>
+<b>This cannot be undone.</b>
+</p>
 
 <tg-button-row align="center">
   <tg-button
@@ -384,25 +461,21 @@ def rich_forget_all_confirm() -> str:
 """.strip()
 
 
-# ==========================================
-# Menu timers
-# ==========================================
+# ============================================================
+# MENU TIMER
+# ============================================================
 
 async def cancel_menu_timer(
     key: tuple[int, int],
 ) -> None:
 
-    task = menu_tasks.pop(
-        key,
-        None,
-    )
+    task = menu_tasks.pop(key, None)
 
     if task and not task.done():
         task.cancel()
 
         try:
             await task
-
         except asyncio.CancelledError:
             pass
 
@@ -414,19 +487,13 @@ async def schedule_menu_delete(
     message_id: int | None,
 ) -> None:
 
-    key = (
-        chat_id,
-        user_id,
-    )
+    key = (chat_id, user_id)
 
     await cancel_menu_timer(key)
 
     async def expire() -> None:
-
         try:
-            await asyncio.sleep(
-                MENU_TTL
-            )
+            await asyncio.sleep(MENU_TTL)
 
             if ephemeral_message_id is not None:
 
@@ -436,6 +503,11 @@ async def schedule_menu_delete(
                     ephemeral_message_id=ephemeral_message_id,
                 )
 
+                await clear_menu_owner(
+                    chat_id,
+                    ephemeral_message_id,
+                )
+
             elif message_id is not None:
 
                 await bot.delete_message(
@@ -443,33 +515,27 @@ async def schedule_menu_delete(
                     message_id=message_id,
                 )
 
+                await clear_menu_owner(
+                    chat_id,
+                    message_id,
+                )
+
         except asyncio.CancelledError:
             raise
 
         except Exception as e:
-            print(
-                f"Menu expiry error: {e}"
-            )
+            print(f"Menu expiry error: {e}")
 
         finally:
+            if menu_tasks.get(key) is asyncio.current_task():
+                menu_tasks.pop(key, None)
 
-            if (
-                menu_tasks.get(key)
-                is asyncio.current_task()
-            ):
-                menu_tasks.pop(
-                    key,
-                    None,
-                )
-
-    menu_tasks[key] = asyncio.create_task(
-        expire()
-    )
+    menu_tasks[key] = asyncio.create_task(expire())
 
 
-# ==========================================
-# Send / edit / close Rich Messages
-# ==========================================
+# ============================================================
+# SEND MENU
+# ============================================================
 
 async def send_menu(
     chat_id: int,
@@ -488,27 +554,28 @@ async def send_menu(
 
     if reply_to_ephemeral_id is not None:
 
-        kwargs["reply_parameters"] = (
-            ReplyParameters(
-                ephemeral_message_id=
-                reply_to_ephemeral_id
-            )
+        kwargs["reply_parameters"] = ReplyParameters(
+            ephemeral_message_id=reply_to_ephemeral_id
         )
 
     elif chat_id == user_id:
-        # Private chat.
+
+        # Private chats don't need ephemeral parameters.
         pass
 
-    # IMPORTANT:
-    #
-    # We deliberately do NOT create an arbitrary ephemeral
-    # group message here.
-    #
-    # Telegram permits the private ephemeral flow when the
-    # command itself arrived as an ephemeral command update.
-    #
-    # Attempting to manufacture that fallback in a group was
-    # what previously produced BOT_NOT_ADMIN.
+    else:
+
+        # This branch is only used when Telegram has not supplied
+        # an ephemeral command context.
+        #
+        # We intentionally do NOT attempt to create a direct
+        # ephemeral group message here because Telegram can reject
+        # that with BOT_NOT_ADMIN.
+        kwargs["ephemeral_message_parameters"] = (
+            EphemeralMessageParameters(
+                receiver_user_id=user_id,
+            )
+        )
 
     message = await bot.send_rich_message(
         **kwargs
@@ -520,24 +587,58 @@ async def send_menu(
         None,
     )
 
+    actual_message_id = (
+        None
+        if ephemeral_id is not None
+        else message.message_id
+    )
+
+    # --------------------------------------------------------
+    # CRITICAL SECURITY STEP
+    # --------------------------------------------------------
+    #
+    # The menu ID is stored against the user who opened it.
+    # Every callback later checks this Redis record.
+    #
+    menu_id = (
+        ephemeral_id
+        if ephemeral_id is not None
+        else actual_message_id
+    )
+
+    if menu_id is not None:
+
+        await set_menu_owner(
+            chat_id,
+            menu_id,
+            user_id,
+        )
+
     await schedule_menu_delete(
         chat_id,
         user_id,
         ephemeral_id,
-        (
-            None
-            if ephemeral_id is not None
-            else message.message_id
-        ),
+        actual_message_id,
     )
 
     return message
 
 
+# ============================================================
+# EDIT MENU
+# ============================================================
+
 async def edit_menu(
     callback: CallbackQuery,
     rich_html: str,
 ) -> None:
+
+    # SECOND SECURITY BOUNDARY.
+    #
+    # Even if a callback handler accidentally forgets to check
+    # ownership, this function refuses to edit another user's menu.
+    if await reject_unauthorized_callback(callback):
+        return
 
     message = callback.message
 
@@ -547,17 +648,10 @@ async def edit_menu(
     chat_id = message.chat.id
     user_id = callback.from_user.id
 
-    ephemeral_id = getattr(
-        message,
-        "ephemeral_message_id",
-        None,
-    )
+    ephemeral_id = message.ephemeral_message_id
 
     await cancel_menu_timer(
-        (
-            chat_id,
-            user_id,
-        )
+        (chat_id, user_id)
     )
 
     if ephemeral_id is not None:
@@ -569,6 +663,13 @@ async def edit_menu(
             rich_message=InputRichMessage(
                 html=rich_html
             ),
+        )
+
+        # Ownership remains with the same user.
+        await set_menu_owner(
+            chat_id,
+            ephemeral_id,
+            user_id,
         )
 
         await schedule_menu_delete(
@@ -588,6 +689,12 @@ async def edit_menu(
             ),
         )
 
+        await set_menu_owner(
+            chat_id,
+            message.message_id,
+            user_id,
+        )
+
         await schedule_menu_delete(
             chat_id,
             user_id,
@@ -596,9 +703,17 @@ async def edit_menu(
         )
 
 
+# ============================================================
+# CLOSE MENU
+# ============================================================
+
 async def close_menu(
     callback: CallbackQuery,
 ) -> None:
+
+    # SECOND SECURITY BOUNDARY.
+    if await reject_unauthorized_callback(callback):
+        return
 
     message = callback.message
 
@@ -608,24 +723,15 @@ async def close_menu(
     chat_id = message.chat.id
     user_id = callback.from_user.id
 
-    await clear_interaction(
-        user_id
-    )
+    ephemeral_id = message.ephemeral_message_id
+
+    await clear_interaction(user_id)
 
     await cancel_menu_timer(
-        (
-            chat_id,
-            user_id,
-        )
+        (chat_id, user_id)
     )
 
     try:
-
-        ephemeral_id = getattr(
-            message,
-            "ephemeral_message_id",
-            None,
-        )
 
         if ephemeral_id is not None:
 
@@ -635,6 +741,11 @@ async def close_menu(
                 ephemeral_message_id=ephemeral_id,
             )
 
+            await clear_menu_owner(
+                chat_id,
+                ephemeral_id,
+            )
+
         else:
 
             await bot.delete_message(
@@ -642,160 +753,144 @@ async def close_menu(
                 message_id=message.message_id,
             )
 
+            await clear_menu_owner(
+                chat_id,
+                message.message_id,
+            )
+
     except Exception as e:
-
-        print(
-            f"Menu close error: {e}"
-        )
+        print(f"Menu close error: {e}")
 
 
-# ==========================================
-# /memories
-# ==========================================
+# ============================================================
+# /MEMORIES
+# ============================================================
 
-async def show_memories_menu(
+async def show_memories(
     message: Message,
 ) -> None:
 
-    user = message.from_user
-
-    if user is None:
+    if not message.from_user:
         return
+
+    user = message.from_user
 
     user_id = user.id
     chat_id = message.chat.id
 
-    await clear_interaction(
-        user_id
-    )
+    user_name = user_display_name(user)
 
-    ephemeral_id = getattr(
-        message,
-        "ephemeral_message_id",
-        None,
-    )
+    await clear_interaction(user_id)
 
-    # ------------------------------------------------------
-    # Telegram ephemeral command flow
-    # ------------------------------------------------------
+    # --------------------------------------------------------
+    # TELEGRAM EPHEMERAL COMMAND
+    # --------------------------------------------------------
 
-    if ephemeral_id is not None:
+    if message.ephemeral_message_id is not None:
 
         await send_menu(
             chat_id,
             user_id,
-            rich_main_menu(user),
-            reply_to_ephemeral_id=ephemeral_id,
+            rich_main_menu(user_name),
+            reply_to_ephemeral_id=message.ephemeral_message_id,
         )
 
         return
 
-    # ------------------------------------------------------
-    # Private chat
-    # ------------------------------------------------------
+    # --------------------------------------------------------
+    # PRIVATE CHAT
+    # --------------------------------------------------------
 
     if message.chat.type == "private":
 
         try:
             await message.delete()
-
         except Exception:
             pass
 
         await send_menu(
             chat_id,
             user_id,
-            rich_main_menu(user),
+            rich_main_menu(user_name),
         )
 
         return
 
-    # ------------------------------------------------------
-    # Manually typed /memories in a group
-    # ------------------------------------------------------
+    # --------------------------------------------------------
+    # NORMAL GROUP MESSAGE
+    # --------------------------------------------------------
     #
-    # This is intentionally NOT converted into an ephemeral
-    # message.
+    # A manually typed group command does NOT contain Telegram's
+    # ephemeral command context.
     #
-    # The private ephemeral flow works when Telegram supplies
-    # ephemeral_message_id, which happens when the user selects
-    # the command from Telegram's command list.
+    # Do not create a public memory menu.
+    # Do not attempt EphemeralMessageParameters here because that
+    # can require admin privileges and produces BOT_NOT_ADMIN.
     #
-    # Trying to manufacture the same thing from a normal public
-    # group message was causing BOT_NOT_ADMIN.
-    #
+    # Delete the typed command and wait for the Telegram command
+    # picker to invoke the ephemeral version.
+    # --------------------------------------------------------
 
-    print(
-        "/memories ignored: no ephemeral command context "
-        f"(user={user_id}, chat={chat_id})"
-    )
+    try:
+        await message.delete()
+    except Exception:
+        pass
 
 
-@router.message(
-    Command("memories")
-)
+@router.message(Command("memories"))
 async def handle_memories(
     message: Message,
 ):
-
-    await show_memories_menu(
-        message
-    )
+    await show_memories(message)
 
 
-# ==========================================
-# Rich-message callbacks
-# ==========================================
+# ============================================================
+# MEMORY CALLBACKS
+# ============================================================
 
-@router.callback_query(
-    F.data == "memory_view"
-)
+@router.callback_query(F.data == "memory_view")
 async def handle_memory_view(
     callback: CallbackQuery,
 ):
 
+    if await reject_unauthorized_callback(callback):
+        return
+
     await callback.answer()
 
-    user_id = callback.from_user.id
+    user = callback.from_user
 
-    memories_html = (
-        await get_formatted_memories(
-            str(user_id)
-        )
+    memories_html = await get_formatted_memories(
+        str(user.id),
+        user_display_name(user),
     )
 
     try:
 
         await edit_menu(
             callback,
-            rich_memory_menu(
-                memories_html
-            ),
+            rich_memory_menu(memories_html),
         )
 
     except Exception as e:
-
-        print(
-            f"Memory view error: {e}"
-        )
+        print(f"Memory view error: {e}")
 
 
-@router.callback_query(
-    F.data == "memory_add"
-)
+@router.callback_query(F.data == "memory_add")
 async def handle_memory_add(
     callback: CallbackQuery,
 ):
 
-    user_id = callback.from_user.id
-
-    await set_interaction(
-        user_id,
-        "add",
-    )
+    if await reject_unauthorized_callback(callback):
+        return
 
     await callback.answer(
         "Send the memory you want me to save."
+    )
+
+    await set_interaction(
+        callback.from_user.id,
+        "add",
     )
 
     try:
@@ -804,24 +899,30 @@ async def handle_memory_add(
             callback,
             rich_back_close(
                 "<h2>New memory</h2>"
-                "<p>Send the fact or instruction you want me to remember.</p>"
-                "<p>You can send multiple items separated by <code>,,</code>.</p>"
+                "<p>"
+                "Send the fact or instruction you want me "
+                "to remember."
+                "</p>"
+                "<p>"
+                "You can send multiple items separated by "
+                "<code>,,</code>."
+                "</p>"
             ),
         )
 
     except Exception as e:
-
-        print(
-            f"Memory add menu error: {e}"
-        )
+        print(f"Memory add menu error: {e}")
 
 
-@router.callback_query(
-    F.data == "memory_edit"
-)
+@router.callback_query(F.data == "memory_edit")
 async def handle_memory_edit(
     callback: CallbackQuery,
 ):
+
+    if await reject_unauthorized_callback(callback):
+        return
+
+    await callback.answer()
 
     user_id = callback.from_user.id
 
@@ -834,36 +935,38 @@ async def handle_memory_edit(
         "edit_number",
     )
 
-    await callback.answer()
-
     if not memories:
 
         body = (
             "<h2>Edit memory</h2>"
-            "<p>You don't have any saved memories yet.</p>"
+            "<p>"
+            "You don't have any saved memories yet."
+            "</p>"
         )
 
     else:
 
         rows = [
             "<h2>Edit memory</h2>",
-            "<p>Send the number and replacement text.</p>",
+            "<p>",
+            "Send the number and replacement text.",
+            "</p>",
             "<ol>",
         ]
 
         for memory in memories:
-
             rows.append(
                 f"<li>{html.escape(memory)}</li>"
             )
 
-        rows.append(
-            "</ol>"
-        )
-
-        rows.append(
-            "<p>Example: "
-            "<code>2 My new instruction</code></p>"
+        rows.extend(
+            [
+                "</ol>",
+                "<p>",
+                "Example: "
+                "<code>2 My new instruction</code>",
+                "</p>",
+            ]
         )
 
         body = "".join(rows)
@@ -876,18 +979,18 @@ async def handle_memory_edit(
         )
 
     except Exception as e:
-
-        print(
-            f"Memory edit menu error: {e}"
-        )
+        print(f"Memory edit menu error: {e}")
 
 
-@router.callback_query(
-    F.data == "memory_forget"
-)
+@router.callback_query(F.data == "memory_forget")
 async def handle_memory_forget(
     callback: CallbackQuery,
 ):
+
+    if await reject_unauthorized_callback(callback):
+        return
+
+    await callback.answer()
 
     user_id = callback.from_user.id
 
@@ -900,37 +1003,39 @@ async def handle_memory_forget(
         "forget",
     )
 
-    await callback.answer()
-
     if not memories:
 
         body = (
             "<h2>Forget memories</h2>"
-            "<p>Your memory list is already empty.</p>"
+            "<p>"
+            "Your memory list is already empty."
+            "</p>"
         )
 
     else:
 
         rows = [
             "<h2>Forget memories</h2>",
-            "<p>Send one number or several separated by "
-            "<code>,,</code>.</p>",
+            "<p>",
+            "Send one number or several separated by "
+            "<code>,,</code>.",
+            "</p>",
             "<ol>",
         ]
 
         for memory in memories:
-
             rows.append(
                 f"<li>{html.escape(memory)}</li>"
             )
 
-        rows.append(
-            "</ol>"
-        )
-
-        rows.append(
-            "<p>Example: "
-            "<code>1,, 3,, 5</code></p>"
+        rows.extend(
+            [
+                "</ol>",
+                "<p>",
+                "Example: "
+                "<code>1,, 3,, 5</code>",
+                "</p>",
+            ]
         )
 
         body = "".join(rows)
@@ -943,18 +1048,16 @@ async def handle_memory_forget(
         )
 
     except Exception as e:
-
-        print(
-            f"Memory forget menu error: {e}"
-        )
+        print(f"Memory forget menu error: {e}")
 
 
-@router.callback_query(
-    F.data == "memory_forget_all"
-)
+@router.callback_query(F.data == "memory_forget_all")
 async def handle_memory_forget_all(
     callback: CallbackQuery,
 ):
+
+    if await reject_unauthorized_callback(callback):
+        return
 
     await clear_interaction(
         callback.from_user.id
@@ -970,7 +1073,6 @@ async def handle_memory_forget_all(
         )
 
     except Exception as e:
-
         print(
             f"Forget-all confirmation error: {e}"
         )
@@ -983,6 +1085,9 @@ async def handle_confirm_forget_all(
     callback: CallbackQuery,
 ):
 
+    if await reject_unauthorized_callback(callback):
+        return
+
     user_id = callback.from_user.id
     user_id_str = str(user_id)
 
@@ -992,6 +1097,9 @@ async def handle_confirm_forget_all(
         else 0
     )
 
+    # IMPORTANT:
+    # Everything here is derived from callback.from_user.id.
+    # There is no user-supplied ID in the callback data.
     await redis_client.delete(
         f"memory_list:{user_id_str}",
         f"chat_history:{chat_id}:{user_id_str}",
@@ -1008,89 +1116,85 @@ async def handle_confirm_forget_all(
             callback,
             rich_back_close(
                 "<h2>Memories cleared</h2>"
-                "<p>Everything saved for this user and conversation has been removed.</p>"
+                "<p>"
+                "Everything saved for this user and "
+                "conversation has been removed."
+                "</p>"
             ),
         )
 
     except Exception as e:
-
         print(
             f"Forget-all completion error: {e}"
         )
 
 
-@router.callback_query(
-    F.data == "memory_back"
-)
+@router.callback_query(F.data == "memory_back")
 async def handle_memory_back(
     callback: CallbackQuery,
 ):
 
-    user_id = callback.from_user.id
+    if await reject_unauthorized_callback(callback):
+        return
 
     await clear_interaction(
-        user_id
+        callback.from_user.id
     )
 
     await callback.answer()
 
-    try:
+    user_name = user_display_name(
+        callback.from_user
+    )
 
-        # IMPORTANT:
-        # Use callback.from_user here so Back restores
-        # the correct user's personalized title.
+    try:
 
         await edit_menu(
             callback,
-            rich_main_menu(
-                callback.from_user
-            ),
+            rich_main_menu(user_name),
         )
 
     except Exception as e:
-
-        print(
-            f"Memory back error: {e}"
-        )
+        print(f"Memory back error: {e}")
 
 
-@router.callback_query(
-    F.data == "memory_close"
-)
+@router.callback_query(F.data == "memory_close")
 async def handle_memory_close(
     callback: CallbackQuery,
 ):
 
-    await callback.answer(
-        "Closed"
-    )
+    if await reject_unauthorized_callback(callback):
+        return
 
-    await close_menu(
-        callback
-    )
+    await callback.answer("Closed")
+
+    await close_menu(callback)
 
 
-# ==========================================
-# Memory text input
-# ==========================================
+# ============================================================
+# MEMORY TEXT INPUT
+# ============================================================
 
 async def process_memory_text(
     message: Message,
     action: str,
 ) -> bool:
 
-    if (
-        not message.text
-        or message.text.startswith("/")
-    ):
+    if not message.text:
+        return False
+
+    if message.text.startswith("/"):
+        return False
+
+    if not message.from_user:
         return False
 
     user_id = message.from_user.id
     user_id_str = str(user_id)
 
-    # ------------------------------------------------------
-    # Add memory
-    # ------------------------------------------------------
+    # --------------------------------------------------------
+    # ADD
+    # --------------------------------------------------------
 
     if action == "add":
 
@@ -1104,10 +1208,13 @@ async def process_memory_text(
 
             try:
 
-                if await redis_client.lpos(
-                    f"memory_list:{user_id_str}",
-                    part,
-                ) is None:
+                if (
+                    await redis_client.lpos(
+                        f"memory_list:{user_id_str}",
+                        part,
+                    )
+                    is None
+                ):
 
                     await redis_client.rpush(
                         f"memory_list:{user_id_str}",
@@ -1115,7 +1222,6 @@ async def process_memory_text(
                     )
 
             except Exception as e:
-
                 print(
                     f"Memory save error: {e}"
                 )
@@ -1126,28 +1232,24 @@ async def process_memory_text(
             -1,
         )
 
-        await clear_interaction(
-            user_id
-        )
+        await clear_interaction(user_id)
 
         try:
             await message.delete()
-
         except Exception:
             pass
 
         return True
 
-    # ------------------------------------------------------
-    # Edit memory
-    # ------------------------------------------------------
+    # --------------------------------------------------------
+    # EDIT
+    # --------------------------------------------------------
 
     if action == "edit_number":
 
-        parts = (
-            message.text
-            .strip()
-            .split(" ", 1)
+        parts = message.text.strip().split(
+            " ",
+            1,
         )
 
         if (
@@ -1156,13 +1258,12 @@ async def process_memory_text(
         ):
             return True
 
-        index = int(
-            parts[0]
-        ) - 1
+        index = int(parts[0]) - 1
 
         new_value = (
             parts[1]
-            .strip()[:200]
+            .strip()
+            [:200]
         )
 
         raw = await redis_client.lrange(
@@ -1179,21 +1280,18 @@ async def process_memory_text(
                 new_value,
             )
 
-        await clear_interaction(
-            user_id
-        )
+        await clear_interaction(user_id)
 
         try:
             await message.delete()
-
         except Exception:
             pass
 
         return True
 
-    # ------------------------------------------------------
-    # Forget memory
-    # ------------------------------------------------------
+    # --------------------------------------------------------
+    # FORGET
+    # --------------------------------------------------------
 
     if action == "forget":
 
@@ -1235,13 +1333,10 @@ async def process_memory_text(
                 *memories,
             )
 
-        await clear_interaction(
-            user_id
-        )
+        await clear_interaction(user_id)
 
         try:
             await message.delete()
-
         except Exception:
             pass
 
@@ -1250,16 +1345,17 @@ async def process_memory_text(
     return False
 
 
-# ==========================================
-# Delete command
-# ==========================================
+# ============================================================
+# DELETE COMMAND
+# ============================================================
 
-@router.message(
-    Command("delete", "del")
-)
+@router.message(Command("delete", "del"))
 async def handle_delete(
     message: Message,
 ):
+
+    if not message.from_user:
+        return
 
     if message.from_user.id != OWNER_ID:
         return
@@ -1271,9 +1367,7 @@ async def handle_delete(
     ):
 
         if (
-            message.reply_to_message
-            .from_user
-            .id
+            message.reply_to_message.from_user.id
             == BOT_INFO.id
         ):
 
@@ -1288,16 +1382,14 @@ async def handle_delete(
                 pass
 
     try:
-
         await message.delete()
-
     except Exception:
         pass
 
 
-# ==========================================
-# Web search
-# ==========================================
+# ============================================================
+# WEB SEARCH
+# ============================================================
 
 async def free_web_search(
     query: str,
@@ -1307,8 +1399,7 @@ async def free_web_search(
         "User-Agent":
             "Mozilla/5.0 "
             "(Windows NT 10.0; Win64; x64)",
-        "Accept":
-            "application/json",
+        "Accept": "application/json",
     }
 
     try:
@@ -1335,16 +1426,17 @@ async def free_web_search(
 
             return ""
 
-        results = (
-            response
-            .json()
-            .get("results", [])[:10]
-        )
+        results = response.json().get(
+            "results",
+            [],
+        )[:10]
 
         return "\n\n".join(
-            f"Title: {x.get('title', '')}\n"
-            f"Content: {x.get('content', '')}\n"
-            f"URL: {x.get('url', '')}"
+            (
+                f"Title: {x.get('title', '')}\n"
+                f"Content: {x.get('content', '')}\n"
+                f"URL: {x.get('url', '')}"
+            )
             for x in results
             if (
                 x.get("title")
@@ -1361,9 +1453,9 @@ async def free_web_search(
         return ""
 
 
-# ==========================================
-# Audio
-# ==========================================
+# ============================================================
+# AUDIO
+# ============================================================
 
 async def send_audio_track(
     chat_id: int,
@@ -1402,6 +1494,12 @@ async def send_audio_track(
             )
 
         else:
+
+            print(
+                f"Audio file not found: "
+                f"{file_path}"
+            )
+
             return
 
         try:
@@ -1417,7 +1515,8 @@ async def send_audio_track(
         except Exception as e:
 
             if (
-                "message to be replied not found"
+                "message to be replied "
+                "not found"
                 not in str(e).lower()
             ):
                 raise
@@ -1446,9 +1545,9 @@ async def send_audio_track(
         )
 
 
-# ==========================================
-# Primary Chat, mentions & audio
-# ==========================================
+# ============================================================
+# CONVERSATION HANDLER
+# ============================================================
 
 @router.message(
     F.text
@@ -1460,12 +1559,17 @@ async def handle_conversation(
     message: Message,
 ):
 
-    # ------------------------------------------------------
-    # Interactive memory input gets first priority.
-    # ------------------------------------------------------
+    if not message.from_user:
+        return
+
+    user_id = message.from_user.id
+
+    # --------------------------------------------------------
+    # MEMORY INTERACTION
+    # --------------------------------------------------------
 
     action = await get_interaction(
-        message.from_user.id
+        user_id
     )
 
     if (
@@ -1480,6 +1584,10 @@ async def handle_conversation(
         ):
             return
 
+    # --------------------------------------------------------
+    # NORMAL BOT CONVERSATION
+    # --------------------------------------------------------
+
     text = (
         message.text
         or message.caption
@@ -1492,10 +1600,7 @@ async def handle_conversation(
         text,
     )
 
-    # ------------------------------------------------------
-    # Audio Easter eggs
-    # ------------------------------------------------------
-
+    # Audio triggers.
     if re.search(
         r"\bsen\b",
         text_no_html,
@@ -1532,10 +1637,6 @@ async def handle_conversation(
             )
         )
 
-    # ------------------------------------------------------
-    # Determine whether the bot should answer.
-    # ------------------------------------------------------
-
     bot_username = (
         f"@{BOT_INFO.username}"
         if BOT_INFO
@@ -1563,8 +1664,11 @@ async def handle_conversation(
         message.reply_to_message
         and BOT_INFO
         and message.reply_to_message.from_user
-        and message.reply_to_message.from_user.id
-        == BOT_INFO.id
+        and (
+            message.reply_to_message
+            .from_user.id
+            == BOT_INFO.id
+        )
     )
 
     if not (
@@ -1572,25 +1676,15 @@ async def handle_conversation(
         or is_reply_to_bot
         or is_private
         or message.content_type
-        in {
-            "voice",
-            "audio",
-        }
+        in {"voice", "audio"}
     ):
         return
 
-    user_id_str = str(
-        message.from_user.id
-    )
+    # --------------------------------------------------------
+    # PROMPT CLEANUP
+    # --------------------------------------------------------
 
-    chat_id = message.chat.id
-    msg_id = message.message_id
-
-    # ------------------------------------------------------
-    # Clean prompt
-    # ------------------------------------------------------
-
-    clean_prompt = text
+    clean_prompt = text_no_html
 
     if bot_username:
 
@@ -1606,399 +1700,200 @@ async def handle_conversation(
         "",
         clean_prompt,
         flags=re.IGNORECASE,
-    ).strip()
-
-    # ------------------------------------------------------
-    # Cooldown
-    # ------------------------------------------------------
-
-    cooldown_key = (
-        f"cooldown:{user_id_str}"
     )
 
-    if await redis_client.exists(
-        cooldown_key
-    ):
+    clean_prompt = clean_prompt.strip()
 
-        warning = (
-            "Slow down, request limit reached."
-        )
-
-        if is_private:
-
-            await message.answer(
-                warning
-            )
-
-        else:
-
-            await message.answer(
-                warning,
-                reply_to_message_id=msg_id,
-            )
-
-        return
-
-    await redis_client.set(
-        cooldown_key,
-        "1",
-        ex=4,
-    )
-
-    # ------------------------------------------------------
-    # Reply context
-    # ------------------------------------------------------
-
-    replied_context = ""
-
-    if message.reply_to_message:
-
-        replied_context = (
-            message.reply_to_message.text
-            or message.reply_to_message.caption
-            or ""
-        )
-
-    # ------------------------------------------------------
-    # Audio
-    # ------------------------------------------------------
-
-    audio_bytes = None
-    audio_mime = "audio/ogg"
-
-    if message.content_type in {
-        "voice",
-        "audio",
-    }:
-
-        audio_obj = (
-            message.voice
-            or message.audio
-        )
-
-        if audio_obj:
-
-            file_info = await bot.get_file(
-                audio_obj.file_id
-            )
-
-            stream = await bot.download_file(
-                file_info.file_path
-            )
-
-            if stream:
-                audio_bytes = stream.read()
-
-            if getattr(
-                audio_obj,
-                "mime_type",
-                None,
-            ):
-                audio_mime = (
-                    audio_obj.mime_type
-                )
-
-    if (
-        not clean_prompt
-        and replied_context
-    ):
-
+    if not clean_prompt:
         clean_prompt = (
-            "What are your thoughts on this?"
+            "Please respond to the user's message."
         )
 
-    if not (
-        clean_prompt
-        or replied_context
-        or audio_bytes
-    ):
-        return
+    # --------------------------------------------------------
+    # USER MEMORY
+    # --------------------------------------------------------
 
-    # ------------------------------------------------------
-    # Gemini
-    # ------------------------------------------------------
+    saved_facts = await get_memories(
+        str(user_id)
+    )
+
+    # --------------------------------------------------------
+    # CHAT HISTORY
+    # --------------------------------------------------------
+
+    history_key = (
+        f"chat_history:"
+        f"{message.chat.id}:"
+        f"{user_id}"
+    )
 
     try:
 
-        raw_mem = await redis_client.lrange(
-            f"memory_list:{user_id_str}",
-            0,
-            -1,
-        )
-
-        saved_facts = [
-            x.decode("utf-8")
-            if isinstance(x, bytes)
-            else str(x)
-            for x in raw_mem
-        ]
-
-        history_key = (
-            f"chat_history:"
-            f"{chat_id}:"
-            f"{user_id_str}"
-        )
-
-        raw_hist = await redis_client.lrange(
+        history_raw = await redis_client.lrange(
             history_key,
-            0,
+            -10,
             -1,
         )
 
-        chat_history = [
-            x.decode("utf-8")
-            if isinstance(x, bytes)
-            else str(x)
-            for x in raw_hist
+        history = [
+            item.decode("utf-8")
+            if isinstance(item, bytes)
+            else str(item)
+            for item in history_raw
         ]
 
-        # --------------------------------------------------
-        # Search
-        # --------------------------------------------------
+    except Exception as e:
 
-        search_words = {
-            "search",
-            "google",
-            "look up",
-            "lookup",
-            "find",
-            "show",
-            "show me",
-            "table",
-            "list",
-            "info",
-        }
-
-        explicit_search = any(
-            word
-            in clean_prompt.lower()
-            for word in search_words
+        print(
+            f"History read error: {e}"
         )
 
-        search_query = clean_prompt
+        history = []
 
-        if (
-            explicit_search
-            and len(clean_prompt.split()) <= 4
-        ):
+    # --------------------------------------------------------
+    # SYSTEM INSTRUCTIONS
+    # --------------------------------------------------------
 
-            if replied_context:
+    instructions = """
+You are SenAnythangBot.
 
-                search_query = (
-                    replied_context
-                )
+Be helpful, conversational, accurate, and concise.
 
-            elif chat_history:
+When the user asks for current information, use the available
+web search context when provided.
 
-                for old in reversed(
-                    chat_history
-                ):
+The user may have personal instructions or memories stored in
+Redis. These are private to that user and must only be applied
+to that user's conversations.
 
-                    if (
-                        old.startswith("User: ")
-                        and len(old.split()) > 2
-                    ):
+Do not reveal, infer, or fabricate another user's memories,
+instructions, conversation history, or private information.
 
-                        search_query = (
-                            old[6:].strip()
-                        )
+Telegram Rich Messages are supported. When appropriate, return
+clean HTML suitable for Telegram Rich Messages.
 
-                        break
+Do not wrap the response in Markdown code fences unless the user
+specifically requests code.
 
-        search_context = (
-            await free_web_search(
-                search_query
+Supported basic formatting includes:
+<b>bold</b>
+<i>italic</i>
+<code>code</code>
+<s>strikethrough</s>
+"""
+
+    if saved_facts:
+
+        instructions += (
+            "\n\nYou must strictly follow these "
+            "User Instructions:\n"
+            + "\n".join(
+                f"- {fact}"
+                for fact in saved_facts
             )
-            if (
-                explicit_search
-                and search_query
-            )
-            else ""
         )
 
-        # --------------------------------------------------
-        # Context
-        # --------------------------------------------------
+    # --------------------------------------------------------
+    # WEB SEARCH
+    # --------------------------------------------------------
 
-        context = []
+    search_context = ""
 
-        if replied_context:
+    search_triggers = (
+        "latest",
+        "today",
+        "current",
+        "news",
+        "weather",
+        "price",
+        "recent",
+        "right now",
+    )
 
-            context.append(
-                "Message User is Replying To:\n"
-                f'"{replied_context}"'
-            )
+    if any(
+        trigger in clean_prompt.lower()
+        for trigger in search_triggers
+    ):
 
-        if chat_history:
-
-            context.append(
-                "Recent Conversation Context:\n"
-                + "\n".join(chat_history)
-            )
-
-        if search_context:
-
-            context.append(
-                "Web Search Context:\n"
-                + search_context
-            )
-
-        final_prompt = (
+        search_context = await free_web_search(
             clean_prompt
-            or "Process and answer this voice note."
         )
 
-        if context:
+    # --------------------------------------------------------
+    # GEMINI PROMPT
+    # --------------------------------------------------------
 
-            final_prompt = (
-                "\n\n".join(context)
-                + "\n\nUser Question: "
-                + final_prompt
-            )
+    prompt_parts = []
 
-        # --------------------------------------------------
-        # System instructions
-        # --------------------------------------------------
+    if history:
 
-        today = datetime.now(
-            timezone.utc
-        ).strftime(
-            "%A, %B %d, %Y"
+        prompt_parts.append(
+            "Recent conversation:\n"
+            + "\n".join(history)
         )
 
-        instructions = (
-            f"Today's date is {today}.\n"
-            "Never use standard AI pleasantries.\n"
-            "Keep casual replies brief, but expand when asked for detail.\n"
-            "If the user changes subject, immediately follow the new subject.\n"
-            "If joking or sarcastic, match the energy.\n"
-            "If you do not know, say exactly: "
-            "'I don't have enough details to answer that accurately' "
-            "without guessing.\n"
-            "Do not assume personal details unless explicitly present "
-            "in the memory list.\n\n"
+    if search_context:
 
-            "OUTPUT FORMAT: Use Telegram Rich HTML. "
-            "Use <h1>-<h6>, <p>, <b>, <i>, <u>, <s>, "
-            "<code>, <pre>, <table>, <details>, "
-            "<a href=\"URL\">text</a>, and other supported rich HTML "
-            "where useful.\n"
-
-            "Do not use Markdown asterisks for formatting. "
-            "Do not use Markdown pipe tables. "
-            "Return clean HTML suitable for Telegram sendRichMessage."
+        prompt_parts.append(
+            "Web search results:\n"
+            + search_context
         )
 
-        if search_context:
+    prompt_parts.append(
+        "User message:\n"
+        + clean_prompt
+    )
 
-            instructions += (
-                "\nWhen using Web Search Context, "
-                "state the information directly. "
-                "If the user asks for links or sources, "
-                "use HTML links. "
-                "If they do not ask for sources, "
-                "do not include URLs."
+    final_prompt = "\n\n".join(
+        prompt_parts
+    )
+
+    # --------------------------------------------------------
+    # GEMINI
+    # --------------------------------------------------------
+
+    try:
+
+        response = (
+            await gemini_client
+            .aio
+            .models
+            .generate_content(
+                model="gemini-3.5-flash-lite",
+                contents=final_prompt,
+                config=types.GenerateContentConfig(
+                    system_instruction=instructions,
+                ),
             )
-
-        if chat_history:
-
-            instructions += (
-                "\nUse Recent Conversation Context "
-                "for continuity, but do not repeat it."
-            )
-
-        if saved_facts:
-
-            instructions += (
-                "\n\nUser memory directives:\n"
-                + "\n".join(
-                    f"- {x}"
-                    for x in saved_facts
-                )
-            )
-
-        safety = [
-            types.SafetySetting(
-                category="HARM_CATEGORY_HATE_SPEECH",
-                threshold="BLOCK_NONE",
-            ),
-            types.SafetySetting(
-                category="HARM_CATEGORY_HARASSMENT",
-                threshold="BLOCK_NONE",
-            ),
-            types.SafetySetting(
-                category="HARM_CATEGORY_SEXUALLY_EXPLICIT",
-                threshold="BLOCK_NONE",
-            ),
-            types.SafetySetting(
-                category="HARM_CATEGORY_DANGEROUS_CONTENT",
-                threshold="BLOCK_NONE",
-            ),
-        ]
-
-        # --------------------------------------------------
-        # Gemini request
-        # --------------------------------------------------
-
-        if audio_bytes:
-
-            response = (
-                await gemini_client
-                .aio
-                .models
-                .generate_content(
-                    model="gemini-3.5-flash-lite",
-                    contents=[
-                        types.Part.from_bytes(
-                            data=audio_bytes,
-                            mime_type=audio_mime,
-                        ),
-                        final_prompt,
-                    ],
-                    config=types.GenerateContentConfig(
-                        system_instruction=instructions,
-                        safety_settings=safety,
-                    ),
-                )
-            )
-
-        else:
-
-            response = (
-                await gemini_client
-                .aio
-                .models
-                .generate_content(
-                    model="gemini-3.5-flash-lite",
-                    contents=final_prompt,
-                    config=types.GenerateContentConfig(
-                        system_instruction=instructions,
-                        safety_settings=safety,
-                    ),
-                )
-            )
+        )
 
         response_text = (
             response.text
-            or "I didn't receive a response."
+            or "I didn't get a response."
         )
 
-        # Remove accidental Markdown fences around HTML.
-        response_text = (
-            response_text
-            .replace("```html", "")
-            .replace("```", "")
-            .strip()
+        # Remove accidental Markdown fences.
+        response_text = re.sub(
+            r"^```(?:html)?\s*",
+            "",
+            response_text.strip(),
+            flags=re.IGNORECASE,
         )
 
-        # --------------------------------------------------
-        # Send Rich Message response
-        # --------------------------------------------------
+        response_text = re.sub(
+            r"\s*```$",
+            "",
+            response_text.strip(),
+        )
+
+        # ----------------------------------------------------
+        # SEND AS RICH MESSAGE
+        # ----------------------------------------------------
 
         if is_private:
 
             await bot.send_rich_message(
-                chat_id=chat_id,
+                chat_id=message.chat.id,
                 rich_message=InputRichMessage(
                     html=response_text
                 ),
@@ -2007,30 +1902,23 @@ async def handle_conversation(
         else:
 
             await bot.send_rich_message(
-                chat_id=chat_id,
+                chat_id=message.chat.id,
                 rich_message=InputRichMessage(
                     html=response_text
                 ),
                 reply_parameters=ReplyParameters(
-                    message_id=msg_id
+                    message_id=message.message_id
                 ),
             )
 
-        # --------------------------------------------------
-        # Save history
-        # --------------------------------------------------
-
-        clean_history = re.sub(
-            r"<[^>]+>",
-            "",
-            response_text,
-        )
+        # ----------------------------------------------------
+        # SAVE HISTORY
+        # ----------------------------------------------------
 
         await redis_client.rpush(
             history_key,
-            f"User: "
-            f"{clean_prompt or 'Voice Note'}",
-            f"Bot: {clean_history}",
+            f"User: {clean_prompt}",
+            f"Bot: {response_text}",
         )
 
         await redis_client.ltrim(
@@ -2039,48 +1927,63 @@ async def handle_conversation(
             -1,
         )
 
-    except Exception as e:
+    except Exception as ai_err:
 
         print(
-            f"Gemini API error: {e}"
+            f"Gemini API error: {ai_err}"
         )
 
-        error = (
-            "Whoa, I'm getting a little overwhelmed! "
-            "Let me catch my breath for a minute."
-            if "429" in str(e)
-            else
+        error_text = (
             "I am currently broken right now, "
             "the owner needs to fix me."
         )
 
-        if is_private:
+        if "429" in str(ai_err):
 
-            await message.answer(
-                error
+            error_text = (
+                "Whoa, I'm getting a little "
+                "overwhelmed! Let me catch my "
+                "breath for a minute."
             )
 
-        else:
+        try:
 
-            await message.answer(
-                error,
-                reply_to_message_id=msg_id,
+            if is_private:
+
+                await bot.send_rich_message(
+                    chat_id=message.chat.id,
+                    rich_message=InputRichMessage(
+                        html=(
+                            f"<p>{html.escape(error_text)}</p>"
+                        )
+                    ),
+                )
+
+            else:
+
+                await bot.send_rich_message(
+                    chat_id=message.chat.id,
+                    rich_message=InputRichMessage(
+                        html=(
+                            f"<p>{html.escape(error_text)}</p>"
+                        )
+                    ),
+                    reply_parameters=ReplyParameters(
+                        message_id=message.message_id
+                    ),
+                )
+
+        except Exception as send_error:
+
+            print(
+                "Failed to send Gemini error "
+                f"message: {send_error}"
             )
 
 
-# ==========================================
-# Startup / healthcheck
-# ==========================================
-
-async def health_check(
-    request,
-):
-
-    return web.Response(
-        text="200 OK - Bot is running.",
-        status=200,
-    )
-
+# ============================================================
+# TELEGRAM COMMAND CONFIGURATION
+# ============================================================
 
 async def configure_commands() -> None:
 
@@ -2091,6 +1994,23 @@ async def configure_commands() -> None:
             is_ephemeral=True,
         ),
     ]
+
+    # Remove the old /help command from these scopes.
+    try:
+
+        await bot.delete_my_commands(
+            scope=BotCommandScopeAllGroupChats()
+        )
+
+        await bot.delete_my_commands(
+            scope=BotCommandScopeAllPrivateChats()
+        )
+
+    except Exception as e:
+
+        print(
+            f"Command cleanup warning: {e}"
+        )
 
     await bot.set_my_commands(
         commands,
@@ -2103,9 +2023,29 @@ async def configure_commands() -> None:
     )
 
 
-# ==========================================
-# Main
-# ==========================================
+# ============================================================
+# HEALTH CHECK
+# ============================================================
+
+async def health_check(
+    request: web.Request,
+) -> web.Response:
+
+    return web.json_response(
+        {
+            "status": "ok",
+            "bot": (
+                f"@{BOT_INFO.username}"
+                if BOT_INFO
+                else "starting"
+            ),
+        }
+    )
+
+
+# ============================================================
+# STARTUP
+# ============================================================
 
 async def main():
 
@@ -2138,13 +2078,13 @@ async def main():
     except Exception as e:
 
         print(
-            "Startup Telegram configuration error: "
-            f"{e}"
+            "Startup Telegram configuration "
+            f"error: {e}"
         )
 
-    # ------------------------------------------------------
-    # Railway health server
-    # ------------------------------------------------------
+    # --------------------------------------------------------
+    # RAILWAY HEALTH SERVER
+    # --------------------------------------------------------
 
     app = web.Application()
 
@@ -2158,17 +2098,12 @@ async def main():
         health_check,
     )
 
-    runner = web.AppRunner(
-        app
-    )
+    runner = web.AppRunner(app)
 
     await runner.setup()
 
     port = int(
-        os.environ.get(
-            "PORT",
-            "8080",
-        )
+        os.getenv("PORT", "8080")
     )
 
     site = web.TCPSite(
@@ -2180,47 +2115,49 @@ async def main():
     await site.start()
 
     print(
-        f"Healthcheck server listening "
-        f"on port {port}"
+        f"Health server listening on port {port}"
     )
 
-    print(
-        f"SearXNG endpoint: "
-        f"{SEARXNG_URL}"
-    )
-
-    # ------------------------------------------------------
-    # Telegram polling
-    # ------------------------------------------------------
+    # --------------------------------------------------------
+    # POLLING
+    # --------------------------------------------------------
 
     try:
 
+        print(
+            "Starting Telegram polling..."
+        )
+
         await dp.start_polling(
-            bot
+            bot,
+            allowed_updates=dp.resolve_used_update_types(),
         )
 
     finally:
 
-        # Cancel menu expiration tasks.
-        for task in list(
-            menu_tasks.values()
-        ):
-
-            task.cancel()
-
-        await bot.session.close()
-
-        await redis_client.aclose()
-
-        await runner.cleanup()
-
         print(
-            "Cleanup complete. "
-            "Process exiting."
+            "Shutting down..."
         )
 
+        try:
+            await runner.cleanup()
+        except Exception:
+            pass
+
+        try:
+            await bot.session.close()
+        except Exception:
+            pass
+
+        try:
+            await redis_client.aclose()
+        except Exception:
+            pass
+
+
+# ============================================================
+# ENTRY POINT
+# ============================================================
 
 if __name__ == "__main__":
-    asyncio.run(
-        main()
-    )
+    asyncio.run(main())
