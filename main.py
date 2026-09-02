@@ -1,4 +1,3 @@
-
 import os
 import re
 import asyncio
@@ -57,8 +56,15 @@ if not redis_url:
         else f"redis://{host}:{port}"
     )
 
-if "upstash" in redis_url.lower() and redis_url.startswith("redis://"):
-    redis_url = redis_url.replace("redis://", "rediss://", 1)
+if (
+    "upstash" in redis_url.lower()
+    and redis_url.startswith("redis://")
+):
+    redis_url = redis_url.replace(
+        "redis://",
+        "rediss://",
+        1,
+    )
 
 redis_client = redis.from_url(
     redis_url,
@@ -575,7 +581,7 @@ def get_memory_rich_message(
             InputRichBlockButtons(
                 buttons=[
                     RichMessageButton(
-                        text="🧠 New Memory",
+                        text="➕ New Memory",
                         callback_data="memory_add",
                         style="success",
                     ),
@@ -586,7 +592,7 @@ def get_memory_rich_message(
             InputRichBlockButtons(
                 buttons=[
                     RichMessageButton(
-                        text="✕ Close",
+                        text="❌ Close",
                         callback_data="memory_close",
                         style="danger",
                     ),
@@ -604,7 +610,7 @@ def get_memory_rich_message(
             InputRichBlockButtons(
                 buttons=[
                     RichMessageButton(
-                        text="✏️ Edit",
+                        text="📝 Edit",
                         callback_data="memory_edit",
                         style="primary",
                     ),
@@ -620,7 +626,7 @@ def get_memory_rich_message(
             InputRichBlockButtons(
                 buttons=[
                     RichMessageButton(
-                        text="🧹 Clear All",
+                        text="🫯 Clear All",
                         callback_data="memory_forget_all",
                         style="danger",
                     ),
@@ -631,11 +637,11 @@ def get_memory_rich_message(
             InputRichBlockButtons(
                 buttons=[
                     RichMessageButton(
-                        text="‹ Back",
+                        text="❮ Back",
                         callback_data="memory_back",
                     ),
                     RichMessageButton(
-                        text="✕ Close",
+                        text="❌ Close",
                         callback_data="memory_close",
                         style="danger",
                     ),
@@ -664,11 +670,11 @@ def get_memory_rich_message(
             InputRichBlockButtons(
                 buttons=[
                     RichMessageButton(
-                        text="‹ Cancel",
+                        text="✖️ Cancel",
                         callback_data="memory_back",
                     ),
                     RichMessageButton(
-                        text="✕ Close",
+                        text="❌ Close",
                         callback_data="memory_close",
                         style="danger",
                     ),
@@ -686,11 +692,11 @@ def get_memory_rich_message(
             InputRichBlockButtons(
                 buttons=[
                     RichMessageButton(
-                        text="‹ Back",
+                        text="❮ Back",
                         callback_data="memory_back",
                     ),
                     RichMessageButton(
-                        text="✕ Close",
+                        text="❌ Close",
                         callback_data="memory_close",
                         style="danger",
                     ),
@@ -1610,6 +1616,10 @@ async def process_memory_text(
     user_id_str = str(user_id)
     chat_id = message.chat.id
 
+    # --------------------------------------
+    # ADD MEMORY
+    # --------------------------------------
+
     if action == "add":
         parts = [
             p.strip()[:200]
@@ -1651,6 +1661,10 @@ async def process_memory_text(
 
         return True
 
+    # --------------------------------------
+    # EDIT MEMORY
+    # --------------------------------------
+
     if action == "edit_number":
         parts = message.text.strip().split(
             " ",
@@ -1690,6 +1704,10 @@ async def process_memory_text(
             pass
 
         return True
+
+    # --------------------------------------
+    # REMOVE MEMORIES
+    # --------------------------------------
 
     if action == "forget":
         indices = [
