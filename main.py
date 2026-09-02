@@ -16,7 +16,6 @@ from aiogram.types import (
     BotCommandScopeAllPrivateChats,
     InlineKeyboardMarkup,
     InlineKeyboardButton,
-    EphemeralMessageParameters,
     ReplyParameters,
     InputRichMessage,
 )
@@ -130,6 +129,7 @@ BOT_INFO = None
 
 INTERACTION_TTL = 300
 
+
 # ==========================================
 # Redis interaction state
 # ==========================================
@@ -146,6 +146,7 @@ async def set_interaction(
     user_id: int,
     action: str,
 ) -> None:
+
     await redis_client.set(
         interaction_key(chat_id, user_id),
         action,
@@ -157,6 +158,7 @@ async def get_interaction(
     chat_id: int,
     user_id: int,
 ) -> str | None:
+
     value = await redis_client.get(
         interaction_key(chat_id, user_id)
     )
@@ -171,6 +173,7 @@ async def clear_interaction(
     chat_id: int,
     user_id: int,
 ) -> None:
+
     await redis_client.delete(
         interaction_key(chat_id, user_id)
     )
@@ -192,10 +195,16 @@ async def register_menu_identity(
     user_id: int,
     ephemeral_message_id: int,
 ) -> None:
+
+    # This is deliberately NOT tied to MENU_TTL.
+    #
+    # The Redis entry lasts long enough to identify
+    # the current menu while the ephemeral message
+    # itself remains available.
     await redis_client.set(
         menu_identity_key(chat_id, user_id),
         str(ephemeral_message_id),
-        ex=MENU_TTL + 60,
+        ex=INTERACTION_TTL,
     )
 
 
@@ -203,6 +212,7 @@ async def get_menu_identity(
     chat_id: int,
     user_id: int,
 ) -> int | None:
+
     value = await redis_client.get(
         menu_identity_key(chat_id, user_id)
     )
@@ -223,6 +233,7 @@ async def clear_menu_identity(
     chat_id: int,
     user_id: int,
 ) -> None:
+
     await redis_client.delete(
         menu_identity_key(chat_id, user_id)
     )
@@ -237,6 +248,7 @@ async def get_memories(
 ) -> list[str]:
 
     try:
+
         raw = await redis_client.lrange(
             f"memory_list:{user_id_str}",
             0,
@@ -251,7 +263,11 @@ async def get_memories(
         ]
 
     except Exception as e:
-        print(f"Memory read error: {e}")
+
+        print(
+            f"Memory read error: {e}"
+        )
+
         return []
 
 
@@ -259,14 +275,20 @@ async def get_formatted_memories(
     user_id_str: str,
 ) -> str:
 
-    memories = await get_memories(user_id_str)
+    memories = await get_memories(
+        user_id_str
+    )
 
     if not memories:
         return "No instructed memories stored."
 
     lines = []
 
-    for i, memory in enumerate(memories, 1):
+    for i, memory in enumerate(
+        memories,
+        1,
+    ):
+
         lines.append(
             f"{i}. {html.escape(memory)}"
         )
@@ -378,131 +400,6 @@ def get_menu_keyboard(
 
 
 # ==========================================
-# Menu timers
-# ==========================================
-
-async def cancel_menu_timer(
-    key: tuple[int, int],
-) -> None:
-
-        try:
-            await task
-        except asyncio.CancelledError:
-            pass
-
-
-async def schedule_ephemeral_menu_delete(
-    chat_id: int,
-    user_id: int,
-    ephemeral_message_id: int,
-) -> None:
-
-    key = (chat_id, user_id)
-
-    await cancel_menu_timer(key)
-
-    async def expire():
-
-        try:
-
-            await asyncio.sleep(MENU_TTL)
-
-            current_id = await get_menu_identity(
-                chat_id,
-                user_id,
-            )
-
-            if (
-                current_id is not None
-                and current_id == ephemeral_message_id
-            ):
-
-                try:
-
-                    await bot.delete_ephemeral_message(
-                        chat_id=chat_id,
-                        receiver_user_id=user_id,
-                        ephemeral_message_id=ephemeral_message_id,
-                    )
-
-                except Exception as e:
-
-                    print(
-                        f"Ephemeral menu expiry delete error: {e}"
-                    )
-
-                finally:
-
-                    await clear_menu_identity(
-                        chat_id,
-                        user_id,
-                    )
-
-        except asyncio.CancelledError:
-            raise
-
-        except Exception as e:
-
-            print(
-                f"Menu expiry error: {e}"
-            )
-
-async def schedule_private_menu_delete(
-    chat_id: int,
-    user_id: int,
-    message_id: int,
-) -> None:
-
-    key = (chat_id, user_id)
-
-    await cancel_menu_timer(key)
-
-    async def expire():
-
-        try:
-
-            await asyncio.sleep(MENU_TTL)
-
-            current_id = await get_menu_identity(
-                chat_id,
-                user_id,
-            )
-
-            if (
-                current_id is not None
-                and current_id == message_id
-            ):
-
-                try:
-
-                    await bot.delete_message(
-                        chat_id=chat_id,
-                        message_id=message_id,
-                    )
-
-                except Exception as e:
-
-                    print(
-                        f"Private menu expiry delete error: {e}"
-                    )
-
-                finally:
-
-                    await clear_menu_identity(
-                        chat_id,
-                        user_id,
-                    )
-
-        except asyncio.CancelledError:
-            raise
-
-        except Exception as e:
-
-            print(
-                f"Private menu expiry error: {e}"
-            )
-
-# ==========================================
 # Outbound Memory Menu
 # ==========================================
 
@@ -535,32 +432,24 @@ async def send_memory_menu(
                 "without the incoming ephemeral_message_id."
             )
 
-        # IMPORTANT:
-        #
         # The incoming /memories command is itself
-        # ephemeral. Telegram requires the first
-        # response to reference that ephemeral ID.
+        # ephemeral.
         #
-        # This is what makes the menu private.
-        reply_parameters = ReplyParameters(
-            ephemeral_message_id=source_ephemeral_id
-        )
-
+        # Telegram requires the first response to
+        # reference that incoming ephemeral ID.
+        #
+        # A reply to an ephemeral message is itself
+        # ephemeral.
         message = await bot.send_message(
             chat_id=chat_id,
             text=text,
             reply_markup=keyboard,
             parse_mode="HTML",
-            ephemeral_message_parameters=(
-                EphemeralMessageParameters(
-                    receiver_user_id=user_id,
-                )
+            reply_parameters=ReplyParameters(
+                ephemeral_message_id=source_ephemeral_id,
             ),
-            reply_parameters=reply_parameters,
         )
 
-        # Telegram's Bot API 10.2 gives ephemeral
-        # messages their own ID.
         ephemeral_id = getattr(
             message,
             "ephemeral_message_id",
@@ -580,12 +469,6 @@ async def send_memory_menu(
             ephemeral_id,
         )
 
-        await schedule_ephemeral_menu_delete(
-            chat_id,
-            user_id,
-            ephemeral_id,
-        )
-
         return message
 
     # --------------------------------------
@@ -599,18 +482,10 @@ async def send_memory_menu(
         parse_mode="HTML",
     )
 
-    message_id = message.message_id
-
     await register_menu_identity(
         chat_id,
         user_id,
-        message_id,
-    )
-
-    await schedule_private_menu_delete(
-        chat_id,
-        user_id,
-        message_id,
+        message.message_id,
     )
 
     return message
@@ -639,10 +514,6 @@ async def edit_memory_menu(
         in {"group", "supergroup"}
     )
 
-    await cancel_menu_timer(
-        (chat_id, user_id)
-    )
-
     keyboard = get_menu_keyboard(
         menu_type
     )
@@ -662,7 +533,7 @@ async def edit_memory_menu(
         if ephemeral_id is None:
 
             await callback.answer(
-                "This private memory menu has expired.",
+                "This private memory menu is unavailable.",
                 show_alert=True,
             )
 
@@ -679,14 +550,18 @@ async def edit_memory_menu(
         ):
 
             await callback.answer(
-                "This memory menu has expired.",
+                "This memory menu is no longer active.",
                 show_alert=True,
             )
 
             return
 
-        # Bot API 10.2:
-        # edit the existing ephemeral message.
+        # IMPORTANT:
+        #
+        # Edit the EXISTING ephemeral message.
+        #
+        # Do NOT delete it and create another one.
+        # Do NOT create a new ephemeral response.
         await bot.edit_ephemeral_message_text(
             chat_id=chat_id,
             receiver_user_id=user_id,
@@ -694,18 +569,6 @@ async def edit_memory_menu(
             text=text,
             parse_mode="HTML",
             reply_markup=keyboard,
-        )
-
-        await register_menu_identity(
-            chat_id,
-            user_id,
-            ephemeral_id,
-        )
-
-        await schedule_ephemeral_menu_delete(
-            chat_id,
-            user_id,
-            ephemeral_id,
         )
 
         return
@@ -734,18 +597,6 @@ async def edit_memory_menu(
         text=text,
         reply_markup=keyboard,
         parse_mode="HTML",
-    )
-
-    await register_menu_identity(
-        chat_id,
-        user_id,
-        message.message_id,
-    )
-
-    await schedule_private_menu_delete(
-        chat_id,
-        user_id,
-        message.message_id,
     )
 
 
@@ -832,7 +683,7 @@ async def authorize_memory_callback(
         ):
 
             await callback.answer(
-                "This memory menu has expired.",
+                "This memory menu is no longer active.",
                 show_alert=True,
             )
 
@@ -852,7 +703,7 @@ async def authorize_memory_callback(
     if current_id is None:
 
         await callback.answer(
-            "This memory menu has expired.",
+            "This memory menu is no longer active.",
             show_alert=True,
         )
 
@@ -894,10 +745,6 @@ async def close_menu(
     await clear_interaction(
         chat_id,
         user_id,
-    )
-
-    await cancel_menu_timer(
-        (chat_id, user_id)
     )
 
     try:
@@ -950,9 +797,11 @@ async def show_memories_command(
     user_id = message.from_user.id
     chat_id = message.chat.id
 
-    # --------------------------------------
-    # IMPORTANT DEBUG LOGGING
-    # --------------------------------------
+    incoming_ephemeral_id = getattr(
+        message,
+        "ephemeral_message_id",
+        None,
+    )
 
     print(
         "[/memories] "
@@ -960,7 +809,7 @@ async def show_memories_command(
         f"user_id={user_id} "
         f"message_id={message.message_id} "
         f"ephemeral_message_id="
-        f"{getattr(message, 'ephemeral_message_id', None)}"
+        f"{incoming_ephemeral_id}"
     )
 
     print(
@@ -972,10 +821,6 @@ async def show_memories_command(
     await clear_interaction(
         chat_id,
         user_id,
-    )
-
-    await cancel_menu_timer(
-        (chat_id, user_id)
     )
 
     await clear_menu_identity(
@@ -992,19 +837,21 @@ async def show_memories_command(
         "supergroup",
     }:
 
-        incoming_ephemeral_id = getattr(
-            message,
-            "ephemeral_message_id",
-            None,
-        )
-
+        # CRITICAL:
+        #
+        # If Telegram delivered a normal public
+        # /memories message, DO NOT respond.
+        #
+        # This means manually typing /memories will
+        # not create a public memory menu.
+        #
+        # Only the ephemeral command selected from
+        # Telegram's command menu is accepted.
         if incoming_ephemeral_id is None:
 
             print(
-                "[/memories] ERROR: "
-                "Telegram delivered /memories "
-                "without ephemeral_message_id. "
-                "Refusing to send a public menu."
+                "[/memories] Ignoring non-ephemeral "
+                "group invocation."
             )
 
             return
@@ -1023,6 +870,11 @@ async def show_memories_command(
                 text=text,
                 menu_type="main",
                 source_ephemeral_id=incoming_ephemeral_id,
+            )
+
+            print(
+                "[/memories] Private ephemeral "
+                "memory menu created successfully."
             )
 
         except Exception as e:
@@ -2458,17 +2310,17 @@ async def health_check(
 
 async def configure_commands() -> None:
 
-    # IMPORTANT:
+    # Telegram Bot API 10.2:
     #
-    # Bot API 10.2 introduced is_ephemeral.
+    # /memories is explicitly ephemeral in groups.
     #
-    # In group chats this makes /memories an
-    # ephemeral command. The command itself is
-    # therefore visible only to the invoking user
-    # and the target bot.
+    # Selecting it from Telegram's command menu
+    # causes Telegram to send the command privately
+    # to this bot.
     #
-    # This is NOT an admin feature.
-    #
+    # Other bots and group members do not receive
+    # that ephemeral command.
+
     group_commands = [
         BotCommand(
             command="memories",
