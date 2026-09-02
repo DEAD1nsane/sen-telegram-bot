@@ -35,10 +35,7 @@ else:
 API_TOKEN = os.getenv("BOT_TOKEN", "")
 SEARXNG_URL = os.getenv("SEARXNG_URL", "https://searxng-railway-production-3252.up.railway.app/search")
 
-bot = Bot(
-    token=API_TOKEN,
-    default=DefaultBotProperties(parse_mode="Markdown")
-)
+bot = Bot(token=API_TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
 dp = Dispatcher()
 router = Router()
 dp.include_router(router)
@@ -53,60 +50,62 @@ gemini_client = genai.Client(api_key=gemini_api_key)
 OWNER_ID = int(os.getenv("OWNER_ID", "0"))
 
 # ==========================================
-# Helpers (Rate-Limit Fix Applied)
+# Helpers & Web Search Pipeline
 # ==========================================
 
 async def free_web_search(query: str) -> str:
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
         "Accept": "application/json"
     }
     
-    # 1. Primary: Local SearXNG Web Scraper
+    # 1. Primary: Local SearXNG Container
     try:
         params = {"q": query, "format": "json"}
         async with httpx.AsyncClient() as client:
-            res = await client.get(SEARXNG_URL, params=params, headers=headers, timeout=8.0)
+            res = await client.get(SEARXNG_URL, params=params, headers=headers, timeout=5.0)
             if res.status_code == 200:
-                results = res.json().get("results", [])[:15]
-                snippets = []
-                for item in results:
-                    title = item.get('title', '')
-                    content = item.get('content', '')
-                    url = item.get('url', '')
-                    if title or content:
-                        snippets.append(f"Title: {title}\nContent: {content}\nURL: {url}")
+                results = res.json().get("results", [])[:10]
+                snippets = [f"Title: {i.get('title', '')}\nContent: {i.get('content', '')}\nURL: {i.get('url', '')}" for i in results if i.get('title') or i.get('content')]
                 if snippets: 
                     return "\n\n".join(snippets)
     except Exception as e:
         print(f"SearXNG local error: {e}")
 
-    # 2. Fallback: DuckDuckGo Instant Answer API (Bypasses HTML CAPTCHAs)
+    # 2. Fallback: Public SearXNG Instance
     try:
+        params = {"q": query, "format": "json"}
         async with httpx.AsyncClient() as client:
-            res = await client.get(f"https://api.duckduckgo.com/?q={query}&format=json", headers=headers, timeout=5.0)
+            res = await client.get("https://searx.be/search", params=params, headers=headers, timeout=5.0)
             if res.status_code == 200:
-                data = res.json()
-                abstract = data.get("AbstractText")
-                url = data.get("AbstractURL")
-                if abstract:
-                    return f"Title: {data.get('Heading', query)}\nContent: {abstract}\nURL: {url}"
-            else:
-                print(f"DuckDuckGo API non-200 status: {res.status_code}")
+                results = res.json().get("results", [])[:10]
+                snippets = [f"Title: {i.get('title', '')}\nContent: {i.get('content', '')}\nURL: {i.get('url', '')}" for i in results if i.get('title') or i.get('content')]
+                if snippets: 
+                    return "\n\n".join(snippets)
     except Exception as e:
-        print(f"DuckDuckGo API error: {e}")
+        print(f"SearXNG public fallback error: {e}")
         
-    # 3. Tertiary Fallback: Wikipedia Summary API 
+    # 3. Tertiary Fallback: Wikipedia Search API (Handles full natural sentences)
     try:
-        formatted_query = query.replace(" ", "_")
+        params = {
+            "action": "query",
+            "list": "search",
+            "srsearch": query,
+            "format": "json",
+            "utf8": "1"
+        }
         async with httpx.AsyncClient() as client:
-            res = await client.get(f"https://en.wikipedia.org/api/rest_v1/page/summary/{formatted_query}", headers=headers, timeout=5.0)
+            res = await client.get("https://en.wikipedia.org/w/api.php", params=params, headers=headers, timeout=5.0)
             if res.status_code == 200:
-                data = res.json()
-                extract = data.get("extract")
-                url = data.get("content_urls", {}).get("desktop", {}).get("page", "")
-                if extract:
-                    return f"Title: {data.get('title', query)}\nContent: {extract}\nURL: {url}"
+                search_results = res.json().get("query", {}).get("search", [])
+                if search_results:
+                    snippets = []
+                    for item in search_results[:3]:
+                        title = item.get("title", "")
+                        snippet = item.get("snippet", "").replace('<span class="searchmatch">', '').replace('</span>', '')
+                        snippets.append(f"Title: {title}\nContent: {snippet}\nURL: https://en.wikipedia.org/wiki/{title.replace(' ', '_')}")
+                    if snippets: 
+                        return "\n\n".join(snippets)
             else:
                 print(f"Wikipedia API non-200 status: {res.status_code}")
     except Exception as e:
@@ -121,33 +120,42 @@ async def get_formatted_memories(user_id_str: str) -> str:
             return "Your memory list is currently empty."
             
         memories = [item.decode('utf-8') if isinstance(item, bytes) else item for item in raw_items]
-        formatted = "\n".join(f"- {m}" for m in memories)
-        return f"*Active Memory Directives*\n\n{formatted}"
-    except Exception as e:
+        
+        lines = [
+            "<b>Active Memory Directives</b>",
+            "──────────────────────────",
+            "<ul>"
+        ]
+        for mem in memories:
+            lines.append(f"<li>{mem}</li>")
+        lines.append("</ul>")
+        
+        return "\n".join(lines)
+    except Exception as e: 
         print(f"Error fetching memory list format: {e}")
         return "Could not retrieve memory list."
 
 async def collapse_message(chat_id: int, message_id: int, delay: int):
     await asyncio.sleep(delay)
-    content = "_Active Memories Collapsed_"
+    content = "<blockquote>Active Memories Collapsed</blockquote>"
     try:
         await bot.edit_message_text(
             chat_id=chat_id, 
             message_id=message_id, 
             text=content
         )
-    except Exception as e:
+    except Exception as e: 
         print(f"Error collapsing memory list: {e}")
 
 async def auto_delete_message(chat_id: int, bot_msg_id: int, user_msg_id: int, delay: int):
     await asyncio.sleep(delay)
     try:
         await bot.delete_message(chat_id=chat_id, message_id=bot_msg_id)
-    except Exception as e:
+    except Exception as e: 
         print(f"Error auto-deleting bot memory list: {e}")
     try:
         await bot.delete_message(chat_id=chat_id, message_id=user_msg_id)
-    except Exception as e:
+    except Exception as e: 
         print(f"Error auto-deleting user memory command: {e}")
 
 async def send_audio_track(chat_id: int, msg_id: int, key: str, file_path: str, title: str, performer: str, is_private: bool):
@@ -165,7 +173,7 @@ async def send_audio_track(chat_id: int, msg_id: int, key: str, file_path: str, 
         if cached_id:
             try:
                 await attempt_send(cached_id.decode('utf-8') if isinstance(cached_id, bytes) else cached_id)
-            except Exception as e:
+            except Exception as e: 
                 if "message to be replied not found" in str(e).lower():
                     await bot.send_audio(chat_id=chat_id, audio=(cached_id.decode('utf-8') if isinstance(cached_id, bytes) else cached_id), title=title, performer=performer)
                 else:
@@ -173,7 +181,7 @@ async def send_audio_track(chat_id: int, msg_id: int, key: str, file_path: str, 
         elif os.path.exists(file_path):
             try:
                 msg = await attempt_send(file_path)
-            except Exception as e:
+            except Exception as e: 
                 if "message to be replied not found" in str(e).lower():
                     audio_file = FSInputFile(file_path)
                     msg = await bot.send_audio(chat_id=chat_id, audio=audio_file, title=title, performer=performer)
@@ -181,7 +189,7 @@ async def send_audio_track(chat_id: int, msg_id: int, key: str, file_path: str, 
                     raise e
             if msg and msg.audio and msg.audio.file_id:
                 await redis_client.set(f"audio_cache:{key}", msg.audio.file_id)
-    except Exception as send_err:
+    except Exception as send_err: 
         print(f"Error sending audio ({key}): {send_err}")
 
 # ==========================================
@@ -202,12 +210,14 @@ async def handle_delete(message: Message):
 @router.message(Command("help", "commands"))
 async def handle_help(message: Message):
     content = (
-        "*Sen Bot Command Hub*\n\n"
-        "- *remember [item],, [item2]* - Adds items to memory\n"
-        "- *what do you remember* - Displays rules in a formatted list\n"
-        "- *edit [number] [new fact]* - Edits a specific rule\n"
-        "- *forget [number],, [number2]* - Removes memories\n"
-        "- *forget all* - Clears all memory"
+        "<b>Sen Bot Command Hub</b>\n\n"
+        "<ul>"
+        "<li><b>remember [item],, [item2]</b> - Adds items to memory</li>"
+        "<li><b>what do you remember</b> - Displays rules in a formatted list</li>"
+        "<li><b>edit [number] [new fact]</b> - Edits a specific rule</li>"
+        "<li><b>forget [number],, [number2]</b> - Removes memories</li>"
+        "<li><b>forget all</b> - Clears all memory</li>"
+        "</ul>"
     )
     
     if message.chat.type == "private":
@@ -226,19 +236,10 @@ def text_startswith(prefix: str):
 
 @router.message(text_in({"what do you remember", "how do you remember"}))
 async def handle_what_remember(message: Message):
-    bot_username = f"@{BOT_INFO.username}" if BOT_INFO else ""
-    text = message.text or ""
-    is_tagged = (bot_username and bot_username.lower() in text.lower()) or "@gemini" in text.lower()
-    is_reply_to_bot = bool(message.reply_to_message and BOT_INFO and message.reply_to_message.from_user.id == BOT_INFO.id)
-    is_private = message.chat.type == "private"
-
-    if not (is_private or is_tagged or is_reply_to_bot):
-        return
-
     user_id_str = str(message.from_user.id)
     content = await get_formatted_memories(user_id_str)
     
-    if is_private:
+    if message.chat.type == "private":
         sent_msg = await message.answer(text=content)
     else:
         sent_msg = await message.answer(text=content, reply_to_message_id=message.message_id)
@@ -342,20 +343,21 @@ async def handle_forget(message: Message):
         asyncio.create_task(collapse_message(message.chat.id, sent_msg.message_id, 60))
 
 # ==========================================
-# Primary Chat & Engine
+# Primary Chat, Mentions & Audio Engine
 # ==========================================
 
 @router.message(F.text | F.caption | F.voice | F.audio)
 async def handle_conversation(message: Message):
     text = message.text or message.caption or ""
+    text_no_html = re.sub(r'<[^>]+>', '', text)
 
-    if re.search(r'\bsen\b', text, re.IGNORECASE):
+    if re.search(r'\bsen\b', text_no_html, re.IGNORECASE):
         asyncio.create_task(send_audio_track(message.chat.id, message.message_id, "sen", "Devin_The_Dude_Anythang.mp3", "Anythang", "Devin The Dude", message.chat.type == "private"))
-    if re.search(r'\bmagic(?:al|ally)?\b', text, re.IGNORECASE):
+    if re.search(r'\bmagic(?:al|ally)?\b', text_no_html, re.IGNORECASE):
         asyncio.create_task(send_audio_track(message.chat.id, message.message_id, "magic", "Do You Believe In Magic.mp3", "Do You Believe In Magic", "The Lovin' Spoonful", message.chat.type == "private"))
 
     bot_username = f"@{BOT_INFO.username}" if BOT_INFO else ""
-    is_tagged = (bot_username and bot_username.lower() in text.lower()) or "@gemini" in text.lower()
+    is_tagged = (bot_username and bot_username.lower() in text_no_html.lower()) or "@gemini" in text_no_html.lower()
     is_reply_to_bot = bool(message.reply_to_message and BOT_INFO and message.reply_to_message.from_user.id == BOT_INFO.id)
     is_private = message.chat.type == "private"
 
@@ -404,10 +406,7 @@ async def handle_conversation(message: Message):
                 raw_hist = await redis_client.lrange(history_key, 0, -1)
                 chat_history = [h.decode('utf-8') if isinstance(h, bytes) else h for h in raw_hist]
 
-                search_keywords = {
-                    "search", "google", "look up", "lookup", "find", "show me", 
-                    "weather", "forecast", "temp", "temperature", "list", "table"
-                }
+                search_keywords = {"search", "google", "look up", "lookup", "find", "show", "show me", "table", "list", "info"}
                 explicit_search = any(word in clean_prompt.lower() for word in search_keywords)
                 
                 search_query = clean_prompt
@@ -438,9 +437,12 @@ async def handle_conversation(message: Message):
                     "Keep casual replies brief, but dynamically expand your response length when explicitly asked for details or when playing interactive games. "
                     "If the user changes the subject abruptly, drop the previous topic immediately and adapt to the new flow. "
                     "If the user is clearly joking or sarcastic, match their energy rather than taking the prompt literally. "
-                    "If asking for real-time information and the context is insufficient, state 'I don't have enough details to answer that accurately'. "
-                    "Otherwise, answer freely using general knowledge. "
-                    "Format responses using standard Markdown syntax (e.g. *bold*, - lists, etc.)."
+                    "If you do not know the answer or the provided context is insufficient, state 'I don't have enough details to answer that accurately' directly without guessing. "
+                    "Do not assume personal details about the user unless they are explicitly provided in your memory list. "
+                    "CRITICAL FORMATTING RULE: Format regular text using standard Telegram HTML tags (<b>, <i>, <ul>, <li>). "
+                    "When asked to create a table, you MUST generate a text grid using pipe characters (|) "
+                    "and wrap the ENTIRE table inside <pre> and </pre> tags so Telegram renders it as a monospaced aligned grid. "
+                    "Never output raw pipe tables without <pre> tags. Do not use raw markdown asterisks."
                 )
 
                 if search_context:
@@ -497,6 +499,8 @@ async def handle_conversation(message: Message):
                         response = await chat.send_message(final_prompt)
 
                 response_text = response.text or ""
+                response_text = response_text.replace('\u2022', '').replace('```', '')
+
                 preview_opts = LinkPreviewOptions(is_disabled=False, prefer_small_media=True)
 
                 if is_private:
@@ -504,7 +508,8 @@ async def handle_conversation(message: Message):
                 else:
                     await message.answer(text=response_text, reply_to_message_id=msg_id, link_preview_options=preview_opts)
 
-                await redis_client.rpush(history_key, f"User: {clean_prompt or 'Voice Note'}", f"Bot: {response_text}")
+                clean_history_text = re.sub(r'<[^>]+>', '', response_text)
+                await redis_client.rpush(history_key, f"User: {clean_prompt or 'Voice Note'}", f"Bot: {clean_history_text}")
                 await redis_client.ltrim(history_key, -10, -1)
 
             except Exception as ai_err: 
@@ -518,6 +523,10 @@ async def handle_conversation(message: Message):
                 else:
                     await message.answer(text=error_content, reply_to_message_id=msg_id)
 
+# ==========================================
+# Polling Execution Loop & Healthcheck Server
+# ==========================================
+
 async def health_check(request):
     return web.Response(text="200 OK - Bot is running.", status=200)
 
@@ -525,6 +534,7 @@ async def main():
     global BOT_INFO
     
     try:
+        print("Clearing conflicting webhooks from Telegram servers...")
         await bot.delete_webhook(drop_pending_updates=True)
         BOT_INFO = await bot.get_me()
         print(f"Bot authenticated as {BOT_INFO.username}")
