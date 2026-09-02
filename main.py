@@ -419,8 +419,8 @@ async def get_formatted_memories(user_id_str: str) -> str:
         ]
 
         lines = ["```", "**Active Memory Directives**", "---"]
-        for mem in memories:
-            lines.append(f"- {mem}")
+        for i, mem in enumerate(memories, 1):
+            lines.append(f"{i}. {mem}")
         lines.append("```")
         return "\n".join(lines)
     except Exception as e:
@@ -430,7 +430,7 @@ async def get_formatted_memories(user_id_str: str) -> str:
 
 async def collapse_message(chat_id: int, message_id: int, delay: int):
     await asyncio.sleep(delay)
-    content = "Active Memories Collapsed"
+    content = "◆"
     try:
         await bot.edit_message_text(
             chat_id=chat_id, message_id=message_id, text=content, parse_mode=None
@@ -542,9 +542,33 @@ async def handle_delete(message: Message):
             except Exception:
                 pass
         try:
-            await bot.delete_message(chat_id, message.message_id)
+            await message.delete()
         except Exception:
             pass
+
+
+@router.message(Command("purge"))
+async def handle_purge(message: Message):
+    if message.from_user.id == OWNER_ID:
+        chat_id = message.chat.id
+        reply_msg = message.reply_to_message
+        if reply_msg and BOT_INFO and reply_msg.from_user.id == BOT_INFO.id:
+            try:
+                sent = await message.reply("Deleting...")
+                await asyncio.sleep(1)
+                await bot.delete_message(chat_id, reply_msg.message_id)
+                await bot.delete_message(chat_id, sent.message_id)
+                await bot.delete_message(chat_id, message.message_id)
+            except Exception:
+                pass
+        else:
+            try:
+                sent = await message.reply("Reply to a bot message to purge it.")
+                await asyncio.sleep(3)
+                await bot.delete_message(chat_id, sent.message_id)
+                await bot.delete_message(chat_id, message.message_id)
+            except Exception:
+                pass
 
 
 @router.message(Command("help", "commands"))
@@ -591,10 +615,12 @@ async def handle_remember(message: Message):
 async def handle_edit(message: Message):
     user_id_str = str(message.from_user.id)
     clean_prompt = message.text.strip()
-    parts = clean_prompt[5:].strip().split(" ", 1)
+    remainder = clean_prompt[5:].strip()
+    num_str = remainder.split()[0].rstrip(".,;:") if remainder.split() else ""
+    rest_after_num = remainder[len(num_str):].strip().lstrip(".,;: ").strip()
 
-    if len(parts) == 2 and parts[0].isdigit():
-        idx, new_val = int(parts[0]) - 1, parts[1].strip()
+    if num_str.isdigit() and rest_after_num:
+        idx, new_val = int(num_str) - 1, rest_after_num
         raw_items = await redis_client.lrange(f"memory_list:{user_id_str}", 0, -1)
         if 0 <= idx < len(raw_items):
             await redis_client.lset(f"memory_list:{user_id_str}", idx, new_val)
@@ -782,23 +808,8 @@ async def handle_conversation(message: Message):
                     h.decode("utf-8") if isinstance(h, bytes) else h for h in raw_hist
                 ]
 
-                search_keywords = {
-                    "search",
-                    "google",
-                    "look up",
-                    "lookup",
-                    "find",
-                    "show",
-                    "show me",
-                    "table",
-                    "list",
-                }
-                explicit_search = any(
-                    word in clean_prompt.lower() for word in search_keywords
-                )
-
                 search_query = clean_prompt
-                if explicit_search and len(clean_prompt.split()) <= 4:
+                if len(clean_prompt.split()) <= 4:
                     if (
                         replied_context
                         and "I don't have enough details" not in replied_context
@@ -814,9 +825,7 @@ async def handle_conversation(message: Message):
                                 search_query = past_msg.replace("User: ", "").strip()
                                 break
 
-                search_context = (
-                    await free_web_search(search_query) if explicit_search else ""
-                )
+                search_context = await free_web_search(search_query)
 
                 context_parts = []
                 if replied_context:
@@ -854,13 +863,14 @@ async def handle_conversation(message: Message):
                     "CRITICAL: If the user says 'list', respond with a bullet list. If the user says 'table', respond with a table. Never substitute one format for the other. "
                     "Use varied, context-appropriate column headers for tables — never reuse the same column names across different topics. "
                     "Use normal, straightforward language in lists and tables — no custom slang or quirky descriptors. "
-                    "When the user asks for sources or citations, use footnotes: write[^1] inline and define[^1]: source at the bottom."
                 )
 
                 if search_context:
                     bot_instructions += (
                         "When referencing 'Web Search Context', state the information directly without saying 'According to my search' or 'I found this online'. "
-                        "Never include or state URLs/links from the Web Search Context unless the user explicitly asks for links, sources, or URLs in their prompt. "
+                        "Format search results with headers, bold text, and structure to make them easy to read. "
+                        "NEVER include URLs, links, or footnotes unless the user explicitly asks for sources, citations, or links. "
+                        "If asked for sources, use footnotes: write[^1] inline in the text, then a blank line, then [^1]: source URL at the bottom."
                     )
 
                 if chat_history:
