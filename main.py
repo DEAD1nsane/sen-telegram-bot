@@ -5,6 +5,7 @@ import html
 from datetime import datetime, timezone
 
 from aiohttp import web
+
 from aiogram import Bot, Dispatcher, Router, F
 from aiogram.types import (
     Message,
@@ -49,8 +50,20 @@ if "upstash" in redis_url.lower() and redis_url.startswith("redis://"):
 
 redis_client = redis.from_url(
     redis_url,
-    ssl_cert_reqs=None if redis_url.startswith("rediss://") else "required",
+    ssl_cert_reqs=None
+    if redis_url.startswith("rediss://")
+    else "required",
 )
+
+
+# ==========================================
+# Telegram token
+# ==========================================
+
+# Railway currently uses BOT_TOKEN.
+#
+# TELEGRAM_BOT_TOKEN is retained as a fallback so the bot can
+# also run in environments that use that variable.
 
 API_TOKEN = (
     os.getenv("BOT_TOKEN")
@@ -60,28 +73,51 @@ API_TOKEN = (
 
 if not API_TOKEN:
     raise ValueError(
-        "CRITICAL CONFIGURATION ERROR: 'BOT_TOKEN' or "
-        "'TELEGRAM_BOT_TOKEN' missing."
+        "CRITICAL CONFIGURATION ERROR: "
+        "'BOT_TOKEN' missing. "
+        "Set BOT_TOKEN in Railway Variables."
     )
+
+
+# ==========================================
+# Other configuration
+# ==========================================
+
 SEARXNG_URL = os.getenv(
     "SEARXNG_URL",
     "http://searxng.railway.internal:8080/search",
 ).rstrip("/")
 
-gemini_api_key = os.getenv("GEMINI_API_KEY", "")
+gemini_api_key = os.getenv(
+    "GEMINI_API_KEY",
+    "",
+)
 
 if not gemini_api_key:
-    raise ValueError("CRITICAL CONFIGURATION ERROR: 'GEMINI_API_KEY' missing.")
+    raise ValueError(
+        "CRITICAL CONFIGURATION ERROR: "
+        "'GEMINI_API_KEY' missing."
+    )
 
 
-gemini_client = genai.Client(api_key=gemini_api_key)
+gemini_client = genai.Client(
+    api_key=gemini_api_key
+)
 
-OWNER_ID = int(os.getenv("OWNER_ID", "0"))
+OWNER_ID = int(
+    os.getenv("OWNER_ID", "0")
+)
 
+
+# ==========================================
+# Telegram
+# ==========================================
 
 bot = Bot(
     token=API_TOKEN,
-    default=DefaultBotProperties(parse_mode="HTML"),
+    default=DefaultBotProperties(
+        parse_mode="HTML"
+    ),
 )
 
 dp = Dispatcher()
@@ -96,35 +132,70 @@ BOT_INFO = None
 # Memory menu configuration
 # ==========================================
 
-# Menu automatically disappears after 30 seconds.
+# Menu disappears after 30 seconds.
 MENU_TTL = 30
 
-# User interaction state lasts longer than the menu itself.
+# User interaction state lasts longer than the visual menu.
 INTERACTION_TTL = 300
 
-# Tracks expiration tasks:
-# (chat_id, user_id) -> asyncio.Task
-menu_tasks: dict[tuple[int, int], asyncio.Task] = {}
+
+# ==========================================
+# In-memory timer registry
+# ==========================================
+
+# Key:
+#     (chat_id, user_id)
+#
+# Each user gets one active memory-menu timer per chat.
+
+menu_tasks: dict[
+    tuple[int, int],
+    asyncio.Task
+] = {}
 
 
 # ==========================================
 # Redis interaction state
 # ==========================================
 
-def interaction_key(user_id: int) -> str:
-    return f"memory_interaction:{user_id}"
+def interaction_key(
+    chat_id: int,
+    user_id: int,
+) -> str:
+    return (
+        f"memory_interaction:"
+        f"{chat_id}:"
+        f"{user_id}"
+    )
 
 
-async def set_interaction(user_id: int, action: str) -> None:
+async def set_interaction(
+    chat_id: int,
+    user_id: int,
+    action: str,
+) -> None:
+
     await redis_client.set(
-        interaction_key(user_id),
+        interaction_key(
+            chat_id,
+            user_id,
+        ),
         action,
         ex=INTERACTION_TTL,
     )
 
 
-async def get_interaction(user_id: int) -> str | None:
-    value = await redis_client.get(interaction_key(user_id))
+async def get_interaction(
+    chat_id: int,
+    user_id: int,
+) -> str | None:
+
+    value = await redis_client.get(
+        interaction_key(
+            chat_id,
+            user_id,
+        )
+    )
 
     if isinstance(value, bytes):
         return value.decode("utf-8")
@@ -132,50 +203,77 @@ async def get_interaction(user_id: int) -> str | None:
     return value
 
 
-async def clear_interaction(user_id: int) -> None:
-    await redis_client.delete(interaction_key(user_id))
-
-
-# ==========================================
-# Memory menu ownership
-# ==========================================
-
-def menu_owner_key(
+async def clear_interaction(
     chat_id: int,
-    ephemeral_message_id: int,
-) -> str:
-    return (
-        f"memory_menu_owner:"
-        f"{chat_id}:"
-        f"{ephemeral_message_id}"
+    user_id: int,
+) -> None:
+
+    await redis_client.delete(
+        interaction_key(
+            chat_id,
+            user_id,
+        )
     )
 
 
-async def register_menu_owner(
+# ==========================================
+# Ephemeral menu identity
+# ==========================================
+
+def menu_identity_key(
     chat_id: int,
-    ephemeral_message_id: int,
     user_id: int,
+) -> str:
+    return (
+        f"memory_menu_identity:"
+        f"{chat_id}:"
+        f"{user_id}"
+    )
+
+
+async def register_menu_identity(
+    chat_id: int,
+    user_id: int,
+    ephemeral_message_id: int,
 ) -> None:
     """
-    Store who owns a specific ephemeral memory menu.
+    Stores the complete identity of the user's ephemeral menu.
 
-    This is an application-level ownership check in addition to Telegram's
-    ephemeral visibility.
+    Telegram's ephemeral-message lifecycle is based on:
+
+        chat_id
+        receiver_user_id
+        ephemeral_message_id
+
+    We keep all three tied to the user.
     """
 
+    key = menu_identity_key(
+        chat_id,
+        user_id,
+    )
+
+    value = str(
+        ephemeral_message_id
+    )
+
     await redis_client.set(
-        menu_owner_key(chat_id, ephemeral_message_id),
-        str(user_id),
+        key,
+        value,
         ex=MENU_TTL + 60,
     )
 
 
-async def get_menu_owner(
+async def get_menu_identity(
     chat_id: int,
-    ephemeral_message_id: int,
+    user_id: int,
 ) -> int | None:
+
     value = await redis_client.get(
-        menu_owner_key(chat_id, ephemeral_message_id)
+        menu_identity_key(
+            chat_id,
+            user_id,
+        )
     )
 
     if value is None:
@@ -190,12 +288,16 @@ async def get_menu_owner(
         return None
 
 
-async def clear_menu_owner(
+async def clear_menu_identity(
     chat_id: int,
-    ephemeral_message_id: int,
+    user_id: int,
 ) -> None:
+
     await redis_client.delete(
-        menu_owner_key(chat_id, ephemeral_message_id)
+        menu_identity_key(
+            chat_id,
+            user_id,
+        )
     )
 
 
@@ -203,8 +305,12 @@ async def clear_menu_owner(
 # Memory helpers
 # ==========================================
 
-async def get_memories(user_id_str: str) -> list[str]:
+async def get_memories(
+    user_id_str: str,
+) -> list[str]:
+
     try:
+
         raw = await redis_client.lrange(
             f"memory_list:{user_id_str}",
             0,
@@ -212,24 +318,40 @@ async def get_memories(user_id_str: str) -> list[str]:
         )
 
         return [
-            x.decode("utf-8") if isinstance(x, bytes) else str(x)
+            (
+                x.decode("utf-8")
+                if isinstance(x, bytes)
+                else str(x)
+            )
             for x in raw
         ]
 
     except Exception as e:
-        print(f"Memory read error: {e}")
+
+        print(
+            f"Memory read error: {e}"
+        )
+
         return []
 
 
-async def get_formatted_memories(user_id_str: str) -> str:
-    memories = await get_memories(user_id_str)
+async def get_formatted_memories(
+    user_id_str: str,
+) -> str:
+
+    memories = await get_memories(
+        user_id_str
+    )
 
     if not memories:
-        return "<p>No instructed memories stored.</p>"
+        return (
+            "<p>No instructed memories stored.</p>"
+        )
 
     lines = ["<ol>"]
 
     for memory in memories:
+
         lines.append(
             f"<li>{html.escape(memory)}</li>"
         )
@@ -244,9 +366,11 @@ async def get_formatted_memories(user_id_str: str) -> str:
 # ==========================================
 
 def rich_main_menu() -> str:
+
     return """
 <h2>Sen Bot's Memory</h2>
-<p>Manage your personal memory without cluttering the chat.</p>
+
+<p>Manage your personal instructed memory.</p>
 
 <tg-button-row align="center">
   <tg-button
@@ -272,7 +396,10 @@ def rich_main_menu() -> str:
 """.strip()
 
 
-def rich_memory_menu(memories_html: str) -> str:
+def rich_memory_menu(
+    memories_html: str,
+) -> str:
+
     return f"""
 <h2>Sen Bot's Instructed Memories</h2>
 
@@ -315,7 +442,10 @@ def rich_memory_menu(memories_html: str) -> str:
 """.strip()
 
 
-def rich_back_close(prompt: str) -> str:
+def rich_back_close(
+    prompt: str,
+) -> str:
+
     return f"""
 {prompt}
 
@@ -336,12 +466,18 @@ def rich_back_close(prompt: str) -> str:
 
 
 def rich_forget_all_confirm() -> str:
+
     return """
 <h2>Forget everything?</h2>
 
-<p>This permanently clears all saved memories and this chat's stored conversation history.</p>
+<p>
+This permanently clears all saved memories and this chat's
+stored conversation history.
+</p>
 
-<p><b>This cannot be undone.</b></p>
+<p>
+<b>This cannot be undone.</b>
+</p>
 
 <tg-button-row align="center">
   <tg-button
@@ -374,9 +510,14 @@ def rich_forget_all_confirm() -> str:
 async def cancel_menu_timer(
     key: tuple[int, int],
 ) -> None:
-    task = menu_tasks.pop(key, None)
+
+    task = menu_tasks.pop(
+        key,
+        None,
+    )
 
     if task and not task.done():
+
         task.cancel()
 
         try:
@@ -388,50 +529,94 @@ async def cancel_menu_timer(
 async def schedule_menu_delete(
     chat_id: int,
     user_id: int,
-    ephemeral_message_id: int | None,
-    message_id: int | None,
+    ephemeral_message_id: int,
 ) -> None:
-    key = (chat_id, user_id)
 
-    await cancel_menu_timer(key)
+    key = (
+        chat_id,
+        user_id,
+    )
+
+    await cancel_menu_timer(
+        key
+    )
 
     async def expire() -> None:
+
         try:
-            await asyncio.sleep(MENU_TTL)
 
-            if ephemeral_message_id is not None:
-                await bot.delete_ephemeral_message(
-                    chat_id=chat_id,
-                    receiver_user_id=user_id,
-                    ephemeral_message_id=ephemeral_message_id,
-                )
+            await asyncio.sleep(
+                MENU_TTL
+            )
 
-                await clear_menu_owner(
+            # Make absolutely sure this is still the user's
+            # currently registered menu.
+            current_id = (
+                await get_menu_identity(
                     chat_id,
-                    ephemeral_message_id,
+                    user_id,
                 )
+            )
 
-            elif message_id is not None:
-                await bot.delete_message(
-                    chat_id=chat_id,
-                    message_id=message_id,
-                )
+            if (
+                current_id is not None
+                and current_id
+                == ephemeral_message_id
+            ):
+
+                try:
+
+                    await bot.delete_ephemeral_message(
+                        chat_id=chat_id,
+                        receiver_user_id=user_id,
+                        ephemeral_message_id=ephemeral_message_id,
+                    )
+
+                except Exception as e:
+
+                    print(
+                        "Ephemeral menu expiry "
+                        f"delete error: {e}"
+                    )
+
+                finally:
+
+                    await clear_menu_identity(
+                        chat_id,
+                        user_id,
+                    )
 
         except asyncio.CancelledError:
+
             raise
 
         except Exception as e:
-            print(f"Menu expiry error: {e}")
+
+            print(
+                f"Menu expiry error: {e}"
+            )
 
         finally:
-            if menu_tasks.get(key) is asyncio.current_task():
-                menu_tasks.pop(key, None)
 
-    menu_tasks[key] = asyncio.create_task(expire())
+            if (
+                menu_tasks.get(key)
+                is asyncio.current_task()
+            ):
+
+                menu_tasks.pop(
+                    key,
+                    None,
+                )
+
+    menu_tasks[key] = (
+        asyncio.create_task(
+            expire()
+        )
+    )
 
 
 # ==========================================
-# Send fresh private menu
+# Send private memory menu
 # ==========================================
 
 async def send_menu(
@@ -439,123 +624,406 @@ async def send_menu(
     user_id: int,
     rich_html: str,
 ) -> Message:
+
     """
-    Sends a NEW ephemeral Rich Message.
+    Send the memory menu.
 
-    IMPORTANT:
-    We intentionally do not use reply_parameters here.
+    In a group/supergroup this MUST be an ephemeral message.
 
-    When /memories itself arrives as an ephemeral command, replying directly
-    to that command ties the response to Telegram's ephemeral reply context.
-    Creating a fresh ephemeral message gives the memory UI its own lifecycle.
+    There is deliberately NO fallback to a normal message.
+
+    A normal fallback here would make private memories visible to
+    everyone in the group, which is exactly the bug we're preventing.
     """
 
-    kwargs = {
-        "chat_id": chat_id,
-        "rich_message": InputRichMessage(
-            html=rich_html
-        ),
-    }
-
-    # In group chats, make the new menu private.
-    if chat_id != user_id:
-        kwargs["ephemeral_message_parameters"] = (
-            EphemeralMessageParameters(
-                receiver_user_id=user_id,
-            )
-        )
-
-    message = await bot.send_rich_message(**kwargs)
-
-    ephemeral_id = getattr(
-        message,
-        "ephemeral_message_id",
-        None,
+    is_group = (
+        chat_id != user_id
     )
 
-    # Register ownership of the new ephemeral menu.
-    if ephemeral_id is not None:
-        await register_menu_owner(
-            chat_id,
-            ephemeral_id,
-            user_id,
+    if is_group:
+
+        message = await bot.send_rich_message(
+            chat_id=chat_id,
+            rich_message=InputRichMessage(
+                html=rich_html
+            ),
+            ephemeral_message_parameters=(
+                EphemeralMessageParameters(
+                    receiver_user_id=user_id,
+                )
+            ),
         )
 
-    await schedule_menu_delete(
+        ephemeral_id = getattr(
+            message,
+            "ephemeral_message_id",
+            None,
+        )
+
+        receiver_user = getattr(
+            message,
+            "receiver_user",
+            None,
+        )
+
+        receiver_id = getattr(
+            receiver_user,
+            "id",
+            None,
+        )
+
+        # SECURITY REQUIREMENT:
+        #
+        # If Telegram did not give us an ephemeral ID,
+        # NEVER turn this into a normal group message.
+        if ephemeral_id is None:
+
+            print(
+                "SECURITY ERROR: Telegram returned "
+                "no ephemeral_message_id for a group "
+                "memory menu. Refusing to use a public message."
+            )
+
+            raise RuntimeError(
+                "Telegram did not return an "
+                "ephemeral_message_id."
+            )
+
+        # If Telegram gives us receiver information,
+        # verify it belongs to the requested user.
+        if (
+            receiver_id is not None
+            and receiver_id != user_id
+        ):
+
+            print(
+                "SECURITY ERROR: Telegram returned "
+                f"receiver_user_id={receiver_id}, "
+                f"expected {user_id}."
+            )
+
+            try:
+
+                await bot.delete_ephemeral_message(
+                    chat_id=chat_id,
+                    receiver_user_id=receiver_id,
+                    ephemeral_message_id=ephemeral_id,
+                )
+
+            except Exception:
+                pass
+
+            raise RuntimeError(
+                "Telegram returned the wrong "
+                "ephemeral receiver."
+            )
+
+        await register_menu_identity(
+            chat_id,
+            user_id,
+            ephemeral_id,
+        )
+
+        await schedule_menu_delete(
+            chat_id,
+            user_id,
+            ephemeral_id,
+        )
+
+        return message
+
+    # ======================================
+    # Private chat
+    # ======================================
+
+    # Private chats do not need group-style ephemeral
+    # receiver routing. The chat itself belongs to the user.
+
+    message = await bot.send_rich_message(
+        chat_id=chat_id,
+        rich_message=InputRichMessage(
+            html=rich_html
+        ),
+    )
+
+    # Private chat still gets a 30-second timer.
+    #
+    # We store the normal message ID in the same identity
+    # slot so that only the current menu is controlled.
+
+    message_id = message.message_id
+
+    await register_menu_identity(
         chat_id,
         user_id,
-        ephemeral_id,
-        None if ephemeral_id is not None else message.message_id,
+        message_id,
+    )
+
+    await schedule_private_menu_delete(
+        chat_id,
+        user_id,
+        message_id,
     )
 
     return message
 
 
 # ==========================================
-# Verify callback ownership
+# Private menu timer
+# ==========================================
+
+async def schedule_private_menu_delete(
+    chat_id: int,
+    user_id: int,
+    message_id: int,
+) -> None:
+
+    key = (
+        chat_id,
+        user_id,
+    )
+
+    await cancel_menu_timer(
+        key
+    )
+
+    async def expire() -> None:
+
+        try:
+
+            await asyncio.sleep(
+                MENU_TTL
+            )
+
+            current_id = (
+                await get_menu_identity(
+                    chat_id,
+                    user_id,
+                )
+            )
+
+            if (
+                current_id is not None
+                and current_id == message_id
+            ):
+
+                try:
+
+                    await bot.delete_message(
+                        chat_id=chat_id,
+                        message_id=message_id,
+                    )
+
+                except Exception as e:
+
+                    print(
+                        "Private menu expiry "
+                        f"delete error: {e}"
+                    )
+
+                finally:
+
+                    await clear_menu_identity(
+                        chat_id,
+                        user_id,
+                    )
+
+        except asyncio.CancelledError:
+
+            raise
+
+        except Exception as e:
+
+            print(
+                f"Private menu expiry error: {e}"
+            )
+
+        finally:
+
+            if (
+                menu_tasks.get(key)
+                is asyncio.current_task()
+            ):
+
+                menu_tasks.pop(
+                    key,
+                    None,
+                )
+
+    menu_tasks[key] = (
+        asyncio.create_task(
+            expire()
+        )
+    )
+
+
+# ==========================================
+# Callback authorization
 # ==========================================
 
 async def authorize_memory_callback(
     callback: CallbackQuery,
 ) -> bool:
-    """
-    Verify that the person pressing the button is the user who owns
-    the ephemeral memory menu.
-    """
 
     message = callback.message
 
     if not message:
+
         await callback.answer(
             "This memory menu is no longer available.",
             show_alert=True,
         )
+
         return False
 
-    chat_id = message.chat.id
     user_id = callback.from_user.id
+    chat_id = message.chat.id
 
-    ephemeral_id = getattr(
-        message,
-        "ephemeral_message_id",
-        None,
+    is_group = (
+        message.chat.type
+        in {
+            "group",
+            "supergroup",
+        }
     )
 
-    # Ephemeral menu ownership can be verified directly.
-    if ephemeral_id is not None:
-        owner_id = await get_menu_owner(
-            chat_id,
-            ephemeral_id,
+    # ======================================
+    # GROUP / EPHEMERAL
+    # ======================================
+
+    if is_group:
+
+        ephemeral_id = getattr(
+            message,
+            "ephemeral_message_id",
+            None,
         )
 
-        if owner_id is not None and owner_id != user_id:
+        if ephemeral_id is None:
+
+            await callback.answer(
+                "This private memory menu is invalid.",
+                show_alert=True,
+            )
+
+            return False
+
+        # ----------------------------------
+        # Check Telegram receiver identity
+        # ----------------------------------
+
+        receiver_user = getattr(
+            message,
+            "receiver_user",
+            None,
+        )
+
+        receiver_id = getattr(
+            receiver_user,
+            "id",
+            None,
+        )
+
+        if (
+            receiver_id is not None
+            and receiver_id != user_id
+        ):
+
             await callback.answer(
                 "This memory menu belongs to another user.",
                 show_alert=True,
             )
+
             return False
 
-        # If ownership has expired from Redis but Telegram is still
-        # delivering the callback, fail closed rather than risking
-        # cross-user memory access.
-        if owner_id is None:
+        # ----------------------------------
+        # Check Redis ownership
+        # ----------------------------------
+
+        owner_id = (
+            await get_menu_identity(
+                chat_id,
+                user_id,
+            )
+        )
+
+        if (
+            owner_id is None
+            or owner_id != ephemeral_id
+        ):
+
             await callback.answer(
                 "This memory menu has expired.",
                 show_alert=True,
             )
+
             return False
+
+        # ----------------------------------
+        # Check callback user's identity
+        # ----------------------------------
+
+        if (
+            receiver_id is not None
+            and receiver_id != callback.from_user.id
+        ):
+
+            await callback.answer(
+                "You cannot control another user's memory menu.",
+                show_alert=True,
+            )
+
+            return False
+
+        return True
+
+    # ======================================
+    # PRIVATE CHAT
+    # ======================================
+
+    current_id = (
+        await get_menu_identity(
+            chat_id,
+            user_id,
+        )
+    )
+
+    if current_id is None:
+
+        await callback.answer(
+            "This memory menu has expired.",
+            show_alert=True,
+        )
+
+        return False
+
+    # For private chats, Telegram's message ID is
+    # sufficient because the chat belongs to the user.
+
+    if (
+        message.message_id
+        != current_id
+    ):
+
+        await callback.answer(
+            "This memory menu is no longer active.",
+            show_alert=True,
+        )
+
+        return False
 
     return True
 
 
 # ==========================================
-# Edit existing Rich Message
+# Edit menu
 # ==========================================
 
 async def edit_menu(
     callback: CallbackQuery,
     rich_html: str,
 ) -> None:
+
     message = callback.message
 
     if not message:
@@ -564,17 +1032,49 @@ async def edit_menu(
     chat_id = message.chat.id
     user_id = callback.from_user.id
 
-    ephemeral_id = getattr(
-        message,
-        "ephemeral_message_id",
-        None,
+    is_group = (
+        message.chat.type
+        in {
+            "group",
+            "supergroup",
+        }
     )
 
     await cancel_menu_timer(
-        (chat_id, user_id)
+        (
+            chat_id,
+            user_id,
+        )
     )
 
-    if ephemeral_id is not None:
+    if is_group:
+
+        ephemeral_id = getattr(
+            message,
+            "ephemeral_message_id",
+            None,
+        )
+
+        if ephemeral_id is None:
+            raise RuntimeError(
+                "Cannot edit group memory menu "
+                "without ephemeral_message_id."
+            )
+
+        # Verify Redis identity one more time.
+        current_id = (
+            await get_menu_identity(
+                chat_id,
+                user_id,
+            )
+        )
+
+        if current_id != ephemeral_id:
+
+            raise RuntimeError(
+                "Ephemeral memory menu identity "
+                "does not match."
+            )
 
         await bot.edit_ephemeral_message_text(
             chat_id=chat_id,
@@ -585,36 +1085,61 @@ async def edit_menu(
             ),
         )
 
-        # Keep the same ownership record alive.
-        await register_menu_owner(
+        # Keep ownership alive.
+        await register_menu_identity(
             chat_id,
-            ephemeral_id,
             user_id,
+            ephemeral_id,
         )
 
         await schedule_menu_delete(
             chat_id,
             user_id,
             ephemeral_id,
-            None,
         )
 
-    else:
+        return
 
-        await bot.edit_message_text(
-            chat_id=chat_id,
-            message_id=message.message_id,
-            rich_message=InputRichMessage(
-                html=rich_html
-            ),
-        )
+    # ======================================
+    # Private chat
+    # ======================================
 
-        await schedule_menu_delete(
+    current_id = (
+        await get_menu_identity(
             chat_id,
             user_id,
-            None,
-            message.message_id,
         )
+    )
+
+    if (
+        current_id is None
+        or current_id != message.message_id
+    ):
+
+        raise RuntimeError(
+            "Private memory menu identity "
+            "does not match."
+        )
+
+    await bot.edit_message_text(
+        chat_id=chat_id,
+        message_id=message.message_id,
+        rich_message=InputRichMessage(
+            html=rich_html
+        ),
+    )
+
+    await register_menu_identity(
+        chat_id,
+        user_id,
+        message.message_id,
+    )
+
+    await schedule_private_menu_delete(
+        chat_id,
+        user_id,
+        message.message_id,
+    )
 
 
 # ==========================================
@@ -624,6 +1149,7 @@ async def edit_menu(
 async def close_menu(
     callback: CallbackQuery,
 ) -> None:
+
     message = callback.message
 
     if not message:
@@ -632,32 +1158,43 @@ async def close_menu(
     chat_id = message.chat.id
     user_id = callback.from_user.id
 
-    ephemeral_id = getattr(
-        message,
-        "ephemeral_message_id",
-        None,
+    is_group = (
+        message.chat.type
+        in {
+            "group",
+            "supergroup",
+        }
     )
 
-    await clear_interaction(user_id)
+    await clear_interaction(
+        chat_id,
+        user_id,
+    )
 
     await cancel_menu_timer(
-        (chat_id, user_id)
+        (
+            chat_id,
+            user_id,
+        )
     )
 
     try:
 
-        if ephemeral_id is not None:
+        if is_group:
 
-            await clear_menu_owner(
-                chat_id,
-                ephemeral_id,
+            ephemeral_id = getattr(
+                message,
+                "ephemeral_message_id",
+                None,
             )
 
-            await bot.delete_ephemeral_message(
-                chat_id=chat_id,
-                receiver_user_id=user_id,
-                ephemeral_message_id=ephemeral_id,
-            )
+            if ephemeral_id is not None:
+
+                await bot.delete_ephemeral_message(
+                    chat_id=chat_id,
+                    receiver_user_id=user_id,
+                    ephemeral_message_id=ephemeral_id,
+                )
 
         else:
 
@@ -667,7 +1204,17 @@ async def close_menu(
             )
 
     except Exception as e:
-        print(f"Menu close error: {e}")
+
+        print(
+            f"Menu close error: {e}"
+        )
+
+    finally:
+
+        await clear_menu_identity(
+            chat_id,
+            user_id,
+        )
 
 
 # ==========================================
@@ -681,44 +1228,97 @@ async def show_memories_command(
     user_id = message.from_user.id
     chat_id = message.chat.id
 
-    await clear_interaction(user_id)
-
-    # Do NOT reply to the incoming ephemeral command.
-    #
-    # A fresh ephemeral Rich Message is created below instead.
-    if message.ephemeral_message_id is None:
-
-        # In a private chat, clean up the typed command.
-        if message.chat.type == "private":
-            try:
-                await message.delete()
-            except Exception:
-                pass
-
-    await send_menu(
+    await clear_interaction(
         chat_id,
         user_id,
-        rich_main_menu(),
     )
 
+    # Cancel any old menu for this user/chat.
+    await cancel_menu_timer(
+        (
+            chat_id,
+            user_id,
+        )
+    )
 
-@router.message(Command("memories"))
+    await clear_menu_identity(
+        chat_id,
+        user_id,
+    )
+
+    # --------------------------------------
+    # IMPORTANT:
+    #
+    # Do NOT reply to the incoming ephemeral
+    # command.
+    #
+    # We explicitly create a NEW ephemeral
+    # message in group chats.
+    # --------------------------------------
+
+    try:
+
+        await send_menu(
+            chat_id,
+            user_id,
+            rich_main_menu(),
+        )
+
+    except Exception as e:
+
+        print(
+            f"Memory menu send error: {e}"
+        )
+
+        # If this is a group and Telegram failed to
+        # create an ephemeral menu, DO NOT send a
+        # public replacement.
+        #
+        # This prevents private memory leakage.
+
+        if message.chat.type in {
+            "group",
+            "supergroup",
+        }:
+
+            return
+
+        try:
+
+            await message.answer(
+                "I couldn't open the memory menu."
+            )
+
+        except Exception:
+            pass
+
+
+@router.message(
+    Command("memories")
+)
 async def handle_memories(
     message: Message,
 ):
-    await show_memories_command(message)
+
+    await show_memories_command(
+        message
+    )
 
 
 # ==========================================
-# Rich-message callbacks
+# Memory callbacks
 # ==========================================
 
-@router.callback_query(F.data == "memory_view")
+@router.callback_query(
+    F.data == "memory_view"
+)
 async def handle_memory_view(
     callback: CallbackQuery,
 ):
 
-    if not await authorize_memory_callback(callback):
+    if not await authorize_memory_callback(
+        callback
+    ):
         return
 
     await callback.answer()
@@ -727,30 +1327,48 @@ async def handle_memory_view(
         callback.from_user.id
     )
 
-    memories_html = await get_formatted_memories(
-        user_id_str
+    memories_html = (
+        await get_formatted_memories(
+            user_id_str
+        )
     )
 
     try:
 
         await edit_menu(
             callback,
-            rich_memory_menu(memories_html),
+            rich_memory_menu(
+                memories_html
+            ),
         )
 
     except Exception as e:
-        print(f"Memory view error: {e}")
+
+        print(
+            f"Memory view error: {e}"
+        )
 
 
-@router.callback_query(F.data == "memory_add")
+# ==========================================
+# New memory
+# ==========================================
+
+@router.callback_query(
+    F.data == "memory_add"
+)
 async def handle_memory_add(
     callback: CallbackQuery,
 ):
 
-    if not await authorize_memory_callback(callback):
+    if not await authorize_memory_callback(
+        callback
+    ):
         return
 
+    chat_id = callback.message.chat.id
+
     await set_interaction(
+        chat_id,
         callback.from_user.id,
         "add",
     )
@@ -771,15 +1389,26 @@ async def handle_memory_add(
         )
 
     except Exception as e:
-        print(f"Memory add menu error: {e}")
+
+        print(
+            f"Memory add menu error: {e}"
+        )
 
 
-@router.callback_query(F.data == "memory_edit")
+# ==========================================
+# Edit memory
+# ==========================================
+
+@router.callback_query(
+    F.data == "memory_edit"
+)
 async def handle_memory_edit(
     callback: CallbackQuery,
 ):
 
-    if not await authorize_memory_callback(callback):
+    if not await authorize_memory_callback(
+        callback
+    ):
         return
 
     user_id_str = str(
@@ -790,7 +1419,10 @@ async def handle_memory_edit(
         user_id_str
     )
 
+    chat_id = callback.message.chat.id
+
     await set_interaction(
+        chat_id,
         callback.from_user.id,
         "edit_number",
     )
@@ -813,6 +1445,7 @@ async def handle_memory_edit(
         ]
 
         for memory in memories:
+
             rows.append(
                 f"<li>{html.escape(memory)}</li>"
             )
@@ -834,15 +1467,26 @@ async def handle_memory_edit(
         )
 
     except Exception as e:
-        print(f"Memory edit menu error: {e}")
+
+        print(
+            f"Memory edit menu error: {e}"
+        )
 
 
-@router.callback_query(F.data == "memory_forget")
+# ==========================================
+# Forget memory
+# ==========================================
+
+@router.callback_query(
+    F.data == "memory_forget"
+)
 async def handle_memory_forget(
     callback: CallbackQuery,
 ):
 
-    if not await authorize_memory_callback(callback):
+    if not await authorize_memory_callback(
+        callback
+    ):
         return
 
     user_id_str = str(
@@ -853,7 +1497,10 @@ async def handle_memory_forget(
         user_id_str
     )
 
+    chat_id = callback.message.chat.id
+
     await set_interaction(
+        chat_id,
         callback.from_user.id,
         "forget",
     )
@@ -876,6 +1523,7 @@ async def handle_memory_forget(
         ]
 
         for memory in memories:
+
             rows.append(
                 f"<li>{html.escape(memory)}</li>"
             )
@@ -897,19 +1545,33 @@ async def handle_memory_forget(
         )
 
     except Exception as e:
-        print(f"Memory forget menu error: {e}")
+
+        print(
+            f"Memory forget menu error: {e}"
+        )
 
 
-@router.callback_query(F.data == "memory_forget_all")
+# ==========================================
+# Forget all confirmation
+# ==========================================
+
+@router.callback_query(
+    F.data == "memory_forget_all"
+)
 async def handle_memory_forget_all(
     callback: CallbackQuery,
 ):
 
-    if not await authorize_memory_callback(callback):
+    if not await authorize_memory_callback(
+        callback
+    ):
         return
 
+    chat_id = callback.message.chat.id
+
     await clear_interaction(
-        callback.from_user.id
+        chat_id,
+        callback.from_user.id,
     )
 
     await callback.answer()
@@ -922,10 +1584,16 @@ async def handle_memory_forget_all(
         )
 
     except Exception as e:
+
         print(
-            f"Forget-all confirmation error: {e}"
+            "Forget-all confirmation "
+            f"error: {e}"
         )
 
+
+# ==========================================
+# Confirm forget all
+# ==========================================
 
 @router.callback_query(
     F.data == "memory_confirm_forget_all"
@@ -934,7 +1602,9 @@ async def handle_confirm_forget_all(
     callback: CallbackQuery,
 ):
 
-    if not await authorize_memory_callback(callback):
+    if not await authorize_memory_callback(
+        callback
+    ):
         return
 
     user_id = callback.from_user.id
@@ -949,7 +1619,10 @@ async def handle_confirm_forget_all(
     await redis_client.delete(
         f"memory_list:{user_id_str}",
         f"chat_history:{chat_id}:{user_id_str}",
-        interaction_key(user_id),
+        interaction_key(
+            chat_id,
+            user_id,
+        ),
     )
 
     await callback.answer(
@@ -967,21 +1640,34 @@ async def handle_confirm_forget_all(
         )
 
     except Exception as e:
+
         print(
-            f"Forget-all completion error: {e}"
+            "Forget-all completion "
+            f"error: {e}"
         )
 
 
-@router.callback_query(F.data == "memory_back")
+# ==========================================
+# Back
+# ==========================================
+
+@router.callback_query(
+    F.data == "memory_back"
+)
 async def handle_memory_back(
     callback: CallbackQuery,
 ):
 
-    if not await authorize_memory_callback(callback):
+    if not await authorize_memory_callback(
+        callback
+    ):
         return
 
+    chat_id = callback.message.chat.id
+
     await clear_interaction(
-        callback.from_user.id
+        chat_id,
+        callback.from_user.id,
     )
 
     await callback.answer()
@@ -994,22 +1680,35 @@ async def handle_memory_back(
         )
 
     except Exception as e:
-        print(f"Memory back error: {e}")
+
+        print(
+            f"Memory back error: {e}"
+        )
 
 
-@router.callback_query(F.data == "memory_close")
+# ==========================================
+# Close
+# ==========================================
+
+@router.callback_query(
+    F.data == "memory_close"
+)
 async def handle_memory_close(
     callback: CallbackQuery,
 ):
 
-    if not await authorize_memory_callback(callback):
+    if not await authorize_memory_callback(
+        callback
+    ):
         return
 
     await callback.answer(
         "Closed"
     )
 
-    await close_menu(callback)
+    await close_menu(
+        callback
+    )
 
 
 # ==========================================
@@ -1029,10 +1728,11 @@ async def process_memory_text(
 
     user_id = message.from_user.id
     user_id_str = str(user_id)
+    chat_id = message.chat.id
 
-    # ------------------------------------------
-    # Add memory
-    # ------------------------------------------
+    # ======================================
+    # Add
+    # ======================================
 
     if action == "add":
 
@@ -1046,7 +1746,6 @@ async def process_memory_text(
 
             try:
 
-                # Prevent exact duplicate memories.
                 if await redis_client.lpos(
                     f"memory_list:{user_id_str}",
                     part,
@@ -1058,18 +1757,21 @@ async def process_memory_text(
                     )
 
             except Exception as e:
+
                 print(
                     f"Memory save error: {e}"
                 )
 
-        # Keep newest 25 memories.
         await redis_client.ltrim(
             f"memory_list:{user_id_str}",
             -25,
             -1,
         )
 
-        await clear_interaction(user_id)
+        await clear_interaction(
+            chat_id,
+            user_id,
+        )
 
         try:
             await message.delete()
@@ -1078,25 +1780,36 @@ async def process_memory_text(
 
         return True
 
-    # ------------------------------------------
-    # Edit memory
-    # ------------------------------------------
+    # ======================================
+    # Edit
+    # ======================================
 
     if action == "edit_number":
 
-        parts = message.text.strip().split(
-            " ",
-            1,
+        parts = (
+            message.text
+            .strip()
+            .split(
+                " ",
+                1,
+            )
         )
 
         if (
             len(parts) != 2
             or not parts[0].isdigit()
         ):
+
             return True
 
-        index = int(parts[0]) - 1
-        new_value = parts[1].strip()[:200]
+        index = (
+            int(parts[0]) - 1
+        )
+
+        new_value = (
+            parts[1]
+            .strip()[:200]
+        )
 
         raw = await redis_client.lrange(
             f"memory_list:{user_id_str}",
@@ -1112,7 +1825,10 @@ async def process_memory_text(
                 new_value,
             )
 
-        await clear_interaction(user_id)
+        await clear_interaction(
+            chat_id,
+            user_id,
+        )
 
         try:
             await message.delete()
@@ -1121,9 +1837,9 @@ async def process_memory_text(
 
         return True
 
-    # ------------------------------------------
-    # Forget selected memories
-    # ------------------------------------------
+    # ======================================
+    # Forget
+    # ======================================
 
     if action == "forget":
 
@@ -1140,9 +1856,11 @@ async def process_memory_text(
         )
 
         memories = [
-            x.decode("utf-8")
-            if isinstance(x, bytes)
-            else str(x)
+            (
+                x.decode("utf-8")
+                if isinstance(x, bytes)
+                else str(x)
+            )
             for x in raw
         ]
 
@@ -1152,7 +1870,10 @@ async def process_memory_text(
         ):
 
             if 0 <= index < len(memories):
-                memories.pop(index)
+
+                memories.pop(
+                    index
+                )
 
         await redis_client.delete(
             f"memory_list:{user_id_str}"
@@ -1165,7 +1886,10 @@ async def process_memory_text(
                 *memories,
             )
 
-        await clear_interaction(user_id)
+        await clear_interaction(
+            chat_id,
+            user_id,
+        )
 
         try:
             await message.delete()
@@ -1181,7 +1905,9 @@ async def process_memory_text(
 # Delete command
 # ==========================================
 
-@router.message(Command("delete", "del"))
+@router.message(
+    Command("delete", "del")
+)
 async def handle_delete(
     message: Message,
 ):
@@ -1320,6 +2046,7 @@ async def send_audio_track(
             )
 
         else:
+
             return
 
         try:
@@ -1338,6 +2065,7 @@ async def send_audio_track(
                 "message to be replied not found"
                 not in str(e).lower()
             ):
+
                 raise
 
             sent = await bot.send_audio(
@@ -1365,7 +2093,7 @@ async def send_audio_track(
 
 
 # ==========================================
-# Primary Chat, mentions & audio
+# Primary Chat
 # ==========================================
 
 @router.message(
@@ -1378,12 +2106,13 @@ async def handle_conversation(
     message: Message,
 ):
 
-    # ------------------------------------------
-    # Interactive memory input gets first priority
-    # ------------------------------------------
+    # ======================================
+    # Memory input gets first priority
+    # ======================================
 
     action = await get_interaction(
-        message.from_user.id
+        message.chat.id,
+        message.from_user.id,
     )
 
     if (
@@ -1396,6 +2125,7 @@ async def handle_conversation(
             message,
             action,
         ):
+
             return
 
     text = (
@@ -1410,9 +2140,9 @@ async def handle_conversation(
         text,
     )
 
-    # ------------------------------------------
+    # ======================================
     # Audio triggers
-    # ------------------------------------------
+    # ======================================
 
     if re.search(
         r"\bsen\b",
@@ -1450,18 +2180,20 @@ async def handle_conversation(
             )
         )
 
-    # ------------------------------------------
-    # Determine whether bot should respond
-    # ------------------------------------------
+    # ======================================
+    # Determine response
+    # ======================================
 
     bot_username = (
         f"@{BOT_INFO.username}"
-        if BOT_INFO and BOT_INFO.username
+        if BOT_INFO
+        and BOT_INFO.username
         else ""
     )
 
     is_private = (
-        message.chat.type == "private"
+        message.chat.type
+        == "private"
     )
 
     is_tagged = (
@@ -1489,8 +2221,12 @@ async def handle_conversation(
         or is_reply_to_bot
         or is_private
         or message.content_type
-        in {"voice", "audio"}
+        in {
+            "voice",
+            "audio",
+        }
     ):
+
         return
 
     user_id_str = str(
@@ -1500,9 +2236,9 @@ async def handle_conversation(
     chat_id = message.chat.id
     msg_id = message.message_id
 
-    # ------------------------------------------
+    # ======================================
     # Clean prompt
-    # ------------------------------------------
+    # ======================================
 
     clean_prompt = text
 
@@ -1522,9 +2258,9 @@ async def handle_conversation(
         flags=re.IGNORECASE,
     ).strip()
 
-    # ------------------------------------------
+    # ======================================
     # Cooldown
-    # ------------------------------------------
+    # ======================================
 
     cooldown_key = (
         f"cooldown:{user_id_str}"
@@ -1559,9 +2295,9 @@ async def handle_conversation(
         ex=4,
     )
 
-    # ------------------------------------------
+    # ======================================
     # Reply context
-    # ------------------------------------------
+    # ======================================
 
     replied_context = ""
 
@@ -1573,9 +2309,9 @@ async def handle_conversation(
             or ""
         )
 
-    # ------------------------------------------
+    # ======================================
     # Audio input
-    # ------------------------------------------
+    # ======================================
 
     audio_bytes = None
     audio_mime = "audio/ogg"
@@ -1627,6 +2363,7 @@ async def handle_conversation(
         or replied_context
         or audio_bytes
     ):
+
         return
 
     # ==========================================
@@ -1635,9 +2372,9 @@ async def handle_conversation(
 
     try:
 
-        # --------------------------------------
+        # ======================================
         # Saved memories
-        # --------------------------------------
+        # ======================================
 
         raw_mem = await redis_client.lrange(
             f"memory_list:{user_id_str}",
@@ -1646,15 +2383,17 @@ async def handle_conversation(
         )
 
         saved_facts = [
-            x.decode("utf-8")
-            if isinstance(x, bytes)
-            else str(x)
+            (
+                x.decode("utf-8")
+                if isinstance(x, bytes)
+                else str(x)
+            )
             for x in raw_mem
         ]
 
-        # --------------------------------------
+        # ======================================
         # Conversation history
-        # --------------------------------------
+        # ======================================
 
         history_key = (
             f"chat_history:"
@@ -1669,15 +2408,17 @@ async def handle_conversation(
         )
 
         chat_history = [
-            x.decode("utf-8")
-            if isinstance(x, bytes)
-            else str(x)
+            (
+                x.decode("utf-8")
+                if isinstance(x, bytes)
+                else str(x)
+            )
             for x in raw_hist
         ]
 
-        # --------------------------------------
+        # ======================================
         # Search detection
-        # --------------------------------------
+        # ======================================
 
         search_words = {
             "search",
@@ -1738,9 +2479,9 @@ async def handle_conversation(
                 )
             )
 
-        # --------------------------------------
+        # ======================================
         # Build context
-        # --------------------------------------
+        # ======================================
 
         context = []
 
@@ -1755,7 +2496,9 @@ async def handle_conversation(
 
             context.append(
                 "Recent Conversation Context:\n"
-                + "\n".join(chat_history)
+                + "\n".join(
+                    chat_history
+                )
             )
 
         if search_context:
@@ -1778,9 +2521,9 @@ async def handle_conversation(
                 + final_prompt
             )
 
-        # --------------------------------------
-        # Gemini system instructions
-        # --------------------------------------
+        # ======================================
+        # System instructions
+        # ======================================
 
         today = datetime.now(
             timezone.utc
@@ -1837,9 +2580,9 @@ async def handle_conversation(
                 )
             )
 
-        # --------------------------------------
-        # Safety settings
-        # --------------------------------------
+        # ======================================
+        # Safety
+        # ======================================
 
         safety = [
 
@@ -1864,9 +2607,9 @@ async def handle_conversation(
             ),
         ]
 
-        # --------------------------------------
-        # Generate response
-        # --------------------------------------
+        # ======================================
+        # Generate
+        # ======================================
 
         if audio_bytes:
 
@@ -1915,9 +2658,9 @@ async def handle_conversation(
             .replace("```", "")
         )
 
-        # --------------------------------------
+        # ======================================
         # Send Gemini response
-        # --------------------------------------
+        # ======================================
 
         if is_private:
 
@@ -1940,9 +2683,9 @@ async def handle_conversation(
                 ),
             )
 
-        # --------------------------------------
+        # ======================================
         # Save conversation history
-        # --------------------------------------
+        # ======================================
 
         clean_history = re.sub(
             r"<[^>]+>",
@@ -1998,6 +2741,7 @@ async def handle_conversation(
 async def health_check(
     request,
 ):
+
     return web.Response(
         text="200 OK - Bot is running.",
         status=200,
@@ -2013,7 +2757,9 @@ async def configure_commands() -> None:
     commands = [
         BotCommand(
             command="memories",
-            description="Open your private instructed memories",
+            description=(
+                "Open your private instructed memories"
+            ),
             is_ephemeral=True,
         ),
     ]
@@ -2068,9 +2814,9 @@ async def main():
             f"{e}"
         )
 
-    # ------------------------------------------
-    # Healthcheck server
-    # ------------------------------------------
+    # ======================================
+    # Health server
+    # ======================================
 
     app = web.Application()
 
@@ -2084,7 +2830,9 @@ async def main():
         health_check,
     )
 
-    runner = web.AppRunner(app)
+    runner = web.AppRunner(
+        app
+    )
 
     await runner.setup()
 
@@ -2113,9 +2861,9 @@ async def main():
         f"{SEARXNG_URL}"
     )
 
-    # ------------------------------------------
+    # ======================================
     # Poll Telegram
-    # ------------------------------------------
+    # ======================================
 
     try:
 
@@ -2125,7 +2873,6 @@ async def main():
 
     finally:
 
-        # Cancel all menu expiration tasks.
         for task in list(
             menu_tasks.values()
         ):
@@ -2149,4 +2896,7 @@ async def main():
 # ==========================================
 
 if __name__ == "__main__":
-    asyncio.run(main())
+
+    asyncio.run(
+        main()
+    )
