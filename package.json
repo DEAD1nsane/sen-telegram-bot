@@ -6,7 +6,11 @@
   "type": "commonjs",
   "scripts": {
     "start": "node upload.js",
+    "format": "prettier --write .",
     "test": "echo \"No tests configured yet\""
+  },
+  "lint-staged": {
+    "**/*": "prettier --write --ignore-unknown"
   },
   "repository": {
     "type": "git",
@@ -29,9 +33,8 @@
   "devDependencies": {
     "husky": "^9.1.5",
     "lint-staged": "^15.2.9",
-    "prettier": "^3.3.3"
+    "prettier": "^3.9.6"
   },
-
   "allowScripts": {
     "@railway/cli@0.3.1": true
   }
