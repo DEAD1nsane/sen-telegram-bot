@@ -1,7 +1,9 @@
 """Railway entrypoint for Sen.
 
-Keeps Telegram polling singleton protection and patches the Rich Message
-memory menu so each user's menu is personalized.
+Keeps Telegram polling singleton protection and installs the private Rich
+Message /help flow. The /help command is configured as an ephemeral command
+by main.py, so group replies can be private without requiring the bot to be an
+administrator.
 """
 
 import asyncio
@@ -9,6 +11,8 @@ import contextvars
 import uuid
 
 import main
+from aiogram.types import EphemeralMessageParameters, InputRichMessage, ReplyParameters
+
 
 POLLING_LOCK_KEY = "sen:telegram:getupdates:lock"
 POLLING_LOCK_TTL = 120
@@ -20,11 +24,12 @@ _current_menu_user: contextvars.ContextVar[object] = contextvars.ContextVar(
 
 
 def _display_name(user) -> str:
-    return str(
+    name = str(
         getattr(user, "first_name", None)
         or getattr(user, "username", None)
         or "User"
     ).strip()
+    return name or "User"
 
 
 def personalized_rich_main_menu() -> str:
@@ -48,60 +53,70 @@ main.rich_main_menu = personalized_rich_main_menu
 
 
 async def private_help(message):
-    user_id = message.from_user.id
+    """Send /help as a Rich Message, privately in groups."""
+    user = message.from_user
+    if user is None:
+        return
+
+    user_id = user.id
     chat_id = message.chat.id
-    token = _current_menu_user.set(message.from_user)
+    token = _current_menu_user.set(user)
+
     try:
         await main.clear_interaction(user_id)
+        rich_message = InputRichMessage(html=main.rich_main_menu())
 
         if message.chat.type == "private":
-            await main.send_menu(chat_id, user_id, main.rich_main_menu())
-            try:
-                await message.delete()
-            except Exception:
-                pass
-            return
-
-        if message.ephemeral_message_id is not None:
-            await main.send_menu(
-                chat_id,
-                user_id,
-                main.rich_main_menu(),
-                reply_to_ephemeral_id=message.ephemeral_message_id,
+            sent = await main.bot.send_rich_message(
+                chat_id=chat_id,
+                rich_message=rich_message,
             )
-            return
-
-        # Normal group /help is allowed again. Try the private Rich Message
-        # path first. If Telegram rejects it because this bot is not an admin,
-        # fall back to a working public Rich Message rather than silently
-        # ignoring the command.
-        try:
-            await main.send_menu(chat_id, user_id, main.rich_main_menu())
-        except Exception as e:
-            print(f"Ephemeral /help failed: {e}")
-            try:
-                await main.bot.send_rich_message(
-                    chat_id=chat_id,
-                    rich_message=main.InputRichMessage(
-                        html=main.rich_main_menu()
-                    ),
+        else:
+            ephemeral_id = getattr(message, "ephemeral_message_id", None)
+            if ephemeral_id is None:
+                # This should only happen if Telegram delivered /help as a
+                # normal command instead of the configured ephemeral command.
+                # Do not leak a private menu into the group.
+                print(
+                    f"/help ignored: no ephemeral_message_id for user={user_id} chat={chat_id}"
                 )
-            except Exception as fallback_error:
-                print(f"Public Rich /help fallback failed: {fallback_error}")
+                return
 
-        try:
-            await message.delete()
-        except Exception:
-            pass
+            # A reply to an incoming ephemeral command is itself ephemeral.
+            # Explicitly providing both fields avoids relying on client/server
+            # inference and keeps the Rich Message private to this user.
+            sent = await main.bot.send_rich_message(
+                chat_id=chat_id,
+                rich_message=rich_message,
+                reply_parameters=ReplyParameters(
+                    ephemeral_message_id=ephemeral_id,
+                ),
+                ephemeral_message_parameters=EphemeralMessageParameters(
+                    receiver_user_id=user_id,
+                ),
+            )
+
+        sent_ephemeral_id = getattr(sent, "ephemeral_message_id", None)
+        await main.schedule_menu_delete(
+            chat_id,
+            user_id,
+            sent_ephemeral_id,
+            None if sent_ephemeral_id is not None else getattr(sent, "message_id", None),
+        )
+    except Exception as e:
+        print(f"/help Rich Message error: {type(e).__name__}: {e}")
     finally:
         _current_menu_user.reset(token)
 
 
-# Replace the registered /help callback before polling starts.
-for handler in main.router.message.handlers:
-    if getattr(handler.callback, "__name__", "") == "handle_help":
-        handler.callback = private_help
-        break
+# Replace the original /help handler instead of merely mutating its callback.
+# This makes the replacement deterministic with aiogram's HandlerObject list.
+main.router.message.handlers = [
+    handler
+    for handler in main.router.message.handlers
+    if getattr(handler.callback, "__name__", "") != "handle_help"
+]
+main.router.message.register(private_help, main.Command("help"))
 
 
 async def _wrap_callback(callback, original):
@@ -112,7 +127,7 @@ async def _wrap_callback(callback, original):
         _current_menu_user.reset(token)
 
 
-# Personalize every callback that can display the main menu, especially Back.
+# Personalize callbacks that can return to the main menu, especially Back.
 for handler in main.router.callback_query.handlers:
     original = handler.callback
     if getattr(original, "__name__", "") in {
@@ -127,11 +142,12 @@ for handler in main.router.callback_query.handlers:
     }:
         async def wrapped(callback, _original=original):
             return await _wrap_callback(callback, _original)
+
         handler.callback = wrapped
 
 
-# Keep Rich Message callbacks from mutating a public group message belonging
-# to a different user.
+# Public Rich menus are not expected anymore. Keep a safety guard so an
+# accidentally public menu cannot be edited or closed by another user.
 main._original_edit_menu = main.edit_menu
 main._original_close_menu = main.close_menu
 
@@ -140,11 +156,11 @@ async def guarded_edit_menu(callback, rich_html):
     message = callback.message
     if (
         message
-        and message.chat.type != "private"
-        and message.ephemeral_message_id is None
+        and getattr(message.chat, "type", None) != "private"
+        and getattr(message, "ephemeral_message_id", None) is None
     ):
         await callback.answer(
-            "This menu is public because Telegram could not make /help private.",
+            "This private menu has expired or is no longer available.",
             show_alert=True,
         )
         return
@@ -155,11 +171,11 @@ async def guarded_close_menu(callback):
     message = callback.message
     if (
         message
-        and message.chat.type != "private"
-        and message.ephemeral_message_id is None
+        and getattr(message.chat, "type", None) != "private"
+        and getattr(message, "ephemeral_message_id", None) is None
     ):
         await callback.answer(
-            "This menu is public and cannot be controlled privately.",
+            "This private menu has expired or is no longer available.",
             show_alert=True,
         )
         return
