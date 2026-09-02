@@ -2100,11 +2100,21 @@ async def send_audio_track(
     F.text
     | F.caption
     | F.voice
-    | F.audio
 )
 async def handle_conversation(
     message: Message,
 ):
+
+    # ======================================
+    # Regular audio files are NOT voice notes
+    # ======================================
+
+    # This is deliberately defensive.
+    # F.caption can match messages that have an audio
+    # file with a caption, so make absolutely sure that
+    # regular Telegram audio files never get processed.
+    if message.audio is not None:
+        return
 
     # ======================================
     # Memory input gets first priority
@@ -2216,18 +2226,41 @@ async def handle_conversation(
         == BOT_INFO.id
     )
 
-    if not (
-        is_tagged
-        or is_reply_to_bot
-        or is_private
-        or message.content_type
-        in {
-            "voice",
-            "audio",
-        }
-    ):
+    # ======================================
+    # Voice notes require explicit targeting
+    # ======================================
 
-        return
+    if message.voice is not None:
+
+        # A voice message is only processed when:
+        #
+        #   1. The bot is mentioned in its caption, or
+        #   2. The voice message is a reply to the bot.
+        #
+        # Random voice notes are ignored, including in
+        # private chats.
+        if not (
+            is_tagged
+            or is_reply_to_bot
+        ):
+
+            return
+
+    else:
+
+        # Normal text retains the existing behavior:
+        #
+        #   - private chat
+        #   - bot mention
+        #   - reply to bot
+
+        if not (
+            is_tagged
+            or is_reply_to_bot
+            or is_private
+        ):
+
+            return
 
     user_id_str = str(
         message.from_user.id
@@ -2310,44 +2343,38 @@ async def handle_conversation(
         )
 
     # ======================================
-    # Audio input
+    # Voice input
     # ======================================
 
     audio_bytes = None
     audio_mime = "audio/ogg"
 
-    if message.content_type in {
-        "voice",
-        "audio",
-    }:
+    # Only Telegram voice notes are downloaded
+    # and passed to Gemini.
+    if message.voice is not None:
 
-        audio_obj = (
-            message.voice
-            or message.audio
+        voice_obj = message.voice
+
+        file_info = await bot.get_file(
+            voice_obj.file_id
         )
 
-        if audio_obj:
+        stream = await bot.download_file(
+            file_info.file_path
+        )
 
-            file_info = await bot.get_file(
-                audio_obj.file_id
+        if stream:
+            audio_bytes = stream.read()
+
+        if getattr(
+            voice_obj,
+            "mime_type",
+            None,
+        ):
+
+            audio_mime = (
+                voice_obj.mime_type
             )
-
-            stream = await bot.download_file(
-                file_info.file_path
-            )
-
-            if stream:
-                audio_bytes = stream.read()
-
-            if getattr(
-                audio_obj,
-                "mime_type",
-                None,
-            ):
-
-                audio_mime = (
-                    audio_obj.mime_type
-                )
 
     if (
         not clean_prompt
@@ -2732,6 +2759,79 @@ async def handle_conversation(
                 error,
                 reply_to_message_id=msg_id,
             )
+
+
+# ==========================================
+# Health check
+# ==========================================
+
+async def health_check(
+    request: web.Request,
+) -> web.Response:
+
+    return web.json_response(
+        {
+            "status": "ok",
+            "bot": (
+                BOT_INFO.username
+                if BOT_INFO
+                else None
+            ),
+        }
+    )
+
+
+# ==========================================
+# Configure Telegram commands
+# ==========================================
+
+async def configure_commands() -> None:
+
+    commands = [
+        BotCommand(
+            command="memories",
+            description="Manage your instructed memories",
+        ),
+        BotCommand(
+            command="delete",
+            description="Delete a bot message",
+        ),
+    ]
+
+    await bot.set_my_commands(
+        commands,
+        scope=BotCommandScopeAllGroupChats(),
+    )
+
+    await bot.set_my_commands(
+        commands,
+        scope=BotCommandScopeAllPrivateChats(),
+    )
+
+
+# ==========================================
+# Main
+# ==========================================
+
+async def main():
+
+    global BOT_INFO
+
+    # ======================================
+    # Get bot information
+    # ======================================
+
+    BOT_INFO = await bot.get_me()
+
+    print(
+        f"Logged in as @{BOT_INFO.username}"
+    )
+
+    # ======================================
+    # Configure commands
+    # ======================================
+
+    await configure_commands()
 
     # ======================================
     # Health server
