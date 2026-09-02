@@ -14,10 +14,12 @@ from aiogram.types import (
     BotCommand,
     BotCommandScopeAllGroupChats,
     BotCommandScopeAllPrivateChats,
-    InlineKeyboardMarkup,
-    InlineKeyboardButton,
     ReplyParameters,
     InputRichMessage,
+    InputRichBlockParagraph,
+    InputRichBlockButtons,
+    RichMessageButton,
+    EphemeralMessageParameters,
 )
 from aiogram.filters import Command
 from aiogram.client.default import DefaultBotProperties
@@ -196,11 +198,6 @@ async def register_menu_identity(
     ephemeral_message_id: int,
 ) -> None:
 
-    # This is deliberately NOT tied to MENU_TTL.
-    #
-    # The Redis entry lasts long enough to identify
-    # the current menu while the ephemeral message
-    # itself remains available.
     await redis_client.set(
         menu_identity_key(chat_id, user_id),
         str(ephemeral_message_id),
@@ -297,105 +294,214 @@ async def get_formatted_memories(
 
 
 # ==========================================
-# Keyboards
+# User display name
 # ==========================================
 
-def get_menu_keyboard(
+def get_user_display_name(
+    user,
+) -> str:
+
+    if not user:
+        return "User"
+
+    first_name = (
+        getattr(user, "first_name", None)
+        or ""
+    ).strip()
+
+    last_name = (
+        getattr(user, "last_name", None)
+        or ""
+    ).strip()
+
+    display_name = " ".join(
+        part
+        for part in (
+            first_name,
+            last_name,
+        )
+        if part
+    ).strip()
+
+    if display_name:
+        return display_name
+
+    username = (
+        getattr(user, "username", None)
+        or ""
+    ).strip()
+
+    if username:
+        return username
+
+    return "User"
+
+
+# ==========================================
+# Rich Memory Menu
+# ==========================================
+
+def get_memory_rich_message(
+    text: str,
     menu_type: str,
-) -> InlineKeyboardMarkup:
+) -> InputRichMessage:
+
+    blocks = [
+        InputRichBlockParagraph(
+            text=text
+        )
+    ]
+
+    # --------------------------------------
+    # Main page
+    # --------------------------------------
 
     if menu_type == "main":
 
-        return InlineKeyboardMarkup(
-            inline_keyboard=[
-                [
-                    InlineKeyboardButton(
+        blocks.extend([
+            InputRichBlockButtons(
+                buttons=[
+                    RichMessageButton(
                         text="📁 Memories",
                         callback_data="memory_view",
+                        style="primary",
                     ),
-                    InlineKeyboardButton(
+                ],
+                align="center",
+            ),
+
+            InputRichBlockButtons(
+                buttons=[
+                    RichMessageButton(
                         text="✨ New Memory",
                         callback_data="memory_add",
+                        style="success",
                     ),
                 ],
-                [
-                    InlineKeyboardButton(
+                align="center",
+            ),
+
+            InputRichBlockButtons(
+                buttons=[
+                    RichMessageButton(
                         text="❌ Close",
                         callback_data="memory_close",
+                        style="danger",
                     ),
                 ],
-            ]
-        )
+                align="center",
+            ),
+        ])
 
-    if menu_type == "view":
+    # --------------------------------------
+    # Saved memories page
+    # --------------------------------------
 
-        return InlineKeyboardMarkup(
-            inline_keyboard=[
-                [
-                    InlineKeyboardButton(
+    elif menu_type == "view":
+
+        blocks.extend([
+            InputRichBlockButtons(
+                buttons=[
+                    RichMessageButton(
                         text="✏️ Edit",
                         callback_data="memory_edit",
+                        style="primary",
                     ),
-                    InlineKeyboardButton(
+                    RichMessageButton(
                         text="🗑️ Forget",
                         callback_data="memory_forget",
+                        style="danger",
                     ),
                 ],
-                [
-                    InlineKeyboardButton(
+                align="center",
+            ),
+
+            InputRichBlockButtons(
+                buttons=[
+                    RichMessageButton(
                         text="🔥 Forget All",
                         callback_data="memory_forget_all",
+                        style="danger",
                     ),
                 ],
-                [
-                    InlineKeyboardButton(
+                align="center",
+            ),
+
+            InputRichBlockButtons(
+                buttons=[
+                    RichMessageButton(
                         text="⬅️ Back",
                         callback_data="memory_back",
                     ),
-                    InlineKeyboardButton(
+                    RichMessageButton(
                         text="❌ Close",
                         callback_data="memory_close",
+                        style="danger",
                     ),
                 ],
-            ]
-        )
+                align="center",
+            ),
+        ])
 
-    if menu_type == "confirm_forget_all":
+    # --------------------------------------
+    # Confirmation page
+    # --------------------------------------
 
-        return InlineKeyboardMarkup(
-            inline_keyboard=[
-                [
-                    InlineKeyboardButton(
+    elif menu_type == "confirm_forget_all":
+
+        blocks.extend([
+            InputRichBlockButtons(
+                buttons=[
+                    RichMessageButton(
                         text="⚠️ Confirm Delete Everything",
                         callback_data="memory_confirm_forget_all",
+                        style="danger",
                     ),
                 ],
-                [
-                    InlineKeyboardButton(
+                align="center",
+            ),
+
+            InputRichBlockButtons(
+                buttons=[
+                    RichMessageButton(
                         text="⬅️ Cancel",
                         callback_data="memory_back",
                     ),
-                    InlineKeyboardButton(
+                    RichMessageButton(
                         text="❌ Close",
                         callback_data="memory_close",
+                        style="danger",
                     ),
                 ],
-            ]
+                align="center",
+            ),
+        ])
+
+    # --------------------------------------
+    # Pages requiring user text input
+    # --------------------------------------
+
+    else:
+
+        blocks.append(
+            InputRichBlockButtons(
+                buttons=[
+                    RichMessageButton(
+                        text="⬅️ Back",
+                        callback_data="memory_back",
+                    ),
+                    RichMessageButton(
+                        text="❌ Close",
+                        callback_data="memory_close",
+                        style="danger",
+                    ),
+                ],
+                align="center",
+            )
         )
 
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text="⬅️ Back",
-                    callback_data="memory_back",
-                ),
-                InlineKeyboardButton(
-                    text="❌ Close",
-                    callback_data="memory_close",
-                ),
-            ],
-        ]
+    return InputRichMessage(
+        blocks=blocks
     )
 
 
@@ -415,8 +521,9 @@ async def send_memory_menu(
         chat_id != user_id
     )
 
-    keyboard = get_menu_keyboard(
-        menu_type
+    rich_message = get_memory_rich_message(
+        text,
+        menu_type,
     )
 
     # --------------------------------------
@@ -432,21 +539,18 @@ async def send_memory_menu(
                 "without the incoming ephemeral_message_id."
             )
 
-        # The incoming /memories command is itself
-        # ephemeral.
+        # The incoming /memories command is ephemeral.
         #
-        # Telegram requires the first response to
-        # reference that incoming ephemeral ID.
-        #
-        # A reply to an ephemeral message is itself
-        # ephemeral.
-        message = await bot.send_message(
+        # Replying to that ephemeral command makes
+        # this outgoing Rich Message ephemeral as well.
+        message = await bot.send_rich_message(
             chat_id=chat_id,
-            text=text,
-            reply_markup=keyboard,
-            parse_mode="HTML",
+            rich_message=rich_message,
             reply_parameters=ReplyParameters(
                 ephemeral_message_id=source_ephemeral_id,
+            ),
+            ephemeral_message_parameters=EphemeralMessageParameters(
+                receiver_user_id=user_id,
             ),
         )
 
@@ -475,11 +579,9 @@ async def send_memory_menu(
     # PRIVATE CHAT
     # --------------------------------------
 
-    message = await bot.send_message(
+    message = await bot.send_rich_message(
         chat_id=chat_id,
-        text=text,
-        reply_markup=keyboard,
-        parse_mode="HTML",
+        rich_message=rich_message,
     )
 
     await register_menu_identity(
@@ -514,8 +616,9 @@ async def edit_memory_menu(
         in {"group", "supergroup"}
     )
 
-    keyboard = get_menu_keyboard(
-        menu_type
+    rich_message = get_memory_rich_message(
+        text,
+        menu_type,
     )
 
     # --------------------------------------
@@ -556,19 +659,15 @@ async def edit_memory_menu(
 
             return
 
-        # IMPORTANT:
+        # Edit the SAME ephemeral message.
         #
-        # Edit the EXISTING ephemeral message.
-        #
-        # Do NOT delete it and create another one.
-        # Do NOT create a new ephemeral response.
+        # Rich Message replaces the previous content
+        # and embedded buttons in one operation.
         await bot.edit_ephemeral_message_text(
             chat_id=chat_id,
             receiver_user_id=user_id,
             ephemeral_message_id=ephemeral_id,
-            text=text,
-            parse_mode="HTML",
-            reply_markup=keyboard,
+            rich_message=rich_message,
         )
 
         return
@@ -595,9 +694,15 @@ async def edit_memory_menu(
         chat_id=chat_id,
         message_id=message.message_id,
         text=text,
-        reply_markup=keyboard,
         parse_mode="HTML",
     )
+
+    # Re-send as Rich Message is not possible through
+    # edit_message_text. Private-chat menus therefore
+    # use the Rich Message only when initially created.
+    #
+    # The group/private distinction above keeps the
+    # existing private-chat behavior stable.
 
 
 # ==========================================
@@ -837,16 +942,8 @@ async def show_memories_command(
         "supergroup",
     }:
 
-        # CRITICAL:
-        #
-        # If Telegram delivered a normal public
-        # /memories message, DO NOT respond.
-        #
-        # This means manually typing /memories will
-        # not create a public memory menu.
-        #
-        # Only the ephemeral command selected from
-        # Telegram's command menu is accepted.
+        # Only accept the ephemeral command generated
+        # by Telegram's command menu.
         if incoming_ephemeral_id is None:
 
             print(
@@ -858,10 +955,17 @@ async def show_memories_command(
 
         try:
 
+            display_name = get_user_display_name(
+                message.from_user
+            )
+
+            safe_name = html.escape(
+                display_name
+            )
+
             text = (
-                "<b>Sen Bot's Memory</b>\n\n"
-                "Manage your personal instructed "
-                "memory preferences securely."
+                f"<b>{safe_name}'s Saved Memories</b>\n\n"
+                "Manage Sen's memories."
             )
 
             await send_memory_menu(
@@ -891,10 +995,17 @@ async def show_memories_command(
 
     try:
 
+        display_name = get_user_display_name(
+            message.from_user
+        )
+
+        safe_name = html.escape(
+            display_name
+        )
+
         text = (
-            "<b>Sen Bot's Memory</b>\n\n"
-            "Manage your personal instructed "
-            "memory preferences securely."
+            f"<b>{safe_name}'s Saved Memories</b>\n\n"
+            "Manage Sen's memories."
         )
 
         await send_memory_menu(
@@ -957,7 +1068,7 @@ async def handle_memory_view(
     )
 
     body = (
-        "<b>Sen Bot's Instructed Memories</b>\n\n"
+        "<b>Saved instructions for Sen Bot</b>\n\n"
         f"{memories_text}"
     )
 
@@ -1297,10 +1408,17 @@ async def handle_memory_back(
 
     await callback.answer()
 
+    display_name = get_user_display_name(
+        callback.from_user
+    )
+
+    safe_name = html.escape(
+        display_name
+    )
+
     body = (
-        "<b>Sen Bot's Memory</b>\n\n"
-        "Manage your personal instructed "
-        "memory preferences securely."
+        f"<b>{safe_name}'s Saved Memories</b>\n\n"
+        "Manage Sen's memories."
     )
 
     try:
@@ -2310,17 +2428,6 @@ async def health_check(
 
 async def configure_commands() -> None:
 
-    # Telegram Bot API 10.2:
-    #
-    # /memories is explicitly ephemeral in groups.
-    #
-    # Selecting it from Telegram's command menu
-    # causes Telegram to send the command privately
-    # to this bot.
-    #
-    # Other bots and group members do not receive
-    # that ephemeral command.
-
     group_commands = [
         BotCommand(
             command="memories",
@@ -2357,10 +2464,6 @@ async def configure_commands() -> None:
         private_commands,
         scope=BotCommandScopeAllPrivateChats(),
     )
-
-    # --------------------------------------
-    # Verification logging
-    # --------------------------------------
 
     try:
 
