@@ -17,8 +17,14 @@ from aiogram.types import (
     ReplyParameters,
     InputRichMessage,
     InputRichBlockParagraph,
+    InputRichBlockSectionHeading,
     InputRichBlockButtons,
     RichMessageButton,
+    RichTextBold,
+    RichTextItalic,
+    RichTextUnderline,
+    RichTextStrikethrough,
+    RichTextCode,
     EphemeralMessageParameters,
 )
 from aiogram.filters import Command
@@ -266,7 +272,7 @@ async def get_formatted_memories(
     )
 
     if not memories:
-        return "No instructed memories stored."
+        return "Nothing has been saved yet."
 
     lines = []
 
@@ -325,6 +331,173 @@ def get_user_display_name(
 
 
 # ==========================================
+# Rich Text Parser
+# ==========================================
+
+def rich_text_from_markup(
+    text: str,
+):
+    """
+    Convert the small amount of HTML-style markup
+    used by the memory UI into native Telegram
+    RichText nodes.
+
+    This is NOT passed to Telegram as HTML.
+
+    Instead:
+
+        <b>Hello</b>
+
+    becomes:
+
+        RichTextBold(text="Hello")
+
+    This is the important distinction that prevents
+    raw <b>...</b> from appearing in the message.
+    """
+
+    pattern = re.compile(
+        r"(<b>.*?</b>|"
+        r"<strong>.*?</strong>|"
+        r"<i>.*?</i>|"
+        r"<em>.*?</em>|"
+        r"<u>.*?</u>|"
+        r"<ins>.*?</ins>|"
+        r"<s>.*?</s>|"
+        r"<strike>.*?</strike>|"
+        r"<del>.*?</del>|"
+        r"<code>.*?</code>)",
+        re.IGNORECASE | re.DOTALL,
+    )
+
+    parts = []
+    position = 0
+
+    for match in pattern.finditer(text):
+        if match.start() > position:
+            plain = text[position:match.start()]
+
+            if plain:
+                parts.append(
+                    html.unescape(plain)
+                )
+
+        token = match.group(0)
+
+        lowered = token.lower()
+
+        if (
+            lowered.startswith("<b>")
+            or lowered.startswith("<strong>")
+        ):
+            inner = re.sub(
+                r"^<(?:b|strong)>|"
+                r"</(?:b|strong)>$",
+                "",
+                token,
+                flags=re.IGNORECASE | re.DOTALL,
+            )
+
+            parts.append(
+                RichTextBold(
+                    text=html.unescape(inner)
+                )
+            )
+
+        elif (
+            lowered.startswith("<i>")
+            or lowered.startswith("<em>")
+        ):
+            inner = re.sub(
+                r"^<(?:i|em)>|"
+                r"</(?:i|em)>$",
+                "",
+                token,
+                flags=re.IGNORECASE | re.DOTALL,
+            )
+
+            parts.append(
+                RichTextItalic(
+                    text=html.unescape(inner)
+                )
+            )
+
+        elif (
+            lowered.startswith("<u>")
+            or lowered.startswith("<ins>")
+        ):
+            inner = re.sub(
+                r"^<(?:u|ins)>|"
+                r"</(?:u|ins)>$",
+                "",
+                token,
+                flags=re.IGNORECASE | re.DOTALL,
+            )
+
+            parts.append(
+                RichTextUnderline(
+                    text=html.unescape(inner)
+                )
+            )
+
+        elif (
+            lowered.startswith("<s>")
+            or lowered.startswith("<strike>")
+            or lowered.startswith("<del>")
+        ):
+            inner = re.sub(
+                r"^<(?:s|strike|del)>|"
+                r"</(?:s|strike|del)>$",
+                "",
+                token,
+                flags=re.IGNORECASE | re.DOTALL,
+            )
+
+            parts.append(
+                RichTextStrikethrough(
+                    text=html.unescape(inner)
+                )
+            )
+
+        elif lowered.startswith("<code>"):
+            inner = re.sub(
+                r"^<code>|</code>$",
+                "",
+                token,
+                flags=re.IGNORECASE | re.DOTALL,
+            )
+
+            parts.append(
+                RichTextCode(
+                    text=html.unescape(inner)
+                )
+            )
+
+        position = match.end()
+
+    if position < len(text):
+        parts.append(
+            html.unescape(
+                text[position:]
+            )
+        )
+
+    parts = [
+        part
+        for part in parts
+        if part != ""
+    ]
+
+    if not parts:
+        return ""
+
+    if len(parts) == 1:
+        return parts[0]
+
+    return parts
+
+
+# ==========================================
 # Rich Memory Menu
 # ==========================================
 
@@ -333,11 +506,52 @@ def get_memory_rich_message(
     menu_type: str,
 ) -> InputRichMessage:
 
-    blocks = [
-        InputRichBlockParagraph(
-            text=text
+    blocks = []
+
+    # --------------------------------------
+    # Extract first bold line as native
+    # Telegram heading.
+    # --------------------------------------
+
+    heading_match = re.match(
+        r"^\s*<b>(.*?)</b>\s*(?:\n|$)",
+        text,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+
+    if heading_match:
+        heading_text = html.unescape(
+            heading_match.group(1)
         )
-    ]
+
+        remaining_text = text[
+            heading_match.end():
+        ].strip()
+
+        blocks.append(
+            InputRichBlockSectionHeading(
+                text=heading_text,
+                size=2,
+            )
+        )
+
+        if remaining_text:
+            blocks.append(
+                InputRichBlockParagraph(
+                    text=rich_text_from_markup(
+                        remaining_text
+                    )
+                )
+            )
+
+    else:
+        blocks.append(
+            InputRichBlockParagraph(
+                text=rich_text_from_markup(
+                    text
+                )
+            )
+        )
 
     # --------------------------------------
     # Main page
@@ -348,7 +562,7 @@ def get_memory_rich_message(
             InputRichBlockButtons(
                 buttons=[
                     RichMessageButton(
-                        text="📁 Memories",
+                        text="📚 View Memory",
                         callback_data="memory_view",
                         style="primary",
                     ),
@@ -359,7 +573,7 @@ def get_memory_rich_message(
             InputRichBlockButtons(
                 buttons=[
                     RichMessageButton(
-                        text="✨ New Memory",
+                        text="➕ Add Memory",
                         callback_data="memory_add",
                         style="success",
                     ),
@@ -370,7 +584,7 @@ def get_memory_rich_message(
             InputRichBlockButtons(
                 buttons=[
                     RichMessageButton(
-                        text="❌ Close",
+                        text="✕ Close",
                         callback_data="memory_close",
                         style="danger",
                     ),
@@ -393,7 +607,7 @@ def get_memory_rich_message(
                         style="primary",
                     ),
                     RichMessageButton(
-                        text="🗑️ Forget",
+                        text="🗑️ Remove",
                         callback_data="memory_forget",
                         style="danger",
                     ),
@@ -404,7 +618,7 @@ def get_memory_rich_message(
             InputRichBlockButtons(
                 buttons=[
                     RichMessageButton(
-                        text="🔥 Forget All",
+                        text="🧹 Clear All",
                         callback_data="memory_forget_all",
                         style="danger",
                     ),
@@ -415,11 +629,11 @@ def get_memory_rich_message(
             InputRichBlockButtons(
                 buttons=[
                     RichMessageButton(
-                        text="⬅️ Back",
+                        text="‹ Back",
                         callback_data="memory_back",
                     ),
                     RichMessageButton(
-                        text="❌ Close",
+                        text="✕ Close",
                         callback_data="memory_close",
                         style="danger",
                     ),
@@ -437,7 +651,7 @@ def get_memory_rich_message(
             InputRichBlockButtons(
                 buttons=[
                     RichMessageButton(
-                        text="⚠️ Confirm Delete Everything",
+                        text="⚠️ Yes, Clear Everything",
                         callback_data="memory_confirm_forget_all",
                         style="danger",
                     ),
@@ -448,11 +662,11 @@ def get_memory_rich_message(
             InputRichBlockButtons(
                 buttons=[
                     RichMessageButton(
-                        text="⬅️ Cancel",
+                        text="‹ Cancel",
                         callback_data="memory_back",
                     ),
                     RichMessageButton(
-                        text="❌ Close",
+                        text="✕ Close",
                         callback_data="memory_close",
                         style="danger",
                     ),
@@ -470,11 +684,11 @@ def get_memory_rich_message(
             InputRichBlockButtons(
                 buttons=[
                     RichMessageButton(
-                        text="⬅️ Back",
+                        text="‹ Back",
                         callback_data="memory_back",
                     ),
                     RichMessageButton(
-                        text="❌ Close",
+                        text="✕ Close",
                         callback_data="memory_close",
                         style="danger",
                     ),
@@ -656,11 +870,13 @@ async def edit_memory_menu(
             "Context mapping mismatch in personal chat."
         )
 
+    # Native rich editing.
+    # This keeps the Rich Message blocks and
+    # buttons instead of reverting to normal HTML.
     await bot.edit_message_text(
         chat_id=chat_id,
         message_id=message.message_id,
-        text=text,
-        parse_mode="HTML",
+        rich_message=rich_message,
     )
 
 
@@ -899,8 +1115,11 @@ async def show_memories_command(
             )
 
             text = (
-                f"<b>{safe_name}'s Saved Memories</b>\n\n"
-                "Manage Sen's memories."
+                f"<b>Memory Center</b>\n\n"
+                f"Welcome, {safe_name}.\n\n"
+                "Keep track of the details and "
+                "instructions you've asked Sen to remember. "
+                "Changes here affect how Sen responds to you."
             )
 
             await send_memory_menu(
@@ -937,8 +1156,11 @@ async def show_memories_command(
         )
 
         text = (
-            f"<b>{safe_name}'s Saved Memories</b>\n\n"
-            "Manage Sen's memories."
+            f"<b>Memory Center</b>\n\n"
+            f"Welcome, {safe_name}.\n\n"
+            "Keep track of the details and "
+            "instructions you've asked Sen to remember. "
+            "Changes here affect how Sen responds to you."
         )
 
         await send_memory_menu(
@@ -998,7 +1220,9 @@ async def handle_memory_view(
     )
 
     body = (
-        "<b>Saved instructions for Sen Bot</b>\n\n"
+        "<b>What Sen Remembers</b>\n\n"
+        "These are the saved instructions and details "
+        "currently available to Sen.\n\n"
         f"{memories_text}"
     )
 
@@ -1037,11 +1261,11 @@ async def handle_memory_add(
     await callback.answer()
 
     body = (
-        "<b>New Memory</b>\n\n"
-        "Send the fact or custom layout parameter "
-        "instruction you want me to store.\n\n"
-        "You can send multiple items simultaneously "
-        "if you split them using <code>,,</code>."
+        "<b>Add a Memory</b>\n\n"
+        "Tell Sen what you'd like to keep in mind "
+        "for future conversations.\n\n"
+        "You can add several items at once by separating "
+        "them with <code>,,</code>."
     )
 
     try:
@@ -1088,16 +1312,15 @@ async def handle_memory_edit(
 
     if not memories:
         body = (
-            "<b>Edit Memory</b>\n\n"
-            "You do not have any saved "
-            "structural rules yet."
+            "<b>Edit a Memory</b>\n\n"
+            "There aren't any saved memories to edit yet."
         )
 
     else:
         rows = [
-            "<b>Edit Memory</b>\n\n"
-            "Send the rule line index number along "
-            "with your new updated replacement text block.\n"
+            "<b>Edit a Memory</b>\n\n"
+            "Send the memory number followed by "
+            "the replacement text.\n"
         ]
 
         for i, memory in enumerate(
@@ -1109,7 +1332,7 @@ async def handle_memory_edit(
             )
 
         rows.append(
-            "\nExample setup payload: "
+            "\nExample: "
             "<code>2 My new instruction</code>"
         )
 
@@ -1159,16 +1382,15 @@ async def handle_memory_forget(
 
     if not memories:
         body = (
-            "<b>Forget Memories</b>\n\n"
-            "Your active operational memory matrix "
-            "is already completely blank."
+            "<b>Remove Memories</b>\n\n"
+            "There's nothing saved here to remove."
         )
 
     else:
         rows = [
-            "<b>Forget Memories</b>\n\n"
-            "Send the index line digit or clean sequences "
-            "split by <code>,,</code> to scrub records.\n"
+            "<b>Remove Memories</b>\n\n"
+            "Send one or more memory numbers, separated "
+            "with <code>,,</code>, to remove them.\n"
         ]
 
         for i, memory in enumerate(
@@ -1180,7 +1402,7 @@ async def handle_memory_forget(
             )
 
         rows.append(
-            "\nExample sequence: <code>1,, 3</code>"
+            "\nExample: <code>1,, 3</code>"
         )
 
         body = "\n".join(rows)
@@ -1219,12 +1441,11 @@ async def handle_memory_forget_all(
     await callback.answer()
 
     body = (
-        "<b>Forget everything?</b>\n\n"
-        "This permanently drops all custom "
-        "configurations along with context history "
-        "mappings.\n\n"
-        "<b>This structural change is absolute "
-        "and irreversible.</b>"
+        "<b>Clear All Memories?</b>\n\n"
+        "This will remove every saved memory for your "
+        "account and clear the conversation context "
+        "associated with this chat.\n\n"
+        "<b>This cannot be undone.</b>"
     )
 
     try:
@@ -1270,15 +1491,14 @@ async def handle_confirm_forget_all(
     )
 
     await callback.answer(
-        "All local structures dropped securely.",
+        "All saved memory has been cleared.",
         show_alert=True,
     )
 
     body = (
-        "<b>Memories Dropped</b>\n\n"
-        "All personal configurations and transaction "
-        "layers for this structural alignment have "
-        "been zeroed."
+        "<b>Memory Cleared</b>\n\n"
+        "Your saved memories and local conversation "
+        "context have been removed."
     )
 
     try:
@@ -1323,8 +1543,11 @@ async def handle_memory_back(
     )
 
     body = (
-        f"<b>{safe_name}'s Saved Memories</b>\n\n"
-        "Manage Sen's memories."
+        "<b>Memory Center</b>\n\n"
+        f"Welcome, {safe_name}.\n\n"
+        "Keep track of the details and "
+        "instructions you've asked Sen to remember. "
+        "Changes here affect how Sen responds to you."
     )
 
     try:
