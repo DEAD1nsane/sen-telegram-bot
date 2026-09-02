@@ -477,9 +477,13 @@ def get_memory_rich_message(
 
     blocks = []
 
+    # --------------------------------------
+    # Extract first bold line as native
+    # Telegram heading.
+    # --------------------------------------
+
     heading_match = re.match(
-        r"^\s*<b>(.*?)</b>\s*(?:
-|$)",
+        r"^\s*<b>(.*?)</b>\s*(?:\n|$)",
         text,
         flags=re.IGNORECASE | re.DOTALL,
     )
