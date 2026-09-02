@@ -52,14 +52,17 @@ redis_client = redis.from_url(
     ssl_cert_reqs=None if redis_url.startswith("rediss://") else "required",
 )
 
-
-API_TOKEN = os.getenv("BOT_TOKEN", "")
+API_TOKEN = (
+    os.getenv("BOT_TOKEN")
+    or os.getenv("TELEGRAM_BOT_TOKEN")
+    or ""
+)
 
 if not API_TOKEN:
-    raise ValueError("CRITICAL CONFIGURATION ERROR: 'BOT_TOKEN' missing.")
-if not API_TOKEN:
-    raise ValueError("CRITICAL CONFIGURATION ERROR: 'BOT_TOKEN' missing.")
-
+    raise ValueError(
+        "CRITICAL CONFIGURATION ERROR: 'BOT_TOKEN' or "
+        "'TELEGRAM_BOT_TOKEN' missing."
+    )
 SEARXNG_URL = os.getenv(
     "SEARXNG_URL",
     "http://searxng.railway.internal:8080/search",
