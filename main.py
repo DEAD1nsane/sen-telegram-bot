@@ -19,6 +19,8 @@ from aiogram.types import (
     InputRichBlockParagraph,
     InputRichBlockSectionHeading,
     InputRichBlockButtons,
+    InputRichBlockList,
+    InputRichBlockListItem,
     RichMessageButton,
     RichTextBold,
     RichTextItalic,
@@ -264,29 +266,6 @@ async def get_memories(
         return []
 
 
-async def get_formatted_memories(
-    user_id_str: str,
-) -> str:
-    memories = await get_memories(
-        user_id_str
-    )
-
-    if not memories:
-        return "Nothing has been saved yet."
-
-    lines = []
-
-    for i, memory in enumerate(
-        memories,
-        1,
-    ):
-        lines.append(
-            f"{i}. {html.escape(memory)}"
-        )
-
-    return "\n".join(lines)
-
-
 # ==========================================
 # User display name
 # ==========================================
@@ -351,9 +330,6 @@ def rich_text_from_markup(
     becomes:
 
         RichTextBold(text="Hello")
-
-    This is the important distinction that prevents
-    raw <b>...</b> from appearing in the message.
     """
 
     pattern = re.compile(
@@ -375,7 +351,9 @@ def rich_text_from_markup(
 
     for match in pattern.finditer(text):
         if match.start() > position:
-            plain = text[position:match.start()]
+            plain = text[
+                position:match.start()
+            ]
 
             if plain:
                 parts.append(
@@ -383,7 +361,6 @@ def rich_text_from_markup(
                 )
 
         token = match.group(0)
-
         lowered = token.lower()
 
         if (
@@ -504,6 +481,7 @@ def rich_text_from_markup(
 def get_memory_rich_message(
     text: str,
     menu_type: str,
+    memories: list[str] | None = None,
 ) -> InputRichMessage:
 
     blocks = []
@@ -554,6 +532,34 @@ def get_memory_rich_message(
         )
 
     # --------------------------------------
+    # Native ordered memory list.
+    #
+    # This is intentionally separate from
+    # the paragraph above so Telegram renders
+    # the numbers as an actual Rich Message
+    # ordered list.
+    # --------------------------------------
+
+    if memories:
+        blocks.append(
+            InputRichBlockList(
+                items=[
+                    InputRichBlockListItem(
+                        blocks=[
+                            InputRichBlockParagraph(
+                                text=memory
+                            )
+                        ],
+                        value=index,
+                        type="1",
+                    )
+                    for index, memory
+                    in enumerate(memories, 1)
+                ]
+            )
+        )
+
+    # --------------------------------------
     # Main page
     # --------------------------------------
 
@@ -562,7 +568,7 @@ def get_memory_rich_message(
             InputRichBlockButtons(
                 buttons=[
                     RichMessageButton(
-                        text="📚 View Memory",
+                        text="🧠 View Memories",
                         callback_data="memory_view",
                         style="primary",
                     ),
@@ -573,7 +579,7 @@ def get_memory_rich_message(
             InputRichBlockButtons(
                 buttons=[
                     RichMessageButton(
-                        text="➕ Add Memory",
+                        text="🧠 New Memory",
                         callback_data="memory_add",
                         style="success",
                     ),
@@ -712,6 +718,7 @@ async def send_memory_menu(
     text: str,
     menu_type: str = "main",
     source_ephemeral_id: int | None = None,
+    memories: list[str] | None = None,
 ) -> Message:
 
     is_group = (
@@ -721,6 +728,7 @@ async def send_memory_menu(
     rich_message = get_memory_rich_message(
         text,
         menu_type,
+        memories=memories,
     )
 
     # --------------------------------------
@@ -791,6 +799,7 @@ async def edit_memory_menu(
     callback: CallbackQuery,
     text: str,
     menu_type: str = "main",
+    memories: list[str] | None = None,
 ) -> None:
 
     message = callback.message
@@ -809,6 +818,7 @@ async def edit_memory_menu(
     rich_message = get_memory_rich_message(
         text,
         menu_type,
+        memories=memories,
     )
 
     # --------------------------------------
@@ -870,9 +880,6 @@ async def edit_memory_menu(
             "Context mapping mismatch in personal chat."
         )
 
-    # Native rich editing.
-    # This keeps the Rich Message blocks and
-    # buttons instead of reverting to normal HTML.
     await bot.edit_message_text(
         chat_id=chat_id,
         message_id=message.message_id,
@@ -1215,22 +1222,27 @@ async def handle_memory_view(
         callback.from_user.id
     )
 
-    memories_text = await get_formatted_memories(
+    memories = await get_memories(
         user_id_str
     )
 
     body = (
         "<b>What Sen Remembers</b>\n\n"
         "These are the saved instructions and details "
-        "currently available to Sen.\n\n"
-        f"{memories_text}"
+        "currently available to Sen."
     )
+
+    if not memories:
+        body += (
+            "\n\nNothing has been saved yet."
+        )
 
     try:
         await edit_memory_menu(
             callback,
             body,
             menu_type="view",
+            memories=memories,
         )
 
     except Exception as e:
