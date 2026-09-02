@@ -54,8 +54,8 @@ redis_client = redis.from_url(
 
 
 API_TOKEN = (
-    os.getenv("TELEGRAM_BOT_TOKEN")
-    or os.getenv("BOT_TOKEN")
+    os.getenv("BOT_TOKEN")
+    or os.getenv("TELEGRAM_BOT_TOKEN")
     or ""
 )
 if not API_TOKEN:
