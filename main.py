@@ -53,10 +53,10 @@ redis_client = redis.from_url(
 )
 
 
-API_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
+API_TOKEN = os.getenv("BOT_TOKEN", "")
 
 if not API_TOKEN:
-    raise ValueError("CRITICAL CONFIGURATION ERROR: 'TELEGRAM_BOT_TOKEN' missing.")
+    raise ValueError("CRITICAL CONFIGURATION ERROR: 'BOT_TOKEN' missing.")
 
 
 SEARXNG_URL = os.getenv(
