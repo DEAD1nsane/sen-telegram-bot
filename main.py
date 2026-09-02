@@ -1041,12 +1041,8 @@ async def show_memories_command(
     )
 
     text = (
-        f"<b>Memory Center</b>
-
-"
-        f"Welcome, {safe_name}.
-
-"
+        f"<b>Memory Center</b>"
+        f"Welcome, {safe_name}."
         "Keep track of the details and "
         "instructions you've asked Sen to remember. "
         "Changes here affect how Sen responds to you."
