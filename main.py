@@ -385,7 +385,8 @@ async def free_web_search(query, news=False):
         else: results = await searx_request(search_query, "general", None, 1, 8)
         seen, out = set(), []
         for result in results:
-            title = (result.get("title") or "").strip(); content = (result.get("content") or result.get("snippet") or "").strip(); url = clean_url(result.get("url", "")); published = (result.get("publishedDate") or result.get("published_date") or "").strip(); source = (result.get("engine") or result.get("source") or "").strip(); image_url = (result.get("thumbnail") or result.get("img_src") or result.get("image") or "").strip()
+            title = (result.get("title") or "").strip(); content = (result.get("content") or result.get("snippet") or "").strip(); url = clean_url(result.get("url", "")); published = (result.get("publishedDate") or result.get("published_date") or "").strip(); source = (result.get("engine") or result.get("source") or "").strip()
+            image_url = (result.get("img_src") or result.get("image") or result.get("thumbnail") or "").strip()
             key = url.lower() if url else (title.lower(), content[:120].lower())
             if key in seen or not (title or content or url): continue
             seen.add(key); lines = []
@@ -455,20 +456,32 @@ async def get_sticker_input(message):
         return data, "image/webp", "Animated/video sticker thumbnail"
     return None, None, "Sticker (animated/video; no usable thumbnail)"
 
+def get_replied_video_media(message):
+    replied = getattr(message, "reply_to_message", None)
+    if not replied: return None
+    video = getattr(replied, "video", None)
+    if video:
+        return video.file_id, getattr(video, "mime_type", None) or "video/mp4", getattr(video, "file_size", None), "Replied-to video"
+    video_note = getattr(replied, "video_note", None)
+    if video_note:
+        return video_note.file_id, "video/mp4", getattr(video_note, "file_size", None), "Replied-to video note"
+    document = getattr(replied, "document", None)
+    if document:
+        mime = (getattr(document, "mime_type", None) or "").lower()
+        name = (getattr(document, "file_name", None) or "").lower()
+        if mime.startswith("video/") or name.endswith((".mp4", ".mov", ".webm", ".avi", ".mkv", ".mpeg", ".mpg", ".wmv", ".3gp")):
+            return document.file_id, mime or "video/mp4", getattr(document, "file_size", None), "Replied-to video file"
+    return None
+
 async def generate_gemini_response(contents, config, max_attempts=4):
     retry_delays = (2, 4, 8)
     for attempt in range(max_attempts):
         try:
-            return await gemini_client.aio.models.generate_content(
-                model="gemini-3.5-flash-lite",
-                contents=contents,
-                config=config,
-            )
+            return await gemini_client.aio.models.generate_content(model="gemini-3.5-flash-lite", contents=contents, config=config)
         except Exception as e:
             s = str(e).upper()
             retryable = "503" in s or "UNAVAILABLE" in s or "429" in s or "RESOURCE_EXHAUSTED" in s
-            if not retryable or attempt >= len(retry_delays):
-                raise
+            if not retryable or attempt >= len(retry_delays): raise
             delay = retry_delays[attempt]
             print(f"Gemini temporary failure ({str(e)[:180]}). Retrying in {delay}s, attempt {attempt + 2}/{max_attempts}.")
             await asyncio.sleep(delay)
@@ -493,7 +506,8 @@ async def handle_conversation(message):
     tagged = bool(bot_username) and bot_username.lower() in lower
     tagged = tagged or "@gemini" in lower
     reply_to_bot = bool(message.reply_to_message and BOT_INFO and message.reply_to_message.from_user and message.reply_to_message.from_user.id == BOT_INFO.id)
-    replied_video = bool(message.reply_to_message and message.reply_to_message.video)
+    replied_video_media = get_replied_video_media(message)
+    replied_video = bool(replied_video_media)
     has_media_input = bool(message.photo or message.voice or replied_video)
 
     if message.voice is not None:
@@ -519,8 +533,8 @@ async def handle_conversation(message):
         replied_context = message.reply_to_message.text or message.reply_to_message.caption or ""
         if message.reply_to_message.sticker:
             replied_context += f"\n[Replied-to message contains a sticker: {message.reply_to_message.sticker.emoji or 'sticker'}]"
-        if message.reply_to_message.video:
-            replied_context += "\n[Replied-to message contains a video]"
+        if replied_video:
+            replied_context += f"\n[Replied-to message contains {replied_video_media[3]}]"
 
     media_bytes, media_mime, media_description = None, None, ""
     if message.voice:
@@ -532,19 +546,17 @@ async def handle_conversation(message):
         media_mime = "image/jpeg"
         media_description = "Photo"
 
-    # A sticker is context only when the user replies to that sticker.
-    # Sending a sticker by itself must never trigger Sen.
     if message.reply_to_message and message.reply_to_message.sticker and not media_bytes:
         media_bytes, media_mime, media_description = await get_sticker_input(message.reply_to_message)
 
-    if replied_video and not media_bytes:
-        video = message.reply_to_message.video
-        if video.file_size and video.file_size > 20 * 1024 * 1024:
+    if replied_video_media and not media_bytes:
+        file_id, video_mime, video_size, video_description = replied_video_media
+        if video_size and video_size > 20 * 1024 * 1024:
             await message.answer("That video is over Telegram's 20 MB bot download limit, so I can't inspect it.", reply_to_message_id=None if is_private else mid)
             return
-        media_bytes = await download_telegram_media(video.file_id)
-        media_mime = getattr(video, "mime_type", None) or "video/mp4"
-        media_description = "Replied-to video"
+        media_bytes = await download_telegram_media(file_id)
+        media_mime = video_mime
+        media_description = video_description
         if not media_bytes:
             await message.answer("I couldn't download that video to inspect it. Try sending the video again and reply to it.", reply_to_message_id=None if is_private else mid)
             return
@@ -599,10 +611,7 @@ async def handle_conversation(message):
         else:
             contents = final_prompt
 
-        response = await generate_gemini_response(
-            contents,
-            types.GenerateContentConfig(system_instruction=instructions, safety_settings=safety),
-        )
+        response = await generate_gemini_response(contents, types.GenerateContentConfig(system_instruction=instructions, safety_settings=safety))
         response_text = clean_ai_output(response.text)
 
         search_image_url = None
@@ -610,8 +619,7 @@ async def handle_conversation(message):
         if image_marker and search_context:
             candidate = image_marker.group(1).rstrip(".,)")
             supplied_images = set(re.findall(r"Image:\s*(https?://\S+)", search_context, re.I))
-            if candidate in supplied_images:
-                search_image_url = candidate
+            if candidate in supplied_images: search_image_url = candidate
             response_text = re.sub(r"\s*\[ATTACH_SEARCH_IMAGE:\s*https?://[^\]\s]+\]\s*", "\n", response_text, flags=re.I).strip()
 
         try:
@@ -622,10 +630,8 @@ async def handle_conversation(message):
             await message.answer(fallback, reply_to_message_id=None if is_private else mid)
 
         if search_image_url:
-            try:
-                await bot.send_photo(chat_id=cid, photo=search_image_url, reply_to_message_id=None if is_private else mid)
-            except Exception as media_error:
-                print(f"Search result image delivery error: {media_error}")
+            try: await bot.send_photo(chat_id=cid, photo=search_image_url, reply_to_message_id=None if is_private else mid)
+            except Exception as media_error: print(f"Search result image delivery error: {media_error}")
 
         clean_history = html.unescape(re.sub(r"<[^>]+>", "", response_text)).strip()
         await redis_client.rpush(history_key, f"User: {prompt or media_description or 'Media'}", f"Bot: {clean_history}")
