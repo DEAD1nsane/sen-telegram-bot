@@ -55,7 +55,7 @@ def _find_rich_video(obj, seen=None):
     if block_type == "animation":
         media = getattr(obj, "animation", None)
         if media is not None and getattr(media, "file_id", None):
-            return media.file_id, getattr(media, "mime_type", None) or "video/mp4", getattr(media, "file_size", None), "Rich editor video animation"
+            return media.animation.file_id, getattr(media.animation, "mime_type", None) or "video/mp4", getattr(media.animation, "file_size", None), "Rich editor video animation"
 
     try:
         dump = obj.model_dump(mode="python", exclude_none=True)
@@ -111,7 +111,7 @@ def _source_requested(query):
     return bool(re.search(r"\b(?:source|sources|citation|citations|links?|urls?|footnotes?)\b", query or "", re.I))
 
 
-def _source_links(search_context, footnotes=False):
+def _source_entries(search_context):
     entries = []
     seen = set()
     for chunk in re.split(r"\n\s*\n", (search_context or "").strip()):
@@ -127,21 +127,35 @@ def _source_links(search_context, footnotes=False):
         entries.append((title, url))
         if len(entries) >= 8:
             break
+    return entries
+
+
+def _source_links(search_context):
+    """Build verified, clickable Rich HTML footnotes inside a collapsible block."""
+    entries = _source_entries(search_context)
     if not entries:
         return ""
 
-    if footnotes:
-        return "\n\n<b>Sources</b>\n" + "\n".join(
-            f"[{i}] <a href=\"{html.escape(url, quote=True)}\">{html.escape(title)}</a>"
-            for i, (title, url) in enumerate(entries, 1)
+    lines = ["<details><summary>Sources</summary>"]
+    for i, (title, url) in enumerate(entries, 1):
+        anchor = f"sen-source-{i}"
+        safe_title = html.escape(title, quote=False)
+        safe_url = html.escape(url, quote=True)
+        lines.append(
+            f'<p><a href="#{anchor}">[{i}]</a> '
+            f'<a name="{anchor}"></a><a href="{safe_url}">{safe_title}</a></p>'
         )
-    return "\n\n<b>Sources</b>\n" + "\n".join(
-        f"<a href=\"{html.escape(url, quote=True)}\">{html.escape(title)}</a>"
-        for title, url in entries
-    )
+    lines.append("</details>")
+    return "\n\n" + "\n".join(lines)
 
 
-def _strip_model_source_blocks(text):
+def _replace_model_source_blocks(text):
+    """Replace model-generated source/citation blocks with verified search sources.
+
+    The collapsible <details> container is intentionally preserved as Telegram
+    Rich Messages support it natively. Only the source block's contents are
+    replaced so invented or stale URLs cannot survive alongside verified ones.
+    """
     pattern = re.compile(r"<details\b[^>]*>.*?</details>", re.I | re.S)
 
     def replace(match):
@@ -172,9 +186,8 @@ def install(main_module):
         async def send_with_real_sources(chat_id, msg_id, response_text, is_private):
             query, context = _SEARCH_STATE.get()
             if context and _source_requested(query):
-                response_text = _strip_model_source_blocks(response_text).rstrip()
-                footnotes = bool(re.search(r"\bfootnotes?\b", query, re.I))
-                response_text += _source_links(context, footnotes=footnotes)
+                response_text = _replace_model_source_blocks(response_text).rstrip()
+                response_text += _source_links(context)
             return await original_send(chat_id, msg_id, response_text, is_private)
         main_module.send_ai_response = send_with_real_sources
 
