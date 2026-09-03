@@ -394,10 +394,11 @@ async def free_image_search(query, limit=8):
         for x in results:
             url = x.get("img_src") or x.get("thumbnail_src") or ""
             if not url.startswith(("http://", "https://")): continue
-            url = clean_url(url)
-            if url in seen: continue
-            seen.add(url)
-            images.append({"url": url, "title": x.get("title", ""), "source": x.get("source", "")})
+            original_url = url
+            dedupe_url = clean_url(url)
+            if dedupe_url in seen: continue
+            seen.add(dedupe_url)
+            images.append({"url": original_url, "title": x.get("title", ""), "source": x.get("source", "")})
             if len(images) >= limit: break
         return images
     except Exception as e:
@@ -416,7 +417,27 @@ async def send_rich_slideshow(chat_id, images, subject, reply_to_id=None):
     if reply_to_id is not None: kwargs["reply_parameters"] = ReplyParameters(message_id=reply_to_id)
     return await bot.send_rich_message(**kwargs)
 
+def render_math_markup(text):
+    """Convert common LaTeX delimiters into Telegram Rich HTML math tags."""
+    if not text: return text
+    protected = []
+    def protect(match):
+        protected.append(match.group(0))
+        return f"\x00MATH{len(protected)-1}\x00"
+    # Protect existing Telegram math tags and code blocks so their contents are untouched.
+    text = re.sub(r"<tg-math>.*?</tg-math>|<tg-math-block>.*?</tg-math-block>|<pre>.*?</pre>|<code>.*?</code>", protect, text, flags=re.I | re.S)
+    # Block math: $$...$$ and \[...\].
+    text = re.sub(r"\$\$(.+?)\$\$", lambda m: f"<tg-math-block>{html.escape(m.group(1).strip())}</tg-math-block>", text, flags=re.S)
+    text = re.sub(r"\\\[(.+?)\\\]", lambda m: f"<tg-math-block>{html.escape(m.group(1).strip())}</tg-math-block>", text, flags=re.S)
+    # Inline math: \(...\). Raw LaTeX is expected by Telegram, so escape only HTML-significant chars.
+    text = re.sub(r"\\\((.+?)\\\)", lambda m: f"<tg-math>{html.escape(m.group(1).strip())}</tg-math>", text, flags=re.S)
+    # Restore protected content.
+    for i, value in enumerate(protected):
+        text = text.replace(f"\x00MATH{i}\x00", value)
+    return text
+
 async def send_ai_response(chat_id, msg_id, response_text, is_private):
+    response_text = render_math_markup(response_text)
     rich = InputRichMessage(html=response_text)
     kwargs = {"chat_id": chat_id, "rich_message": rich}
     if not is_private: kwargs["reply_parameters"] = ReplyParameters(message_id=msg_id)
@@ -436,7 +457,7 @@ def clean_ai_output(text):
     text = (text or "I didn't receive a response.").strip()
     text = re.sub(r"^```(?:html)?\s*", "", text, flags=re.I)
     text = re.sub(r"\s*```$", "", text)
-    return text.strip()
+    return render_math_markup(text).strip()
 
 @router.message(F.community_chat_added)
 async def handle_community_added(message): print(f"Community binding topology registered: {message.chat.id}")
@@ -470,6 +491,8 @@ async def handle_conversation(message):
     prompt = text
     if bot_username: prompt = re.sub(re.escape(bot_username), "", prompt, flags=re.I)
     prompt = re.sub(r"@gemini\b", "", prompt, flags=re.I).strip()
+    # Ignore a bare bot mention, including a mention wrapped in Markdown-style fences.
+    if not re.sub(r"```(?:\w+)?", "", prompt).strip(): return
     uid, cid, mid = message.from_user.id, message.chat.id, message.message_id
     cooldown = f"cooldown:{uid}"
     if await redis_client.exists(cooldown):
@@ -521,7 +544,8 @@ async def handle_conversation(message):
             "If joking or sarcastic, match the energy.\n"
             "If you do not know, say exactly: 'I don't have enough details to answer that accurately' without guessing.\n"
             "Do not assume personal details unless explicitly present in the memory list.\n"
-            "Return Telegram Rich HTML for sendRichMessage. You may use Rich HTML such as <h1>-<h6>, <p>, <b>, <i>, <u>, <s>, <code>, <pre>, <table>, <details>, <a href=\"URL\">text</a>, lists and blockquotes.\n"
+            "Return Telegram Rich HTML for sendRichMessage. You may use Rich HTML such as <h1>-<h6>, <p>, <b>, <i>, <u>, <s>, <code>, <pre>, <table>, <details>, <a href=\"URL\">text</a>, lists, blockquotes, <tg-math>inline LaTeX</tg-math>, and <tg-math-block>display LaTeX</tg-math-block>.\n"
+            "For mathematical answers, prefer <tg-math-block> for standalone equations and <tg-math> for inline equations. Put raw LaTeX inside those tags. You may also use $$...$$, \\[...\\], or \\(...\\) when useful; the bot converts those delimiters to Telegram math rendering automatically.\n"
             "Do not use Markdown formatting or Markdown tables."
         )
         if saved: instructions += "\nUser memory directives:\n" + "\n".join(f"- {x}" for x in saved)
