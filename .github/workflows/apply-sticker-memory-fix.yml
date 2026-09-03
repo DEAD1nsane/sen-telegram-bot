@@ -1,0 +1,72 @@
+name: Apply sticker and memory fixes
+
+on:
+  push:
+    paths:
+      - .github/workflows/apply-sticker-memory-fix.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Patch main.py
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("main.py")
+          text = path.read_text()
+
+          old = '@router.message(F.text | F.caption | F.voice | F.photo | F.sticker)'
+          new = '@router.message(F.text | F.caption | F.voice | F.photo)'
+          if old not in text:
+              raise SystemExit("Expected conversation handler was not found")
+          text = text.replace(old, new, 1)
+
+          old = '''    elif message.sticker:\n        media_bytes, media_mime, media_description = await get_sticker_input(message)\n    elif message.photo:\n'''
+          new = '''    elif message.photo:\n'''
+          if old not in text:
+              raise SystemExit("Expected direct sticker media branch was not found")
+          text = text.replace(old, new, 1)
+
+          old = '''    if message.reply_to_message:\n        replied_context = message.reply_to_message.text or message.reply_to_message.caption or ""\n        if message.reply_to_message.sticker:\n            replied_context += f"\\n[Replied-to message contains a sticker: {message.reply_to_message.sticker.emoji or 'sticker'}]"\n\n    media_bytes, media_mime, media_description = None, None, ""\n'''
+          new = '''    if message.reply_to_message:\n        replied_context = message.reply_to_message.text or message.reply_to_message.caption or ""\n        if message.reply_to_message.sticker:\n            replied_context += f"\\n[Replied-to message contains a sticker: {message.reply_to_message.sticker.emoji or 'sticker'}]"\n\n    media_bytes, media_mime, media_description = None, None, ""\n'''
+          if old not in text:
+              raise SystemExit("Expected reply context block was not found")
+          # Keep this block unchanged. Sticker media is attached only below when the user replies to a sticker.
+
+          old = '''    if message.voice:\n        media_bytes = await download_telegram_media(message.voice.file_id)\n        media_mime = getattr(message.voice, "mime_type", None) or "audio/ogg"\n        media_description = "Voice note"\n    elif message.photo:\n        media_bytes = await download_telegram_media(message.photo[-1].file_id)\n        media_mime = "image/jpeg"\n        media_description = "Photo"\n\n    if not prompt and replied_context and not media_bytes: prompt = "What are your thoughts on this?"\n'''
+          new = '''    if message.voice:\n        media_bytes = await download_telegram_media(message.voice.file_id)\n        media_mime = getattr(message.voice, "mime_type", None) or "audio/ogg"\n        media_description = "Voice note"\n    elif message.photo:\n        media_bytes = await download_telegram_media(message.photo[-1].file_id)\n        media_mime = "image/jpeg"\n        media_description = "Photo"\n\n    # A sticker is context only when the user replies to that sticker.\n    # Sending a sticker by itself must never trigger Sen.\n    if message.reply_to_message and message.reply_to_message.sticker and not media_bytes:\n        media_bytes, media_mime, media_description = await get_sticker_input(message.reply_to_message)\n\n    if not prompt and replied_context and not media_bytes: prompt = "What are your thoughts on this?"\n'''
+          if old not in text:
+              raise SystemExit("Expected media selection block was not found")
+          text = text.replace(old, new, 1)
+
+          old = '    has_media_input = bool(message.photo or message.sticker or message.voice)\n'
+          new = '    has_media_input = bool(message.photo or message.voice)\n'
+          if old not in text:
+              raise SystemExit("Expected media trigger expression was not found")
+          text = text.replace(old, new, 1)
+
+          old = '    share_blocks = [InputRichBlockSectionHeading(text=f"What Sen Remembers for {safe_first_name}", size=2)]\n'
+          new = '    share_blocks = [InputRichBlockSectionHeading(text=f"What Sen Remembers for {safe_first_name}", size=3)]\n'
+          if old not in text:
+              raise SystemExit("Expected shared-memory header was not found")
+          text = text.replace(old, new, 1)
+
+          path.write_text(text)
+          PY
+
+      - name: Commit and remove temporary workflow
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add main.py
+          git rm .github/workflows/apply-sticker-memory-fix.yml
+          git commit -m "fix: use stickers only as replied media context"
+          git push
