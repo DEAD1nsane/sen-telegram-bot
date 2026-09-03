@@ -1,1 +1,0 @@
-Telegram Rich Math support is implemented in main.py.
