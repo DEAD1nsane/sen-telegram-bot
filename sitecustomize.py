@@ -1,10 +1,10 @@
 """Compatibility hook for Telegram RichMessage media.
 
-Telegram Rich Messages can contain RichBlockVideo objects inside
-Message.rich_message.blocks instead of populating Message.video.
-Sen's existing media pipeline expects Message.video, so expose a
-read-only compatibility view for rich video blocks without changing
-Telegram's parsed update data.
+Telegram Rich Messages can contain video-like media as RichBlockVideo or
+RichBlockAnimation objects inside Message.rich_message.blocks instead of
+populating Message.video. Sen's existing media pipeline expects Message.video,
+so expose a read-only compatibility view without changing Telegram's parsed
+update data.
 """
 
 from aiogram.types import Message
@@ -32,10 +32,10 @@ def _find_rich_video(obj, seen=None):
 
     if isinstance(obj, dict):
         block_type = str(obj.get("type", "")).lower()
-        if block_type == "video":
-            video = obj.get("video")
-            if video and (video.get("file_id") if isinstance(video, dict) else getattr(video, "file_id", None)):
-                return video
+        if block_type in {"video", "animation"}:
+            media = obj.get("video") if block_type == "video" else obj.get("animation")
+            if media and (media.get("file_id") if isinstance(media, dict) else getattr(media, "file_id", None)):
+                return media
         for key in ("blocks", "items", "cells"):
             value = obj.get(key)
             found = _find_rich_video(value, seen)
@@ -44,10 +44,10 @@ def _find_rich_video(obj, seen=None):
         return None
 
     block_type = str(getattr(obj, "type", "")).lower()
-    if block_type == "video":
-        video = getattr(obj, "video", None)
-        if video is not None and getattr(video, "file_id", None):
-            return video
+    if block_type in {"video", "animation"}:
+        media = getattr(obj, "video", None) if block_type == "video" else getattr(obj, "animation", None)
+        if media is not None and getattr(media, "file_id", None):
+            return media
 
     for attr in ("blocks", "items", "cells"):
         try:
