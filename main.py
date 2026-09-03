@@ -246,7 +246,7 @@ async def handle_memory_share(callback):
         await callback.answer("Your memory list is empty! Nothing to share.", show_alert=True); return
     first_name = (getattr(callback.from_user, "first_name", "") or "").strip() or "User"
     safe_first_name = html.escape(first_name)
-    share_blocks = [InputRichBlockSectionHeading(text=f"What Sen Remembers for {safe_first_name}", size=2)]
+    share_blocks = [InputRichBlockSectionHeading(text=f"What Sen Remembers for {safe_first_name}", size=3)]
     share_blocks.append(InputRichBlockList(items=[
         InputRichBlockListItem(blocks=[InputRichBlockParagraph(text=rich_text_from_markup(memory))], value=i, type="1")
         for i, memory in enumerate(memories, 1)
@@ -460,7 +460,7 @@ async def handle_community_added(message): print(f"Community binding topology re
 @router.message(F.community_chat_removed)
 async def handle_community_removed(message): print(f"Community dropping context safely absorbed: {message.chat.id}")
 
-@router.message(F.text | F.caption | F.voice | F.photo | F.sticker)
+@router.message(F.text | F.caption | F.voice | F.photo)
 async def handle_conversation(message):
     if message.audio is not None: return
     action = await get_interaction(message.chat.id, message.from_user.id)
@@ -475,7 +475,7 @@ async def handle_conversation(message):
     tagged = bool(bot_username) and bot_username.lower() in lower
     tagged = tagged or "@gemini" in lower
     reply_to_bot = bool(message.reply_to_message and BOT_INFO and message.reply_to_message.from_user and message.reply_to_message.from_user.id == BOT_INFO.id)
-    has_media_input = bool(message.photo or message.sticker or message.voice)
+    has_media_input = bool(message.photo or message.voice)
 
     if message.voice is not None:
         if not (tagged or reply_to_bot): return
@@ -504,12 +504,15 @@ async def handle_conversation(message):
         media_bytes = await download_telegram_media(message.voice.file_id)
         media_mime = getattr(message.voice, "mime_type", None) or "audio/ogg"
         media_description = "Voice note"
-    elif message.sticker:
-        media_bytes, media_mime, media_description = await get_sticker_input(message)
     elif message.photo:
         media_bytes = await download_telegram_media(message.photo[-1].file_id)
         media_mime = "image/jpeg"
         media_description = "Photo"
+
+    # A sticker is context only when the user replies to that sticker.
+    # Sending a sticker by itself must never trigger Sen.
+    if message.reply_to_message and message.reply_to_message.sticker and not media_bytes:
+        media_bytes, media_mime, media_description = await get_sticker_input(message.reply_to_message)
 
     if not prompt and replied_context and not media_bytes: prompt = "What are your thoughts on this?"
     if not (prompt or replied_context or media_bytes): return
