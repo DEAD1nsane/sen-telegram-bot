@@ -11,9 +11,9 @@ from aiogram.types import (
     Message, FSInputFile, CallbackQuery, BotCommand,
     BotCommandScopeAllGroupChats, BotCommandScopeAllPrivateChats,
     BotCommandScopeAllChatAdministrators, ReplyParameters,
-    InputMediaPhoto, InputRichMessage, InputRichBlockParagraph,
+    InputRichMessage, InputRichBlockParagraph,
     InputRichBlockSectionHeading, InputRichBlockButtons, InputRichBlockList,
-    InputRichBlockListItem, InputRichBlockSlideshow, InputRichBlockPhoto,
+    InputRichBlockListItem,
     RichMessageButton, RichTextBold, RichTextItalic, RichTextUnderline,
     RichTextStrikethrough, RichTextCode, EphemeralMessageParameters,
 )
@@ -352,16 +352,6 @@ def detect_search_intent(text):
     markers = ("search", "google", "look up", "lookup", "find out", "latest", "newest", "recent", "today", "tonight", "this week", "right now", "currently", "news", "headlines", "what happened", "who won", "score", "price", "release date", "schedule", "status", "update", "source", "sources")
     return any(m in t for m in markers)
 
-def detect_media_intent(text):
-    t = text.lower()
-    return any(m in t for m in ("slideshow", "slide show", "show me pictures", "show me images", "show me photos", "images of", "pictures of", "photos of", "photo of", "picture of"))
-
-def media_subject(text):
-    cleaned = re.sub(r"\b(?:please\s+)?(?:make|create|show|give)\s+(?:me\s+)?", "", text, flags=re.I)
-    cleaned = re.sub(r"\b(?:a\s+)?(?:slideshow|slide\s+show)\s+(?:of|about)\s+", "", cleaned, flags=re.I)
-    cleaned = re.sub(r"\b(?:pictures?|photos?|images?)\s+(?:of|about)\s+", "", cleaned, flags=re.I)
-    return cleaned.strip(" ?!.,") or "planets"
-
 async def searx_request(query, category="general", time_range=None, page=1, limit=10):
     params = {"q": query, "format": "json", "categories": category, "language": "en", "pageno": page, "safesearch": 1}
     if time_range: params["time_range"] = time_range
@@ -386,55 +376,6 @@ async def free_web_search(query, news=False):
     except Exception as e:
         print(f"Web contextual search failure: {e}")
         return ""
-
-async def free_image_search(query, limit=8):
-    try:
-        results = await searx_request(query, "images", None, 1, 12)
-        seen, images = set(), []
-        for x in results:
-            url = x.get("img_src") or x.get("thumbnail_src") or ""
-            if not url.startswith(("http://", "https://")): continue
-            original_url = url
-            dedupe_url = clean_url(url)
-            if dedupe_url in seen: continue
-            seen.add(dedupe_url)
-            images.append({"url": original_url, "title": x.get("title", ""), "source": x.get("source", "")})
-            if len(images) >= limit: break
-        return images
-    except Exception as e:
-        print(f"Image search failure: {e}")
-        return []
-
-async def send_rich_slideshow(chat_id, images, subject, reply_to_id=None):
-    if not images: return None
-    blocks = [InputRichBlockPhoto(photo=InputMediaPhoto(media=x["url"])) for x in images[:8]]
-    rich = InputRichMessage(blocks=[
-        InputRichBlockSectionHeading(text=f"{subject.title()} Slideshow", size=2),
-        InputRichBlockSlideshow(blocks=blocks),
-        InputRichBlockParagraph(text=f"Free image search results for {subject}."),
-    ])
-    kwargs = {"chat_id": chat_id, "rich_message": rich}
-    if reply_to_id is not None: kwargs["reply_parameters"] = ReplyParameters(message_id=reply_to_id)
-    return await bot.send_rich_message(**kwargs)
-
-def render_math_markup(text):
-    """Convert common LaTeX delimiters into Telegram Rich HTML math tags."""
-    if not text: return text
-    protected = []
-    def protect(match):
-        protected.append(match.group(0))
-        return f"\x00MATH{len(protected)-1}\x00"
-    # Protect existing Telegram math tags and code blocks so their contents are untouched.
-    text = re.sub(r"<tg-math>.*?</tg-math>|<tg-math-block>.*?</tg-math-block>|<pre>.*?</pre>|<code>.*?</code>", protect, text, flags=re.I | re.S)
-    # Block math: $$...$$ and \[...\].
-    text = re.sub(r"\$\$(.+?)\$\$", lambda m: f"<tg-math-block>{html.escape(m.group(1).strip())}</tg-math-block>", text, flags=re.S)
-    text = re.sub(r"\\\[(.+?)\\\]", lambda m: f"<tg-math-block>{html.escape(m.group(1).strip())}</tg-math-block>", text, flags=re.S)
-    # Inline math: \(...\). Raw LaTeX is expected by Telegram, so escape only HTML-significant chars.
-    text = re.sub(r"\\\((.+?)\\\)", lambda m: f"<tg-math>{html.escape(m.group(1).strip())}</tg-math>", text, flags=re.S)
-    # Restore protected content.
-    for i, value in enumerate(protected):
-        text = text.replace(f"\x00MATH{i}\x00", value)
-    return text
 
 async def send_ai_response(chat_id, msg_id, response_text, is_private):
     response_text = render_math_markup(response_text)
@@ -516,15 +457,6 @@ async def handle_conversation(message):
         history_key = f"chat_history:{cid}:{uid}"
         raw_hist = await redis_client.lrange(history_key, 0, -1)
         history = [x.decode() if isinstance(x, bytes) else str(x) for x in raw_hist]
-
-        if detect_media_intent(prompt):
-            subject = media_subject(prompt)
-            images = await free_image_search(subject)
-            if images:
-                try:
-                    await send_rich_slideshow(cid, images, subject, None if is_private else mid)
-                    return
-                except Exception as e: print(f"Rich slideshow delivery error: {e}")
 
         use_search = detect_search_intent(prompt)
         news = bool(re.search(r"\b(?:news|headlines|latest|today|breaking|recent)\b", prompt, re.I))
