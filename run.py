@@ -1,13 +1,15 @@
 """Reliable Railway entry point.
 
-Loads the RichMessage media compatibility hook before importing the bot,
-then starts the existing async main() function.
+Loads compatibility hooks before starting the existing bot main() function.
 """
 
 import asyncio
 
 import sitecustomize  # noqa: F401,E402
 import main
+import runtime_patch
+
+runtime_patch.install(main)
 
 
 if __name__ == "__main__":
