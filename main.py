@@ -503,7 +503,7 @@ def render_math_markup(text):
         return f"\x00MATH{len(protected)-1}\x00"
     text = re.sub(r"<tg-math>.*?</tg-math>|<tg-math-block>.*?</tg-math-block>|<pre>.*?</pre>|<code>.*?</code>", protect, text, flags=re.I | re.S)
     text = re.sub(r"\$\$(.+?)\$\$", lambda m: f"<tg-math-block>{html.escape(m.group(1).strip())}</tg-math-block>", text, flags=re.S)
-    text = re.sub(r"\\\[(.+?)\\\]", lambda m: f"<tg-math-block>{html.escape(m.group1.strip())}</tg-math-block>", text, flags=re.S)
+    text = re.sub(r"\\\[(.+?)\\\]", lambda m: f"<tg-math-block>{html.escape(m.group(1).strip())}</tg-math-block>", text, flags=re.S)
     text = re.sub(r"\\\((.+?)\\\)", lambda m: f"<tg-math>{html.escape(m.group(1).strip())}</tg-math>", text, flags=re.S)
     for i, value in enumerate(protected):
         text = text.replace(f"\x00MATH{i}\x00", value)
@@ -529,9 +529,6 @@ def sanitize_rich_html(text):
     text = re.sub(r"<ul\b[^>]*>|</ul>|<ol\b[^>]*>|</ol>", "", text, flags=re.I)
     text = re.sub(r"<li\b[^>]*>", "• ", text, flags=re.I)
     text = re.sub(r"</li>", "\n", text, flags=re.I)
-
-    # Normalize accidental HTML wrappers without touching supported rich tags,
-    # especially <details>, <table>, <tg-math>, and <tg-slideshow>.
     text = re.sub(r"\n{3,}", "\n\n", text)
     return text.strip()
 
