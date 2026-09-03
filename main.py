@@ -52,9 +52,14 @@ BOT_INFO = None
 
 INTERACTION_TTL = 300
 MENU_TTL = 30
+SEARCH_CACHE_TTL = 60
+MENTION_ONLY_RE = re.compile(r"^(?:@[A-Za-z0-9_]{5,32}\s*)+$")
 
 def interaction_key(chat_id, user_id): return f"memory_interaction:{chat_id}:{user_id}"
 def menu_identity_key(chat_id, user_id): return f"memory_menu_identity:{chat_id}:{user_id}"
+
+def search_cache_key(query, news):
+    return f"web_search:{'news' if news else 'general'}:{query.strip().lower()}"
 
 async def set_interaction(chat_id, user_id, action):
     await redis_client.set(interaction_key(chat_id, user_id), action, ex=INTERACTION_TTL)
@@ -376,32 +381,116 @@ def clean_url(url):
         return urlunsplit((p.scheme, p.netloc, p.path, "", ""))
     except Exception: return url
 
+def normalize_search_query(query):
+    query = re.sub(r"\s+", " ", (query or "")).strip()
+    query = re.sub(
+        r"^\s*(?:please\s+)?(?:google\s+)?(?:search|look\s+up|lookup|find(?:\s+out)?|search\s+the\s+web)\s*(?:for|about|on)?\s*",
+        "",
+        query,
+        flags=re.I,
+    )
+    query = re.sub(
+        r"^\s*(?:please\s+)?(?:send|give|show|fetch|get)\s+me\s+(?:some\s+|the\s+)?",
+        "",
+        query,
+        flags=re.I,
+    )
+    query = re.sub(
+        r"\s*,?\s*(?:in|inside)\s+(?:collapsible|expandable)\s+(?:sections?|blocks?).*$",
+        "",
+        query,
+        flags=re.I | re.S,
+    )
+    query = re.sub(
+        r"\s+(?:and\s+)?(?:format|present|display|organize|put)\s+(?:it|them|the\s+results?)\s+.*$",
+        "",
+        query,
+        flags=re.I | re.S,
+    )
+    return re.sub(r"\s+", " ", query).strip(" ,.-")
+
 def detect_search_intent(text):
-    t = text.lower()
-    markers = ("search", "google", "look up", "lookup", "find out", "latest", "newest", "recent", "today", "tonight", "this week", "right now", "currently", "news", "headlines", "what happened", "who won", "score", "price", "release date", "schedule", "status", "update", "source", "sources")
-    return any(m in t for m in markers)
+    t = re.sub(r"\s+", " ", (text or "")).strip().lower()
+    if not t: return False
+    explicit_markers = (
+        "search", "google", "look up", "lookup", "find out", "search the web",
+        "browse", "web search", "internet", "online", "news", "headlines",
+        "latest", "newest", "recent", "today", "tonight", "this week",
+        "right now", "currently", "what happened", "who won", "score",
+        "price", "release date", "schedule", "status", "update", "source", "sources",
+    )
+    if any(marker in t for marker in explicit_markers):
+        return True
+    question = re.search(r"\b(?:who|what|when|where|why|how|does|do|did|is|are|can|could|will|has|have)\b", t)
+    return bool(question and len(t.split()) >= 5)
 
 async def searx_request(query, category="general", time_range=None, page=1, limit=10):
-    params = {"q": query, "format": "json", "categories": category, "language": "en", "pageno": page, "safesearch": 1}
+    params = {
+        "q": query,
+        "format": "json",
+        "categories": category,
+        "language": "en",
+        "pageno": page,
+        "safesearch": 1,
+    }
     if time_range: params["time_range"] = time_range
     headers = {"User-Agent": "Mozilla/5.0 (Telegram Sen Bot)", "Accept": "application/json"}
-    async with httpx.AsyncClient(follow_redirects=True, timeout=10.0) as client:
+    async with httpx.AsyncClient(follow_redirects=True, timeout=12.0) as client:
         r = await client.get(SEARXNG_URL, params=params, headers=headers)
-        if r.status_code != 200: raise RuntimeError(f"SearXNG HTTP {r.status_code}: {r.text[:200]}")
-        return r.json().get("results", [])[:limit]
+        if r.status_code != 200:
+            raise RuntimeError(f"SearXNG HTTP {r.status_code}: {r.text[:200]}")
+        payload = r.json()
+        return payload.get("results", []) or []
 
 async def free_web_search(query, news=False):
+    search_query = normalize_search_query(query)
+    if not search_query:
+        return ""
+
+    cache_key = search_cache_key(search_query, news)
     try:
-        results = await searx_request(query, "news" if news else "general", "day" if news else None, 1, 8)
-        if not results and news: results = await searx_request(query, "general", "month", 1, 8)
+        cached = await redis_client.get(cache_key)
+        if cached:
+            return cached.decode() if isinstance(cached, bytes) else str(cached)
+    except Exception as e:
+        print(f"Web search cache read failure: {e}")
+
+    try:
+        if news:
+            results = await searx_request(search_query, "news", "day", 1, 8)
+            if not results:
+                results = await searx_request(search_query, "news", "week", 1, 8)
+            if not results:
+                results = await searx_request(search_query, "general", "month", 1, 8)
+        else:
+            results = await searx_request(search_query, "general", None, 1, 8)
+
         seen, out = set(), []
-        for x in results:
-            url = clean_url(x.get("url", ""))
-            key = url or (x.get("title", "").lower(), x.get("content", "")[:80].lower())
-            if key in seen: continue
+        for result in results:
+            title = (result.get("title") or "").strip()
+            content = (result.get("content") or result.get("snippet") or "").strip()
+            url = clean_url(result.get("url", ""))
+            published = (result.get("publishedDate") or result.get("published_date") or "").strip()
+            source = (result.get("engine") or result.get("source") or "").strip()
+            key = url.lower() if url else (title.lower(), content[:120].lower())
+            if key in seen or not (title or content or url):
+                continue
             seen.add(key)
-            out.append(f"Title: {x.get('title','')}\nContent: {x.get('content','')}\nURL: {url}")
-        return "\n\n".join(out)
+            lines = []
+            if title: lines.append(f"Title: {title}")
+            if source: lines.append(f"Source: {source}")
+            if published: lines.append(f"Published: {published}")
+            if content: lines.append(f"Content: {content}")
+            if url: lines.append(f"URL: {url}")
+            out.append("\n".join(lines))
+
+        result_text = "\n\n".join(out)
+        if result_text:
+            try:
+                await redis_client.set(cache_key, result_text, ex=SEARCH_CACHE_TTL)
+            except Exception as e:
+                print(f"Web search cache write failure: {e}")
+        return result_text
     except Exception as e:
         print(f"Web contextual search failure: {e}")
         return ""
@@ -414,14 +503,40 @@ def render_math_markup(text):
         return f"\x00MATH{len(protected)-1}\x00"
     text = re.sub(r"<tg-math>.*?</tg-math>|<tg-math-block>.*?</tg-math-block>|<pre>.*?</pre>|<code>.*?</code>", protect, text, flags=re.I | re.S)
     text = re.sub(r"\$\$(.+?)\$\$", lambda m: f"<tg-math-block>{html.escape(m.group(1).strip())}</tg-math-block>", text, flags=re.S)
-    text = re.sub(r"\\\[(.+?)\\\]", lambda m: f"<tg-math-block>{html.escape(m.group(1).strip())}</tg-math-block>", text, flags=re.S)
+    text = re.sub(r"\\\[(.+?)\\\]", lambda m: f"<tg-math-block>{html.escape(m.group1.strip())}</tg-math-block>", text, flags=re.S)
     text = re.sub(r"\\\((.+?)\\\)", lambda m: f"<tg-math>{html.escape(m.group(1).strip())}</tg-math>", text, flags=re.S)
     for i, value in enumerate(protected):
         text = text.replace(f"\x00MATH{i}\x00", value)
     return text
 
+def sanitize_rich_html(text):
+    """Remove/translate HTML block tags that Telegram's rich HTML parser rejects."""
+    if not text:
+        return text
+
+    # Telegram Rich HTML accepts these concepts, but <p> and heading tags are
+    # represented by explicit rich blocks rather than accepted HTML tags.
+    text = re.sub(r"<p\b[^>]*>", "", text, flags=re.I)
+    text = re.sub(r"</p>", "\n\n", text, flags=re.I)
+    text = re.sub(r"<h[1-6]\b[^>]*>(.*?)</h[1-6]>", r"<b>\1</b>\n\n", text, flags=re.I | re.S)
+    text = re.sub(r"<br\s*/?>", "\n", text, flags=re.I)
+    text = re.sub(r"<div\b[^>]*>", "", text, flags=re.I)
+    text = re.sub(r"</div>", "\n", text, flags=re.I)
+    text = re.sub(r"<section\b[^>]*>", "", text, flags=re.I)
+    text = re.sub(r"</section>", "\n", text, flags=re.I)
+    text = re.sub(r"<article\b[^>]*>", "", text, flags=re.I)
+    text = re.sub(r"</article>", "\n", text, flags=re.I)
+    text = re.sub(r"<ul\b[^>]*>|</ul>|<ol\b[^>]*>|</ol>", "", text, flags=re.I)
+    text = re.sub(r"<li\b[^>]*>", "• ", text, flags=re.I)
+    text = re.sub(r"</li>", "\n", text, flags=re.I)
+
+    # Normalize accidental HTML wrappers without touching supported rich tags,
+    # especially <details>, <table>, <tg-math>, and <tg-slideshow>.
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
+
 async def send_ai_response(chat_id, msg_id, response_text, is_private):
-    response_text = render_math_markup(response_text)
+    response_text = sanitize_rich_html(render_math_markup(response_text))
     rich = InputRichMessage(html=response_text)
     kwargs = {"chat_id": chat_id, "rich_message": rich}
     if not is_private: kwargs["reply_parameters"] = ReplyParameters(message_id=msg_id)
@@ -441,7 +556,7 @@ def clean_ai_output(text):
     text = (text or "I didn't receive a response.").strip()
     text = re.sub(r"^```(?:html)?\s*", "", text, flags=re.I)
     text = re.sub(r"\s*```$", "", text)
-    return render_math_markup(text).strip()
+    return sanitize_rich_html(render_math_markup(text)).strip()
 
 @router.message(F.community_chat_added)
 async def handle_community_added(message): print(f"Community binding topology registered: {message.chat.id}")
@@ -475,6 +590,13 @@ async def handle_conversation(message):
     prompt = text
     if bot_username: prompt = re.sub(re.escape(bot_username), "", prompt, flags=re.I)
     prompt = re.sub(r"@gemini\b", "", prompt, flags=re.I).strip()
+
+    # A reply to Sen containing only another user's mention is not a request
+    # for Sen. Keep the special case where the user replies with only
+    # @SenAnythangBot, which intentionally means "what do you think?".
+    if reply_to_bot and prompt and MENTION_ONLY_RE.fullmatch(prompt):
+        return
+
     if not re.sub(r"```(?:\w+)?", "", prompt).strip(): return
     uid, cid, mid = message.from_user.id, message.chat.id, message.message_id
     cooldown = f"cooldown:{uid}"
@@ -502,11 +624,13 @@ async def handle_conversation(message):
 
         use_search = detect_search_intent(prompt)
         news = bool(re.search(r"\b(?:news|headlines|latest|today|breaking|recent)\b", prompt, re.I))
-        search_context = await free_web_search(prompt, news=news) if use_search else ""
+        search_query = normalize_search_query(prompt)
+        search_context = await free_web_search(search_query, news=news) if use_search else ""
         context = []
         if replied_context: context.append(f'Message User is Replying To:\n"{replied_context}"')
         if history: context.append("Recent Conversation Context:\n" + "\n".join(history))
         if search_context: context.append("Web Search Context:\n" + search_context)
+        elif use_search: context.append("Web Search Context:\nA web search was requested, but no usable results were returned. Do not pretend that a search result supports a claim.")
         final_prompt = "\n\n".join(context) + ("\n\n" if context else "") + (prompt or "Process and answer this voice note.")
 
         today = datetime.now(timezone.utc).strftime("%A, %B %d, %Y")
@@ -518,12 +642,15 @@ async def handle_conversation(message):
             "If joking or sarcastic, match the energy.\n"
             "If you do not know, say exactly: 'I don't have enough details to answer that accurately' without guessing.\n"
             "Do not assume personal details unless explicitly present in the memory list.\n"
-            "Return Telegram Rich HTML for sendRichMessage. You may use Rich HTML such as <h1>-<h6>, <p>, <b>, <i>, <u>, <s>, <code>, <pre>, <table>, <details>, <a href=\"URL\">text</a>, lists, blockquotes, <tg-math>inline LaTeX</tg-math>, and <tg-math-block>display LaTeX</tg-math-block>.\n"
+            "Return Telegram Rich HTML for sendRichMessage. Use only HTML that Telegram Rich HTML actually supports: <b>, <strong>, <i>, <em>, <u>, <ins>, <s>, <strike>, <del>, <code>, <mark>, <sub>, <sup>, <tg-spoiler>, <a>, <tg-reference>, <tg-emoji>, <table>, <details>, <summary>, and Telegram rich tags such as <tg-math>, <tg-math-block>, <tg-slideshow>, and <tg-collage>.\n"
+            "Do NOT use <p>, <h1>-<h6>, <div>, <section>, <article>, <ul>, <ol>, or <li> in Rich HTML. Use normal newlines for paragraphs and <details><summary>...</summary>...</details> for collapsible sections.\n"
             "For mathematical answers, prefer <tg-math-block> for standalone equations and <tg-math> for inline equations. Put raw LaTeX inside those tags. You may also use $$...$$, \\[...\\], or \\(...\\) when useful; the bot converts those delimiters to Telegram math rendering automatically.\n"
+            "For current facts, news, prices, schedules, product information, Telegram features, or anything the user asks you to search/look up, use the supplied Web Search Context. Do not invent search results or claim a fact is current without supporting search context.\n"
             "Do not use Markdown formatting or Markdown tables."
         )
         if saved: instructions += "\nUser memory directives:\n" + "\n".join(f"- {x}" for x in saved)
-        if search_context: instructions += "\nUse Web Search Context for current facts. Do not invent facts not supported by it."
+        if search_context: instructions += "\nUse Web Search Context for current facts. Prefer the retrieved sources over stale model knowledge."
+        if use_search and not search_context: instructions += "\nA search was attempted but returned no usable results. Be explicit about that instead of fabricating sources or pretending to have searched."
         if history: instructions += "\nUse Recent Conversation Context for continuity without repeating it."
 
         safety = [types.SafetySetting(category=c, threshold="BLOCK_NONE") for c in ("HARM_CATEGORY_HATE_SPEECH", "HARM_CATEGORY_HARASSMENT", "HARM_CATEGORY_SEXUALLY_EXPLICIT", "HARM_CATEGORY_DANGEROUS_CONTENT")]
