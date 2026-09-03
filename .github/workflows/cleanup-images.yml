@@ -9,7 +9,7 @@ permissions:
 
 jobs:
   cleanup:
-    if: ${{ github.event.head_commit.message != 'Cleanup workflow' }}
+    if: ${{ github.event.head_commit.message != 'Run cleanup now' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
