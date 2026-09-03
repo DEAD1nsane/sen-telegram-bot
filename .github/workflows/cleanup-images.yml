@@ -9,7 +9,7 @@ permissions:
 
 jobs:
   cleanup:
-    if: ${{ !contains(github.event.head_commit.message, 'Remove image slideshow support') }}
+    if: ${{ github.event.head_commit.message != 'Cleanup workflow' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
