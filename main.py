@@ -455,12 +455,30 @@ async def get_sticker_input(message):
         return data, "image/webp", "Animated/video sticker thumbnail"
     return None, None, "Sticker (animated/video; no usable thumbnail)"
 
+async def generate_gemini_response(contents, config, max_attempts=4):
+    retry_delays = (2, 4, 8)
+    for attempt in range(max_attempts):
+        try:
+            return await gemini_client.aio.models.generate_content(
+                model="gemini-3.5-flash-lite",
+                contents=contents,
+                config=config,
+            )
+        except Exception as e:
+            s = str(e).upper()
+            retryable = "503" in s or "UNAVAILABLE" in s or "429" in s or "RESOURCE_EXHAUSTED" in s
+            if not retryable or attempt >= len(retry_delays):
+                raise
+            delay = retry_delays[attempt]
+            print(f"Gemini temporary failure ({str(e)[:180]}). Retrying in {delay}s, attempt {attempt + 2}/{max_attempts}.")
+            await asyncio.sleep(delay)
+
 @router.message(F.community_chat_added)
 async def handle_community_added(message): print(f"Community binding topology registered: {message.chat.id}")
 @router.message(F.community_chat_removed)
 async def handle_community_removed(message): print(f"Community dropping context safely absorbed: {message.chat.id}")
 
-@router.message(F.text | F.caption | F.voice | F.photo)
+@router.message(F.text | F.caption | F.voice | F.photo | F.video)
 async def handle_conversation(message):
     if message.audio is not None: return
     action = await get_interaction(message.chat.id, message.from_user.id)
@@ -475,10 +493,13 @@ async def handle_conversation(message):
     tagged = bool(bot_username) and bot_username.lower() in lower
     tagged = tagged or "@gemini" in lower
     reply_to_bot = bool(message.reply_to_message and BOT_INFO and message.reply_to_message.from_user and message.reply_to_message.from_user.id == BOT_INFO.id)
-    has_media_input = bool(message.photo or message.voice)
+    replied_video = bool(message.reply_to_message and message.reply_to_message.video)
+    has_media_input = bool(message.photo or message.voice or replied_video)
 
     if message.voice is not None:
         if not (tagged or reply_to_bot): return
+    elif message.video is not None:
+        if not (replied_video and (tagged or reply_to_bot)): return
     elif not (tagged or reply_to_bot or is_private): return
 
     prompt = text
@@ -498,6 +519,8 @@ async def handle_conversation(message):
         replied_context = message.reply_to_message.text or message.reply_to_message.caption or ""
         if message.reply_to_message.sticker:
             replied_context += f"\n[Replied-to message contains a sticker: {message.reply_to_message.sticker.emoji or 'sticker'}]"
+        if message.reply_to_message.video:
+            replied_context += "\n[Replied-to message contains a video]"
 
     media_bytes, media_mime, media_description = None, None, ""
     if message.voice:
@@ -513,6 +536,18 @@ async def handle_conversation(message):
     # Sending a sticker by itself must never trigger Sen.
     if message.reply_to_message and message.reply_to_message.sticker and not media_bytes:
         media_bytes, media_mime, media_description = await get_sticker_input(message.reply_to_message)
+
+    if replied_video and not media_bytes:
+        video = message.reply_to_message.video
+        if video.file_size and video.file_size > 20 * 1024 * 1024:
+            await message.answer("That video is over Telegram's 20 MB bot download limit, so I can't inspect it.", reply_to_message_id=None if is_private else mid)
+            return
+        media_bytes = await download_telegram_media(video.file_id)
+        media_mime = getattr(video, "mime_type", None) or "video/mp4"
+        media_description = "Replied-to video"
+        if not media_bytes:
+            await message.answer("I couldn't download that video to inspect it. Try sending the video again and reply to it.", reply_to_message_id=None if is_private else mid)
+            return
 
     if not prompt and replied_context and not media_bytes: prompt = "What are your thoughts on this?"
     if not (prompt or replied_context or media_bytes): return
@@ -564,10 +599,9 @@ async def handle_conversation(message):
         else:
             contents = final_prompt
 
-        response = await gemini_client.aio.models.generate_content(
-            model="gemini-3.5-flash-lite",
-            contents=contents,
-            config=types.GenerateContentConfig(system_instruction=instructions, safety_settings=safety),
+        response = await generate_gemini_response(
+            contents,
+            types.GenerateContentConfig(system_instruction=instructions, safety_settings=safety),
         )
         response_text = clean_ai_output(response.text)
 
@@ -598,7 +632,13 @@ async def handle_conversation(message):
         await redis_client.ltrim(history_key, -10, -1)
     except Exception as e:
         print(f"Gemini AI processing error: {e}")
-        error = "Whoa, I'm getting a little overwhelmed! Let me catch my breath." if "429" in str(e) else "I am currently broken right now, the owner needs to fix me."
+        s = str(e).upper()
+        if "503" in s or "UNAVAILABLE" in s:
+            error = "Whoa, I'm getting a little overwhelmed! Let me catch my breath. Try again in about 15 seconds."
+        elif "429" in s or "RESOURCE_EXHAUSTED" in s:
+            error = "Whoa, I'm getting a little overwhelmed! Let me catch my breath. Try again in about 10 seconds."
+        else:
+            error = "I ran into an unexpected problem processing that request."
         await message.answer(error, reply_to_message_id=None if is_private else mid)
 
 async def health_check(request): return web.json_response({"status":"ok","bot":BOT_INFO.username if BOT_INFO else None})
