@@ -446,7 +446,7 @@ async def handle_community_added(message): print(f"Community binding topology re
 @router.message(F.community_chat_removed)
 async def handle_community_removed(message): print(f"Community dropping context safely absorbed: {message.chat.id}")
 
-@router.message(F.text | F.caption | F.voice)
+@router.message(F.text | F.caption | F.voice | F.sticker)
 async def handle_conversation(message):
     if message.audio is not None: return
     action = await get_interaction(message.chat.id, message.from_user.id)
@@ -461,6 +461,7 @@ async def handle_conversation(message):
     if message.voice is not None:
         if not (tagged or reply_to_bot): return
     elif not (tagged or reply_to_bot or is_private): return
+    if message.sticker and not (reply_to_bot or is_private): return
     prompt = text
     if bot_username: prompt = re.sub(re.escape(bot_username), "", prompt, flags=re.I)
     prompt = re.sub(r"@gemini\b", "", prompt, flags=re.I).strip()
@@ -472,11 +473,40 @@ async def handle_conversation(message):
     await redis_client.set(cooldown, "1", ex=4)
     replied_context = ""; audio_bytes, audio_mime = None, "audio/ogg"
     if message.reply_to_message: replied_context = message.reply_to_message.text or message.reply_to_message.caption or ""
+    sticker_bytes, sticker_mime = None, None
     if message.voice:
         file_info = await bot.get_file(message.voice.file_id); stream = await bot.download_file(file_info.file_path)
         if stream: audio_bytes = stream.read()
         audio_mime = getattr(message.voice, "mime_type", None) or audio_mime
+    elif message.sticker:
+        try:
+            sticker = message.sticker
+            # Static stickers are native WebP images, which Gemini supports directly.
+            if not sticker.is_animated and not sticker.is_video:
+                file_info = await bot.get_file(sticker.file_id)
+                stream = await bot.download_file(file_info.file_path)
+                if stream:
+                    sticker_bytes = stream.read()
+                    sticker_mime = "image/webp"
+            elif sticker.is_video:
+                # Telegram video stickers are VP9/WebM and Gemini supports video/webm.
+                file_info = await bot.get_file(sticker.file_id)
+                stream = await bot.download_file(file_info.file_path)
+                if stream:
+                    sticker_bytes = stream.read()
+                    sticker_mime = "video/webm"
+            elif sticker.thumbnail:
+                # TGS/Lottie is not a Gemini input format, so use Telegram's JPG/WEBP preview.
+                file_info = await bot.get_file(sticker.thumbnail.file_id)
+                stream = await bot.download_file(file_info.file_path)
+                if stream:
+                    sticker_bytes = stream.read()
+                    sticker_mime = "image/jpeg"
+        except Exception as sticker_error:
+            print(f"Sticker media acquisition error: {sticker_error}")
     if not prompt and replied_context: prompt = "What are your thoughts on this?"
+    if message.sticker and not prompt and not replied_context:
+        prompt = "Describe this sticker and tell me what it appears to depict."
     if not (prompt or replied_context or audio_bytes): return
     try:
         saved = await get_memories(str(uid)); history_key = f"chat_history:{cid}:{uid}"; raw_hist = await redis_client.lrange(history_key, 0, -1); history = [x.decode() if isinstance(x, bytes) else str(x) for x in raw_hist]
@@ -488,13 +518,18 @@ async def handle_conversation(message):
         elif use_search: context.append("Web Search Context:\nA web search was requested, but no usable results were returned. Do not pretend that a search result supports a claim.")
         final_prompt = "\n\n".join(context) + ("\n\n" if context else "") + (prompt or "Process and answer this voice note.")
         today = datetime.now(timezone.utc).strftime("%A, %B %d, %Y")
-        instructions = (f"Today's date is {today}.\nNever use standard AI pleasantries.\nKeep casual replies brief, but expand when asked for detail.\nIf the user changes subject, immediately follow the new subject.\nIf joking or sarcastic, match the energy.\nIf you do not know, say exactly: 'I don't have enough details to answer that accurately' without guessing.\nDo not assume personal details unless explicitly present in the memory list.\nReturn Telegram Rich HTML for sendRichMessage. Use only HTML that Telegram Rich HTML actually supports: <b>, <strong>, <i>, <em>, <u>, <ins>, <s>, <strike>, <del>, <code>, <mark>, <sub>, <sup>, <tg-spoiler>, <a>, <tg-reference>, <tg-emoji>, <table>, <details>, <summary>, and Telegram rich tags such as <tg-math>, <tg-math-block>, <tg-slideshow>, and <tg-collage>.\nDo NOT use <p>, <h1>-<h6>, <div>, <section>, <article>, <ul>, <ol>, or <li> in Rich HTML. Use normal newlines for paragraphs and <details><summary>...</summary>...</details> for collapsible sections.\nFor mathematical answers, prefer <tg-math-block> for standalone equations and <tg-math> for inline equations. Put raw LaTeX inside those tags. You may also use $$...$$, \\[...\\], or \\(...\\) when useful; the bot converts those delimiters to Telegram math rendering automatically.\nFor current facts, news, prices, schedules, product information, Telegram features, or anything the user asks you to search/look up, use the supplied Web Search Context. Do not invent search results or claim a fact is current without supporting search context.\nDo not use Markdown formatting or Markdown tables.")
+        instructions = (f"Today's date is {today}.\nNever use standard AI pleasantries.\nKeep casual replies brief, but expand when asked for detail.\nIf the user changes subject, immediately follow the new subject.\nIf joking or sarcastic, match the energy.\nIf you do not know, say exactly: 'I don't have enough details to answer that accurately' without guessing.\nDo not assume personal details unless explicitly present in the memory list.\nReturn Telegram Rich HTML for sendRichMessage. Use only HTML that Telegram Rich HTML actually supports: <b>, <strong>, <i>, <em>, <u>, <ins>, <s>, <strike>, <del>, <code>, <mark>, <sub>, <sup>, <tg-spoiler>, <a>, <tg-reference>, <tg-emoji>, <table>, <details>, <summary>, and Telegram rich tags such as <tg-math>, <tg-math-block>, and <tg-collage>.\nDo NOT use <p>, <h1>-<h6>, <div>, <section>, <article>, <ul>, <ol>, or <li> in Rich HTML. Use normal newlines for paragraphs and <details><summary>...</summary>...</details> for collapsible sections.\nFor mathematical answers, prefer <tg-math-block> for standalone equations and <tg-math> for inline equations. Put raw LaTeX inside those tags. You may also use $$...$$, \\[...\\], or \\(...\\) when useful; the bot converts those delimiters to Telegram math rendering automatically.\nFor current facts, news, prices, schedules, product information, Telegram features, or anything the user asks you to search/look up, use the supplied Web Search Context. Do not invent search results or claim a fact is current without supporting search context.\nDo not use Markdown formatting or Markdown tables.")
         if saved: instructions += "\nUser memory directives:\n" + "\n".join(f"- {x}" for x in saved)
         if search_context: instructions += "\nUse Web Search Context for current facts. Prefer the retrieved sources over stale model knowledge."
         if use_search and not search_context: instructions += "\nA search was attempted but returned no usable results. Be explicit about that instead of fabricating sources or pretending to have searched."
         if history: instructions += "\nUse Recent Conversation Context for continuity without repeating it."
         safety = [types.SafetySetting(category=c, threshold="BLOCK_NONE") for c in ("HARM_CATEGORY_HATE_SPEECH", "HARM_CATEGORY_HARASSMENT", "HARM_CATEGORY_SEXUALLY_EXPLICIT", "HARM_CATEGORY_DANGEROUS_CONTENT")]
-        contents = [types.Part.from_bytes(data=audio_bytes, mime_type=audio_mime), final_prompt] if audio_bytes else final_prompt
+        if audio_bytes:
+            contents = [types.Part.from_bytes(data=audio_bytes, mime_type=audio_mime), final_prompt]
+        elif sticker_bytes:
+            contents = [types.Part.from_bytes(data=sticker_bytes, mime_type=sticker_mime), final_prompt]
+        else:
+            contents = final_prompt
         response = await gemini_client.aio.models.generate_content(model="gemini-3.5-flash-lite", contents=contents, config=types.GenerateContentConfig(system_instruction=instructions, safety_settings=safety))
         response_text = clean_ai_output(response.text)
         try: await send_ai_response(cid, mid, response_text, is_private)
