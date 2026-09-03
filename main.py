@@ -166,6 +166,7 @@ def get_memory_rich_message(text, menu_type="main", memories=None):
         ]
     elif menu_type == "view":
         blocks += [
+            InputRichBlockButtons(buttons=[RichMessageButton(text="📢 Share to Group", callback_data="memory_share", style="success")], align="center"),
             InputRichBlockButtons(buttons=[RichMessageButton(text="📝 Edit", callback_data="memory_edit", style="primary"), RichMessageButton(text="🗑️ Remove", callback_data="memory_forget", style="danger")], align="center"),
             InputRichBlockButtons(buttons=[RichMessageButton(text="🫯 Clear All", callback_data="memory_forget_all", style="danger")], align="center"),
             InputRichBlockButtons(buttons=[RichMessageButton(text="↩️ Back", callback_data="memory_back"), RichMessageButton(text="❌ Close", callback_data="memory_close", style="danger")], align="center"),
@@ -258,6 +259,34 @@ async def handle_memory_view(callback):
     body = "<b>What Sen Remembers</b>\n\nThese are the saved instructions and details currently available to Sen."
     if not memories: body += "\n\nNothing has been saved yet."
     await edit_memory_menu(callback, body, "view", memories)
+
+@router.callback_query(F.data == "memory_share")
+async def handle_memory_share(callback):
+    if not await authorize_memory_callback(callback): return
+
+    user_id_str = str(callback.from_user.id)
+    memories = await get_memories(user_id_str)
+
+    if not memories:
+        await callback.answer("Your memory list is empty! Nothing to share.", show_alert=True)
+        return
+
+    display_name = get_user_display_name(callback.from_user)
+    safe_name = html.escape(display_name)
+    lines = [f"<b>{safe_name}'s Saved Memories:</b>\n"]
+    for i, memory in enumerate(memories, 1):
+        lines.append(f"{i}. {html.escape(memory)}")
+    share_text = "\n".join(lines)
+
+    try:
+        await callback.bot.send_message(
+            chat_id=callback.message.chat.id,
+            text=share_text,
+        )
+        await callback.answer("Memories shared with the group!", show_alert=True)
+    except Exception as e:
+        print(f"Memory share error: {e}")
+        await callback.answer("Failed to share memories to group.", show_alert=True)
 
 @router.callback_query(F.data == "memory_add")
 async def handle_memory_add(callback):
@@ -377,6 +406,20 @@ async def free_web_search(query, news=False):
         print(f"Web contextual search failure: {e}")
         return ""
 
+def render_math_markup(text):
+    if not text: return text
+    protected = []
+    def protect(match):
+        protected.append(match.group(0))
+        return f"\x00MATH{len(protected)-1}\x00"
+    text = re.sub(r"<tg-math>.*?</tg-math>|<tg-math-block>.*?</tg-math-block>|<pre>.*?</pre>|<code>.*?</code>", protect, text, flags=re.I | re.S)
+    text = re.sub(r"\$\$(.+?)\$\$", lambda m: f"<tg-math-block>{html.escape(m.group(1).strip())}</tg-math-block>", text, flags=re.S)
+    text = re.sub(r"\\\[(.+?)\\\]", lambda m: f"<tg-math-block>{html.escape(m.group(1).strip())}</tg-math-block>", text, flags=re.S)
+    text = re.sub(r"\\\((.+?)\\\)", lambda m: f"<tg-math>{html.escape(m.group(1).strip())}</tg-math>", text, flags=re.S)
+    for i, value in enumerate(protected):
+        text = text.replace(f"\x00MATH{i}\x00", value)
+    return text
+
 async def send_ai_response(chat_id, msg_id, response_text, is_private):
     response_text = render_math_markup(response_text)
     rich = InputRichMessage(html=response_text)
@@ -432,7 +475,6 @@ async def handle_conversation(message):
     prompt = text
     if bot_username: prompt = re.sub(re.escape(bot_username), "", prompt, flags=re.I)
     prompt = re.sub(r"@gemini\b", "", prompt, flags=re.I).strip()
-    # Ignore a bare bot mention, including a mention wrapped in Markdown-style fences.
     if not re.sub(r"```(?:\w+)?", "", prompt).strip(): return
     uid, cid, mid = message.from_user.id, message.chat.id, message.message_id
     cooldown = f"cooldown:{uid}"
