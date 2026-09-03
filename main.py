@@ -57,9 +57,7 @@ MENTION_ONLY_RE = re.compile(r"^(?:@[A-Za-z0-9_]{5,32}\s*)+$")
 
 def interaction_key(chat_id, user_id): return f"memory_interaction:{chat_id}:{user_id}"
 def menu_identity_key(chat_id, user_id): return f"memory_menu_identity:{chat_id}:{user_id}"
-
-def search_cache_key(query, news):
-    return f"web_search:{'news' if news else 'general'}:{query.strip().lower()}"
+def search_cache_key(query, news): return f"web_search:{'news' if news else 'general'}:{query.strip().lower()}"
 
 async def set_interaction(chat_id, user_id, action):
     await redis_client.set(interaction_key(chat_id, user_id), action, ex=INTERACTION_TTL)
@@ -68,8 +66,7 @@ async def get_interaction(chat_id, user_id):
     value = await redis_client.get(interaction_key(chat_id, user_id))
     return value.decode() if isinstance(value, bytes) else value
 
-async def clear_interaction(chat_id, user_id):
-    await redis_client.delete(interaction_key(chat_id, user_id))
+async def clear_interaction(chat_id, user_id): await redis_client.delete(interaction_key(chat_id, user_id))
 
 async def register_menu_identity(chat_id, user_id, message_id):
     await redis_client.set(menu_identity_key(chat_id, user_id), str(message_id), ex=MENU_TTL + 5)
@@ -80,70 +77,53 @@ async def get_menu_identity(chat_id, user_id):
     try: return int(value.decode() if isinstance(value, bytes) else value)
     except (TypeError, ValueError): return None
 
-async def clear_menu_identity(chat_id, user_id):
-    await redis_client.delete(menu_identity_key(chat_id, user_id))
+async def clear_menu_identity(chat_id, user_id): await redis_client.delete(menu_identity_key(chat_id, user_id))
 
 async def expire_memory_menu(chat_id, user_id, menu_id):
     try:
         await asyncio.sleep(MENU_TTL)
-        if await get_menu_identity(chat_id, user_id) != menu_id:
-            return
+        if await get_menu_identity(chat_id, user_id) != menu_id: return
         try:
             if chat_id != user_id:
                 await bot.delete_ephemeral_message(chat_id=chat_id, receiver_user_id=user_id, ephemeral_message_id=menu_id)
             else:
                 await bot.delete_message(chat_id=chat_id, message_id=menu_id)
-        except Exception as e:
-            print(f"Automatic memory menu expiry error: {e}")
+        except Exception as e: print(f"Automatic memory menu expiry error: {e}")
         finally:
-            await clear_menu_identity(chat_id, user_id)
-            await clear_interaction(chat_id, user_id)
-    except asyncio.CancelledError:
-        pass
-    except Exception as e:
-        print(f"Memory menu expiry task error: {e}")
+            await clear_menu_identity(chat_id, user_id); await clear_interaction(chat_id, user_id)
+    except asyncio.CancelledError: pass
+    except Exception as e: print(f"Memory menu expiry task error: {e}")
 
-def schedule_menu_expiry(chat_id, user_id, menu_id):
-    asyncio.create_task(expire_memory_menu(chat_id, user_id, menu_id))
+def schedule_menu_expiry(chat_id, user_id, menu_id): asyncio.create_task(expire_memory_menu(chat_id, user_id, menu_id))
 
 async def get_memories(user_id_str):
     try:
         raw = await redis_client.lrange(f"memory_list:{user_id_str}", 0, -1)
         return [x.decode() if isinstance(x, bytes) else str(x) for x in raw]
     except Exception as e:
-        print(f"Memory read error: {e}")
-        return []
+        print(f"Memory read error: {e}"); return []
 
 def get_user_display_name(user):
     if not user: return "User"
-    name = " ".join(x for x in ((getattr(user, "first_name", "") or "").strip(),
-                                 (getattr(user, "last_name", "") or "").strip()) if x)
+    name = " ".join(x for x in ((getattr(user, "first_name", "") or "").strip(), (getattr(user, "last_name", "") or "").strip()) if x)
     return name or (getattr(user, "username", "") or "User").strip() or "User"
 
 def rich_text_from_markup(text):
-    pattern = re.compile(r"(<b>.*?</b>|<strong>.*?</strong>|<i>.*?</i>|<em>.*?</em>|"
-                         r"<u>.*?</u>|<ins>.*?</ins>|<s>.*?</s>|<strike>.*?</strike>|"
-                         r"<del>.*?</del>|<code>.*?</code>)", re.I | re.S)
+    pattern = re.compile(r"(<b>.*?</b>|<strong>.*?</strong>|<i>.*?</i>|<em>.*?</em>|<u>.*?</u>|<ins>.*?</ins>|<s>.*?</s>|<strike>.*?</strike>|<del>.*?</del>|<code>.*?</code>)", re.I | re.S)
     parts, position = [], 0
     for match in pattern.finditer(text):
-        if match.start() > position:
-            parts.append(html.unescape(text[position:match.start()]))
+        if match.start() > position: parts.append(html.unescape(text[position:match.start()]))
         token, low = match.group(0), match.group(0).lower()
         if low.startswith(("<b>", "<strong>")):
-            inner = re.sub(r"^<(?:b|strong)>|</(?:b|strong)>$", "", token, flags=re.I | re.S)
-            parts.append(RichTextBold(text=html.unescape(inner)))
+            inner = re.sub(r"^<(?:b|strong)>|</(?:b|strong)>$", "", token, flags=re.I | re.S); parts.append(RichTextBold(text=html.unescape(inner)))
         elif low.startswith(("<i>", "<em>")):
-            inner = re.sub(r"^<(?:i|em)>|</(?:i|em)>$", "", token, flags=re.I | re.S)
-            parts.append(RichTextItalic(text=html.unescape(inner)))
+            inner = re.sub(r"^<(?:i|em)>|</(?:i|em)>$", "", token, flags=re.I | re.S); parts.append(RichTextItalic(text=html.unescape(inner)))
         elif low.startswith(("<u>", "<ins>")):
-            inner = re.sub(r"^<(?:u|ins)>|</(?:u|ins)>$", "", token, flags=re.I | re.S)
-            parts.append(RichTextUnderline(text=html.unescape(inner)))
+            inner = re.sub(r"^<(?:u|ins)>|</(?:u|ins)>$", "", token, flags=re.I | re.S); parts.append(RichTextUnderline(text=html.unescape(inner)))
         elif low.startswith(("<s>", "<strike>", "<del>")):
-            inner = re.sub(r"^<(?:s|strike|del)>|</(?:s|strike|del)>$", "", token, flags=re.I | re.S)
-            parts.append(RichTextStrikethrough(text=html.unescape(inner)))
+            inner = re.sub(r"^<(?:s|strike|del)>|</(?:s|strike|del)>$", "", token, flags=re.I | re.S); parts.append(RichTextStrikethrough(text=html.unescape(inner)))
         else:
-            inner = re.sub(r"^<code>|</code>$", "", token, flags=re.I | re.S)
-            parts.append(RichTextCode(text=html.unescape(inner)))
+            inner = re.sub(r"^<code>|</code>$", "", token, flags=re.I | re.S); parts.append(RichTextCode(text=html.unescape(inner)))
         position = match.end()
     if position < len(text): parts.append(html.unescape(text[position:]))
     parts = [p for p in parts if p != ""]
@@ -156,11 +136,10 @@ def get_memory_rich_message(text, menu_type="main", memories=None):
         blocks.append(InputRichBlockSectionHeading(text=html.unescape(heading.group(1)), size=2))
         rest = text[heading.end():].strip()
         if rest: blocks.append(InputRichBlockParagraph(text=rich_text_from_markup(rest)))
-    else:
-        blocks.append(InputRichBlockParagraph(text=rich_text_from_markup(text)))
+    else: blocks.append(InputRichBlockParagraph(text=rich_text_from_markup(text)))
     if memories:
         blocks.append(InputRichBlockList(items=[
-            InputRichBlockListItem(blocks=[InputRichBlockParagraph(text=html.escape(m))], value=i, type="1")
+            InputRichBlockListItem(blocks=[InputRichBlockParagraph(text=rich_text_from_markup(m))], value=i, type="1")
             for i, m in enumerate(memories, 1)
         ]))
     if menu_type == "main":
@@ -171,9 +150,9 @@ def get_memory_rich_message(text, menu_type="main", memories=None):
         ]
     elif menu_type == "view":
         blocks += [
-            InputRichBlockButtons(buttons=[RichMessageButton(text="📢 Share to Group", callback_data="memory_share", style="success")], align="center"),
             InputRichBlockButtons(buttons=[RichMessageButton(text="📝 Edit", callback_data="memory_edit", style="primary"), RichMessageButton(text="🗑️ Remove", callback_data="memory_forget", style="danger")], align="center"),
             InputRichBlockButtons(buttons=[RichMessageButton(text="🫯 Clear All", callback_data="memory_forget_all", style="danger")], align="center"),
+            InputRichBlockButtons(buttons=[RichMessageButton(text="📢 Share to Group", callback_data="memory_share", style="success")], align="center"),
             InputRichBlockButtons(buttons=[RichMessageButton(text="↩️ Back", callback_data="memory_back"), RichMessageButton(text="❌ Close", callback_data="memory_close", style="danger")], align="center"),
         ]
     elif menu_type == "confirm_forget_all":
@@ -181,25 +160,19 @@ def get_memory_rich_message(text, menu_type="main", memories=None):
             InputRichBlockButtons(buttons=[RichMessageButton(text="⚠️ Yes, Clear Everything", callback_data="memory_confirm_forget_all", style="danger")], align="center"),
             InputRichBlockButtons(buttons=[RichMessageButton(text="✖️ Cancel", callback_data="memory_back"), RichMessageButton(text="❌ Close", callback_data="memory_close", style="danger")], align="center"),
         ]
-    else:
-        blocks.append(InputRichBlockButtons(buttons=[RichMessageButton(text="↩️ Back", callback_data="memory_back"), RichMessageButton(text="❌ Close", callback_data="memory_close", style="danger")], align="center"))
+    else: blocks.append(InputRichBlockButtons(buttons=[RichMessageButton(text="↩️ Back", callback_data="memory_back"), RichMessageButton(text="❌ Close", callback_data="memory_close", style="danger")], align="center"))
     return InputRichMessage(blocks=blocks)
 
 async def send_memory_menu(chat_id, user_id, text, menu_type="main", source_ephemeral_id=None, memories=None):
     rich = get_memory_rich_message(text, menu_type, memories)
     if chat_id != user_id:
         if source_ephemeral_id is None: raise RuntimeError("Missing ephemeral message id.")
-        message = await bot.send_rich_message(chat_id=chat_id, rich_message=rich,
-            reply_parameters=ReplyParameters(ephemeral_message_id=source_ephemeral_id),
-            ephemeral_message_parameters=EphemeralMessageParameters(receiver_user_id=user_id))
+        message = await bot.send_rich_message(chat_id=chat_id, rich_message=rich, reply_parameters=ReplyParameters(ephemeral_message_id=source_ephemeral_id), ephemeral_message_parameters=EphemeralMessageParameters(receiver_user_id=user_id))
         mid = getattr(message, "ephemeral_message_id", None)
     else:
-        message = await bot.send_rich_message(chat_id=chat_id, rich_message=rich)
-        mid = message.message_id
+        message = await bot.send_rich_message(chat_id=chat_id, rich_message=rich); mid = message.message_id
     if mid is None: raise RuntimeError("Telegram did not return a message id.")
-    await register_menu_identity(chat_id, user_id, mid)
-    schedule_menu_expiry(chat_id, user_id, mid)
-    return message
+    await register_menu_identity(chat_id, user_id, mid); schedule_menu_expiry(chat_id, user_id, mid); return message
 
 async def authorize_memory_callback(callback):
     message = callback.message
@@ -237,8 +210,7 @@ async def close_menu(callback):
         if message.chat.type in {"group", "supergroup"}:
             mid = getattr(message, "ephemeral_message_id", None)
             if mid: await bot.delete_ephemeral_message(chat_id=chat_id, receiver_user_id=user_id, ephemeral_message_id=mid)
-        else:
-            await bot.delete_message(chat_id=chat_id, message_id=message.message_id)
+        else: await bot.delete_message(chat_id=chat_id, message_id=message.message_id)
     except Exception as e: print(f"Menu close error: {e}")
     finally: await clear_menu_identity(chat_id, user_id)
 
@@ -268,30 +240,21 @@ async def handle_memory_view(callback):
 @router.callback_query(F.data == "memory_share")
 async def handle_memory_share(callback):
     if not await authorize_memory_callback(callback): return
-
-    user_id_str = str(callback.from_user.id)
-    memories = await get_memories(user_id_str)
-
+    memories = await get_memories(str(callback.from_user.id))
     if not memories:
-        await callback.answer("Your memory list is empty! Nothing to share.", show_alert=True)
-        return
-
-    display_name = get_user_display_name(callback.from_user)
-    safe_name = html.escape(display_name)
-    lines = [f"<b>{safe_name}'s Saved Memories:</b>\n"]
-    for i, memory in enumerate(memories, 1):
-        lines.append(f"{i}. {html.escape(memory)}")
-    share_text = "\n".join(lines)
-
+        await callback.answer("Your memory list is empty! Nothing to share.", show_alert=True); return
+    first_name = (getattr(callback.from_user, "first_name", "") or "").strip() or "User"
+    safe_first_name = html.escape(first_name)
+    share_blocks = [InputRichBlockSectionHeading(text=f"What Sen Remembers for {safe_first_name}", size=2)]
+    share_blocks.append(InputRichBlockList(items=[
+        InputRichBlockListItem(blocks=[InputRichBlockParagraph(text=rich_text_from_markup(memory))], value=i, type="1")
+        for i, memory in enumerate(memories, 1)
+    ]))
     try:
-        await callback.bot.send_message(
-            chat_id=callback.message.chat.id,
-            text=share_text,
-        )
+        await callback.bot.send_rich_message(chat_id=callback.message.chat.id, rich_message=InputRichMessage(blocks=share_blocks))
         await callback.answer("Memories shared with the group!", show_alert=True)
     except Exception as e:
-        print(f"Memory share error: {e}")
-        await callback.answer("Failed to share memories to group.", show_alert=True)
+        print(f"Memory share error: {e}"); await callback.answer("Failed to share memories to group.", show_alert=True)
 
 @router.callback_query(F.data == "memory_add")
 async def handle_memory_add(callback):
@@ -377,172 +340,97 @@ async def handle_delete(message):
 def clean_url(url):
     if not url: return ""
     try:
-        p = urlsplit(url)
-        return urlunsplit((p.scheme, p.netloc, p.path, "", ""))
+        p = urlsplit(url); return urlunsplit((p.scheme, p.netloc, p.path, "", ""))
     except Exception: return url
 
 def normalize_search_query(query):
     query = re.sub(r"\s+", " ", (query or "")).strip()
-    query = re.sub(
-        r"^\s*(?:please\s+)?(?:google\s+)?(?:search|look\s+up|lookup|find(?:\s+out)?|search\s+the\s+web)\s*(?:for|about|on)?\s*",
-        "",
-        query,
-        flags=re.I,
-    )
-    query = re.sub(
-        r"^\s*(?:please\s+)?(?:send|give|show|fetch|get)\s+me\s+(?:some\s+|the\s+)?",
-        "",
-        query,
-        flags=re.I,
-    )
-    query = re.sub(
-        r"\s*,?\s*(?:in|inside)\s+(?:collapsible|expandable)\s+(?:sections?|blocks?).*$",
-        "",
-        query,
-        flags=re.I | re.S,
-    )
-    query = re.sub(
-        r"\s+(?:and\s+)?(?:format|present|display|organize|put)\s+(?:it|them|the\s+results?)\s+.*$",
-        "",
-        query,
-        flags=re.I | re.S,
-    )
+    query = re.sub(r"^\s*(?:please\s+)?(?:google\s+)?(?:search|look\s+up|lookup|find(?:\s+out)?|search\s+the\s+web)\s*(?:for|about|on)?\s*", "", query, flags=re.I)
+    query = re.sub(r"^\s*(?:please\s+)?(?:send|give|show|fetch|get)\s+me\s+(?:some\s+|the\s+)?", "", query, flags=re.I)
+    query = re.sub(r"\s*,?\s*(?:in|inside)\s+(?:collapsible|expandable)\s+(?:sections?|blocks?).*$", "", query, flags=re.I | re.S)
+    query = re.sub(r"\s+(?:and\s+)?(?:format|present|display|organize|put)\s+(?:it|them|the\s+results?)\s+.*$", "", query, flags=re.I | re.S)
     return re.sub(r"\s+", " ", query).strip(" ,.-")
 
 def detect_search_intent(text):
     t = re.sub(r"\s+", " ", (text or "")).strip().lower()
     if not t: return False
-    explicit_markers = (
-        "search", "google", "look up", "lookup", "find out", "search the web",
-        "browse", "web search", "internet", "online", "news", "headlines",
-        "latest", "newest", "recent", "today", "tonight", "this week",
-        "right now", "currently", "what happened", "who won", "score",
-        "price", "release date", "schedule", "status", "update", "source", "sources",
-    )
-    if any(marker in t for marker in explicit_markers):
-        return True
+    explicit_markers = ("search", "google", "look up", "lookup", "find out", "search the web", "browse", "web search", "internet", "online", "news", "headlines", "latest", "newest", "recent", "today", "tonight", "this week", "right now", "currently", "what happened", "who won", "score", "price", "release date", "schedule", "status", "update", "source", "sources")
+    if any(marker in t for marker in explicit_markers): return True
     question = re.search(r"\b(?:who|what|when|where|why|how|does|do|did|is|are|can|could|will|has|have)\b", t)
     return bool(question and len(t.split()) >= 5)
 
 async def searx_request(query, category="general", time_range=None, page=1, limit=10):
-    params = {
-        "q": query,
-        "format": "json",
-        "categories": category,
-        "language": "en",
-        "pageno": page,
-        "safesearch": 1,
-    }
+    params = {"q": query, "format": "json", "categories": category, "language": "en", "pageno": page, "safesearch": 1}
     if time_range: params["time_range"] = time_range
     headers = {"User-Agent": "Mozilla/5.0 (Telegram Sen Bot)", "Accept": "application/json"}
     async with httpx.AsyncClient(follow_redirects=True, timeout=12.0) as client:
         r = await client.get(SEARXNG_URL, params=params, headers=headers)
-        if r.status_code != 200:
-            raise RuntimeError(f"SearXNG HTTP {r.status_code}: {r.text[:200]}")
-        payload = r.json()
-        return payload.get("results", []) or []
+        if r.status_code != 200: raise RuntimeError(f"SearXNG HTTP {r.status_code}: {r.text[:200]}")
+        return (r.json().get("results", []) or [])
 
 async def free_web_search(query, news=False):
     search_query = normalize_search_query(query)
-    if not search_query:
-        return ""
-
+    if not search_query: return ""
     cache_key = search_cache_key(search_query, news)
     try:
         cached = await redis_client.get(cache_key)
-        if cached:
-            return cached.decode() if isinstance(cached, bytes) else str(cached)
-    except Exception as e:
-        print(f"Web search cache read failure: {e}")
-
+        if cached: return cached.decode() if isinstance(cached, bytes) else str(cached)
+    except Exception as e: print(f"Web search cache read failure: {e}")
     try:
         if news:
             results = await searx_request(search_query, "news", "day", 1, 8)
-            if not results:
-                results = await searx_request(search_query, "news", "week", 1, 8)
-            if not results:
-                results = await searx_request(search_query, "general", "month", 1, 8)
-        else:
-            results = await searx_request(search_query, "general", None, 1, 8)
-
+            if not results: results = await searx_request(search_query, "news", "week", 1, 8)
+            if not results: results = await searx_request(search_query, "general", "month", 1, 8)
+        else: results = await searx_request(search_query, "general", None, 1, 8)
         seen, out = set(), []
         for result in results:
-            title = (result.get("title") or "").strip()
-            content = (result.get("content") or result.get("snippet") or "").strip()
-            url = clean_url(result.get("url", ""))
-            published = (result.get("publishedDate") or result.get("published_date") or "").strip()
-            source = (result.get("engine") or result.get("source") or "").strip()
+            title = (result.get("title") or "").strip(); content = (result.get("content") or result.get("snippet") or "").strip(); url = clean_url(result.get("url", "")); published = (result.get("publishedDate") or result.get("published_date") or "").strip(); source = (result.get("engine") or result.get("source") or "").strip()
             key = url.lower() if url else (title.lower(), content[:120].lower())
-            if key in seen or not (title or content or url):
-                continue
-            seen.add(key)
-            lines = []
+            if key in seen or not (title or content or url): continue
+            seen.add(key); lines = []
             if title: lines.append(f"Title: {title}")
             if source: lines.append(f"Source: {source}")
             if published: lines.append(f"Published: {published}")
             if content: lines.append(f"Content: {content}")
             if url: lines.append(f"URL: {url}")
             out.append("\n".join(lines))
-
         result_text = "\n\n".join(out)
         if result_text:
-            try:
-                await redis_client.set(cache_key, result_text, ex=SEARCH_CACHE_TTL)
-            except Exception as e:
-                print(f"Web search cache write failure: {e}")
+            try: await redis_client.set(cache_key, result_text, ex=SEARCH_CACHE_TTL)
+            except Exception as e: print(f"Web search cache write failure: {e}")
         return result_text
     except Exception as e:
-        print(f"Web contextual search failure: {e}")
-        return ""
+        print(f"Web contextual search failure: {e}"); return ""
 
 def render_math_markup(text):
     if not text: return text
     protected = []
-    def protect(match):
-        protected.append(match.group(0))
-        return f"\x00MATH{len(protected)-1}\x00"
+    def protect(match): protected.append(match.group(0)); return f"\x00MATH{len(protected)-1}\x00"
     text = re.sub(r"<tg-math>.*?</tg-math>|<tg-math-block>.*?</tg-math-block>|<pre>.*?</pre>|<code>.*?</code>", protect, text, flags=re.I | re.S)
     text = re.sub(r"\$\$(.+?)\$\$", lambda m: f"<tg-math-block>{html.escape(m.group(1).strip())}</tg-math-block>", text, flags=re.S)
     text = re.sub(r"\\\[(.+?)\\\]", lambda m: f"<tg-math-block>{html.escape(m.group(1).strip())}</tg-math-block>", text, flags=re.S)
     text = re.sub(r"\\\((.+?)\\\)", lambda m: f"<tg-math>{html.escape(m.group(1).strip())}</tg-math>", text, flags=re.S)
-    for i, value in enumerate(protected):
-        text = text.replace(f"\x00MATH{i}\x00", value)
+    for i, value in enumerate(protected): text = text.replace(f"\x00MATH{i}\x00", value)
     return text
 
 def sanitize_rich_html(text):
-    """Remove/translate HTML block tags that Telegram's rich HTML parser rejects."""
-    if not text:
-        return text
-
-    # Telegram Rich HTML accepts these concepts, but <p> and heading tags are
-    # represented by explicit rich blocks rather than accepted HTML tags.
-    text = re.sub(r"<p\b[^>]*>", "", text, flags=re.I)
-    text = re.sub(r"</p>", "\n\n", text, flags=re.I)
+    if not text: return text
+    text = re.sub(r"<p\b[^>]*>", "", text, flags=re.I); text = re.sub(r"</p>", "\n\n", text, flags=re.I)
     text = re.sub(r"<h[1-6]\b[^>]*>(.*?)</h[1-6]>", r"<b>\1</b>\n\n", text, flags=re.I | re.S)
-    text = re.sub(r"<br\s*/?>", "\n", text, flags=re.I)
-    text = re.sub(r"<div\b[^>]*>", "", text, flags=re.I)
-    text = re.sub(r"</div>", "\n", text, flags=re.I)
-    text = re.sub(r"<section\b[^>]*>", "", text, flags=re.I)
-    text = re.sub(r"</section>", "\n", text, flags=re.I)
-    text = re.sub(r"<article\b[^>]*>", "", text, flags=re.I)
-    text = re.sub(r"</article>", "\n", text, flags=re.I)
-    text = re.sub(r"<ul\b[^>]*>|</ul>|<ol\b[^>]*>|</ol>", "", text, flags=re.I)
-    text = re.sub(r"<li\b[^>]*>", "• ", text, flags=re.I)
-    text = re.sub(r"</li>", "\n", text, flags=re.I)
-    text = re.sub(r"\n{3,}", "\n\n", text)
-    return text.strip()
+    text = re.sub(r"<br\s*/?>", "\n", text, flags=re.I); text = re.sub(r"<div\b[^>]*>", "", text, flags=re.I); text = re.sub(r"</div>", "\n", text, flags=re.I)
+    text = re.sub(r"<section\b[^>]*>", "", text, flags=re.I); text = re.sub(r"</section>", "\n", text, flags=re.I); text = re.sub(r"<article\b[^>]*>", "", text, flags=re.I); text = re.sub(r"</article>", "\n", text, flags=re.I)
+    text = re.sub(r"<ul\b[^>]*>|</ul>|<ol\b[^>]*>|</ol>", "", text, flags=re.I); text = re.sub(r"<li\b[^>]*>", "• ", text, flags=re.I); text = re.sub(r"</li>", "\n", text, flags=re.I)
+    text = re.sub(r"\n{3,}", "\n\n", text); return text.strip()
 
 async def send_ai_response(chat_id, msg_id, response_text, is_private):
-    response_text = sanitize_rich_html(render_math_markup(response_text))
-    rich = InputRichMessage(html=response_text)
+    rich = InputRichMessage(html=sanitize_rich_html(render_math_markup(response_text)))
     kwargs = {"chat_id": chat_id, "rich_message": rich}
     if not is_private: kwargs["reply_parameters"] = ReplyParameters(message_id=msg_id)
     return await bot.send_rich_message(**kwargs)
 
 async def send_audio_track(chat_id, msg_id, key, file_path, title, performer, is_private):
     try:
-        cached = await redis_client.get(f"audio_cache:{key}")
-        audio = cached.decode() if isinstance(cached, bytes) else cached
+        cached = await redis_client.get(f"audio_cache:{key}"); audio = cached.decode() if isinstance(cached, bytes) else cached
         if not audio and os.path.exists(file_path): audio = FSInputFile(file_path)
         if not audio: return
         sent = await bot.send_audio(chat_id=chat_id, audio=audio, title=title, performer=performer, reply_to_message_id=None if is_private else msg_id)
@@ -550,14 +438,11 @@ async def send_audio_track(chat_id, msg_id, key, file_path, title, performer, is
     except Exception as e: print(f"Audio media delivery fault record ({key}): {e}")
 
 def clean_ai_output(text):
-    text = (text or "I didn't receive a response.").strip()
-    text = re.sub(r"^```(?:html)?\s*", "", text, flags=re.I)
-    text = re.sub(r"\s*```$", "", text)
+    text = (text or "I didn't receive a response.").strip(); text = re.sub(r"^```(?:html)?\s*", "", text, flags=re.I); text = re.sub(r"\s*```$", "", text)
     return sanitize_rich_html(render_math_markup(text)).strip()
 
 @router.message(F.community_chat_added)
 async def handle_community_added(message): print(f"Community binding topology registered: {message.chat.id}")
-
 @router.message(F.community_chat_removed)
 async def handle_community_removed(message): print(f"Community dropping context safely absorbed: {message.chat.id}")
 
@@ -567,136 +452,77 @@ async def handle_conversation(message):
     action = await get_interaction(message.chat.id, message.from_user.id)
     if action and message.text and not message.text.startswith("/"):
         if await process_memory_text(message, action): return
-    text = message.text or message.caption or ""
-    text_no_html = re.sub(r"<[^>]+>", "", text)
-    if re.search(r"\bsen\b", text_no_html, re.I):
-        asyncio.create_task(send_audio_track(message.chat.id, message.message_id, "sen", "Devin_The_Dude_Anythang.mp3", "Anythang", "Devin The Dude", message.chat.type=="private"))
-    if re.search(r"\bmagic(?:al|ally)?\b", text_no_html, re.I):
-        asyncio.create_task(send_audio_track(message.chat.id, message.message_id, "magic", "Do You Believe In Magic.mp3", "Do You Believe In Magic", "The Lovin' Spoonful", message.chat.type=="private"))
-
-    is_private = message.chat.type == "private"
-    bot_username = f"@{BOT_INFO.username}" if BOT_INFO and BOT_INFO.username else ""
-    lower = text_no_html.lower()
-    tagged = bool(bot_username) and bot_username.lower() in lower
-    tagged = tagged or "@gemini" in lower
+    text = message.text or message.caption or ""; text_no_html = re.sub(r"<[^>]+>", "", text)
+    if re.search(r"\bsen\b", text_no_html, re.I): asyncio.create_task(send_audio_track(message.chat.id, message.message_id, "sen", "Devin_The_Dude_Anythang.mp3", "Anythang", "Devin The Dude", message.chat.type=="private"))
+    if re.search(r"\bmagic(?:al|ally)?\b", text_no_html, re.I): asyncio.create_task(send_audio_track(message.chat.id, message.message_id, "magic", "Do You Believe In Magic.mp3", "Do You Believe In Magic", "The Lovin' Spoonful", message.chat.type=="private"))
+    is_private = message.chat.type == "private"; bot_username = f"@{BOT_INFO.username}" if BOT_INFO and BOT_INFO.username else ""; lower = text_no_html.lower()
+    tagged = bool(bot_username) and bot_username.lower() in lower; tagged = tagged or "@gemini" in lower
     reply_to_bot = bool(message.reply_to_message and BOT_INFO and message.reply_to_message.from_user and message.reply_to_message.from_user.id == BOT_INFO.id)
     if message.voice is not None:
         if not (tagged or reply_to_bot): return
     elif not (tagged or reply_to_bot or is_private): return
-
     prompt = text
     if bot_username: prompt = re.sub(re.escape(bot_username), "", prompt, flags=re.I)
     prompt = re.sub(r"@gemini\b", "", prompt, flags=re.I).strip()
-
-    # A reply to Sen containing only another user's mention is not a request
-    # for Sen. Keep the special case where the user replies with only
-    # @SenAnythangBot, which intentionally means "what do you think?".
-    if reply_to_bot and prompt and MENTION_ONLY_RE.fullmatch(prompt):
-        return
-
+    if reply_to_bot and prompt and MENTION_ONLY_RE.fullmatch(prompt): return
     if not re.sub(r"```(?:\w+)?", "", prompt).strip(): return
-    uid, cid, mid = message.from_user.id, message.chat.id, message.message_id
-    cooldown = f"cooldown:{uid}"
+    uid, cid, mid = message.from_user.id, message.chat.id, message.message_id; cooldown = f"cooldown:{uid}"
     if await redis_client.exists(cooldown):
-        warning = "Slow down, request limit reached."
-        await message.answer(warning, reply_to_message_id=None if is_private else mid); return
+        await message.answer("Slow down, request limit reached.", reply_to_message_id=None if is_private else mid); return
     await redis_client.set(cooldown, "1", ex=4)
-
-    replied_context = ""
+    replied_context = ""; audio_bytes, audio_mime = None, "audio/ogg"
     if message.reply_to_message: replied_context = message.reply_to_message.text or message.reply_to_message.caption or ""
-    audio_bytes, audio_mime = None, "audio/ogg"
     if message.voice:
-        file_info = await bot.get_file(message.voice.file_id)
-        stream = await bot.download_file(file_info.file_path)
+        file_info = await bot.get_file(message.voice.file_id); stream = await bot.download_file(file_info.file_path)
         if stream: audio_bytes = stream.read()
         audio_mime = getattr(message.voice, "mime_type", None) or audio_mime
     if not prompt and replied_context: prompt = "What are your thoughts on this?"
     if not (prompt or replied_context or audio_bytes): return
-
     try:
-        saved = await get_memories(str(uid))
-        history_key = f"chat_history:{cid}:{uid}"
-        raw_hist = await redis_client.lrange(history_key, 0, -1)
-        history = [x.decode() if isinstance(x, bytes) else str(x) for x in raw_hist]
-
-        use_search = detect_search_intent(prompt)
-        news = bool(re.search(r"\b(?:news|headlines|latest|today|breaking|recent)\b", prompt, re.I))
-        search_query = normalize_search_query(prompt)
-        search_context = await free_web_search(search_query, news=news) if use_search else ""
+        saved = await get_memories(str(uid)); history_key = f"chat_history:{cid}:{uid}"; raw_hist = await redis_client.lrange(history_key, 0, -1); history = [x.decode() if isinstance(x, bytes) else str(x) for x in raw_hist]
+        use_search = detect_search_intent(prompt); news = bool(re.search(r"\b(?:news|headlines|latest|today|breaking|recent)\b", prompt, re.I)); search_query = normalize_search_query(prompt); search_context = await free_web_search(search_query, news=news) if use_search else ""
         context = []
         if replied_context: context.append(f'Message User is Replying To:\n"{replied_context}"')
         if history: context.append("Recent Conversation Context:\n" + "\n".join(history))
         if search_context: context.append("Web Search Context:\n" + search_context)
         elif use_search: context.append("Web Search Context:\nA web search was requested, but no usable results were returned. Do not pretend that a search result supports a claim.")
         final_prompt = "\n\n".join(context) + ("\n\n" if context else "") + (prompt or "Process and answer this voice note.")
-
         today = datetime.now(timezone.utc).strftime("%A, %B %d, %Y")
-        instructions = (
-            f"Today's date is {today}.\n"
-            "Never use standard AI pleasantries.\n"
-            "Keep casual replies brief, but expand when asked for detail.\n"
-            "If the user changes subject, immediately follow the new subject.\n"
-            "If joking or sarcastic, match the energy.\n"
-            "If you do not know, say exactly: 'I don't have enough details to answer that accurately' without guessing.\n"
-            "Do not assume personal details unless explicitly present in the memory list.\n"
-            "Return Telegram Rich HTML for sendRichMessage. Use only HTML that Telegram Rich HTML actually supports: <b>, <strong>, <i>, <em>, <u>, <ins>, <s>, <strike>, <del>, <code>, <mark>, <sub>, <sup>, <tg-spoiler>, <a>, <tg-reference>, <tg-emoji>, <table>, <details>, <summary>, and Telegram rich tags such as <tg-math>, <tg-math-block>, <tg-slideshow>, and <tg-collage>.\n"
-            "Do NOT use <p>, <h1>-<h6>, <div>, <section>, <article>, <ul>, <ol>, or <li> in Rich HTML. Use normal newlines for paragraphs and <details><summary>...</summary>...</details> for collapsible sections.\n"
-            "For mathematical answers, prefer <tg-math-block> for standalone equations and <tg-math> for inline equations. Put raw LaTeX inside those tags. You may also use $$...$$, \\[...\\], or \\(...\\) when useful; the bot converts those delimiters to Telegram math rendering automatically.\n"
-            "For current facts, news, prices, schedules, product information, Telegram features, or anything the user asks you to search/look up, use the supplied Web Search Context. Do not invent search results or claim a fact is current without supporting search context.\n"
-            "Do not use Markdown formatting or Markdown tables."
-        )
+        instructions = (f"Today's date is {today}.\nNever use standard AI pleasantries.\nKeep casual replies brief, but expand when asked for detail.\nIf the user changes subject, immediately follow the new subject.\nIf joking or sarcastic, match the energy.\nIf you do not know, say exactly: 'I don't have enough details to answer that accurately' without guessing.\nDo not assume personal details unless explicitly present in the memory list.\nReturn Telegram Rich HTML for sendRichMessage. Use only HTML that Telegram Rich HTML actually supports: <b>, <strong>, <i>, <em>, <u>, <ins>, <s>, <strike>, <del>, <code>, <mark>, <sub>, <sup>, <tg-spoiler>, <a>, <tg-reference>, <tg-emoji>, <table>, <details>, <summary>, and Telegram rich tags such as <tg-math>, <tg-math-block>, <tg-slideshow>, and <tg-collage>.\nDo NOT use <p>, <h1>-<h6>, <div>, <section>, <article>, <ul>, <ol>, or <li> in Rich HTML. Use normal newlines for paragraphs and <details><summary>...</summary>...</details> for collapsible sections.\nFor mathematical answers, prefer <tg-math-block> for standalone equations and <tg-math> for inline equations. Put raw LaTeX inside those tags. You may also use $$...$$, \\[...\\], or \\(...\\) when useful; the bot converts those delimiters to Telegram math rendering automatically.\nFor current facts, news, prices, schedules, product information, Telegram features, or anything the user asks you to search/look up, use the supplied Web Search Context. Do not invent search results or claim a fact is current without supporting search context.\nDo not use Markdown formatting or Markdown tables.")
         if saved: instructions += "\nUser memory directives:\n" + "\n".join(f"- {x}" for x in saved)
         if search_context: instructions += "\nUse Web Search Context for current facts. Prefer the retrieved sources over stale model knowledge."
         if use_search and not search_context: instructions += "\nA search was attempted but returned no usable results. Be explicit about that instead of fabricating sources or pretending to have searched."
         if history: instructions += "\nUse Recent Conversation Context for continuity without repeating it."
-
         safety = [types.SafetySetting(category=c, threshold="BLOCK_NONE") for c in ("HARM_CATEGORY_HATE_SPEECH", "HARM_CATEGORY_HARASSMENT", "HARM_CATEGORY_SEXUALLY_EXPLICIT", "HARM_CATEGORY_DANGEROUS_CONTENT")]
         contents = [types.Part.from_bytes(data=audio_bytes, mime_type=audio_mime), final_prompt] if audio_bytes else final_prompt
         response = await gemini_client.aio.models.generate_content(model="gemini-3.5-flash-lite", contents=contents, config=types.GenerateContentConfig(system_instruction=instructions, safety_settings=safety))
         response_text = clean_ai_output(response.text)
-        try:
-            await send_ai_response(cid, mid, response_text, is_private)
+        try: await send_ai_response(cid, mid, response_text, is_private)
         except Exception as rich_error:
-            print(f"Rich response delivery error: {rich_error}")
-            fallback = html.unescape(re.sub(r"<[^>]+>", "", response_text)).strip() or "I didn't receive a response."
-            await message.answer(fallback, reply_to_message_id=None if is_private else mid)
-        clean_history = html.unescape(re.sub(r"<[^>]+>", "", response_text)).strip()
-        await redis_client.rpush(history_key, f"User: {prompt or 'Voice Note'}", f"Bot: {clean_history}")
-        await redis_client.ltrim(history_key, -10, -1)
+            print(f"Rich response delivery error: {rich_error}"); fallback = html.unescape(re.sub(r"<[^>]+>", "", response_text)).strip() or "I didn't receive a response."; await message.answer(fallback, reply_to_message_id=None if is_private else mid)
+        clean_history = html.unescape(re.sub(r"<[^>]+>", "", response_text)).strip(); await redis_client.rpush(history_key, f"User: {prompt or 'Voice Note'}", f"Bot: {clean_history}"); await redis_client.ltrim(history_key, -10, -1)
     except Exception as e:
-        print(f"Gemini AI processing error: {e}")
-        error = "Whoa, I'm getting a little overwhelmed! Let me catch my breath." if "429" in str(e) else "I am currently broken right now, the owner needs to fix me."
-        await message.answer(error, reply_to_message_id=None if is_private else mid)
+        print(f"Gemini AI processing error: {e}"); error = "Whoa, I'm getting a little overwhelmed! Let me catch my breath." if "429" in str(e) else "I am currently broken right now, the owner needs to fix me."; await message.answer(error, reply_to_message_id=None if is_private else mid)
 
-async def health_check(request):
-    return web.json_response({"status":"ok","bot":BOT_INFO.username if BOT_INFO else None})
+async def health_check(request): return web.json_response({"status":"ok","bot":BOT_INFO.username if BOT_INFO else None})
 
 async def configure_commands():
     group = [BotCommand(command="memories", description="Open your private memory menu", is_ephemeral=True), BotCommand(command="del", description="Delete a bot message", is_ephemeral=True)]
     private = [BotCommand(command="memories", description="Manage your instructed memories"), BotCommand(command="del", description="Delete a bot message")]
     try: await bot.delete_my_commands(scope=BotCommandScopeAllChatAdministrators())
     except Exception as e: print(f"Could not clear administrator command scope: {e}")
-    await bot.set_my_commands(group, scope=BotCommandScopeAllGroupChats())
-    await bot.set_my_commands(private, scope=BotCommandScopeAllPrivateChats())
-    print("Configured group commands: /memories=ephemeral /del=ephemeral")
+    await bot.set_my_commands(group, scope=BotCommandScopeAllGroupChats()); await bot.set_my_commands(private, scope=BotCommandScopeAllPrivateChats()); print("Configured group commands: /memories=ephemeral /del=ephemeral")
     try:
-        g = await bot.get_my_commands(scope=BotCommandScopeAllGroupChats())
-        print("Telegram group commands: " + str([(x.command,getattr(x,"is_ephemeral",None)) for x in g]))
+        g = await bot.get_my_commands(scope=BotCommandScopeAllGroupChats()); print("Telegram group commands: " + str([(x.command,getattr(x,"is_ephemeral",None)) for x in g]))
     except Exception as e: print(f"Could not verify Telegram commands: {e}")
 
 async def main():
     global BOT_INFO
-    BOT_INFO = await bot.get_me()
-    print(f"Logged in successfully as @{BOT_INFO.username}")
-    await configure_commands()
-    app = web.Application(); app.router.add_get("/", health_check); app.router.add_get("/health", health_check)
-    runner = web.AppRunner(app); await runner.setup()
-    port = int(os.environ.get("PORT","8080")); site = web.TCPSite(runner, "0.0.0.0", port); await site.start()
-    print(f"Operational check dashboard running on port {port}")
+    BOT_INFO = await bot.get_me(); print(f"Logged in successfully as @{BOT_INFO.username}"); await configure_commands()
+    app = web.Application(); app.router.add_get("/", health_check); app.router.add_get("/health", health_check); runner = web.AppRunner(app); await runner.setup(); port = int(os.environ.get("PORT","8080")); site = web.TCPSite(runner, "0.0.0.0", port); await site.start(); print(f"Operational check dashboard running on port {port}")
     try: await bot.delete_webhook(drop_pending_updates=True)
     except Exception as e: print(f"Non-critical webhook clearance notice: {e}")
     try: await dp.start_polling(bot)
-    finally:
-        await bot.session.close(); await redis_client.aclose(); await runner.cleanup()
+    finally: await bot.session.close(); await redis_client.aclose(); await runner.cleanup()
 
 if __name__ == "__main__": asyncio.run(main())
