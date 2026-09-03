@@ -1,0 +1,59 @@
+name: Apply sticker input fix
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Patch main.py
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('main.py')
+          s = p.read_text()
+
+          # Do not advertise or permit AI-generated slideshow output.
+          s = s.replace(', <tg-slideshow>', '')
+
+          # Let the conversation handler receive stickers as well as text/captions/voice.
+          s = s.replace('@router.message(F.text | F.caption | F.voice)', '@router.message(F.text | F.caption | F.voice | F.sticker)')
+
+          # Add sticker media acquisition after the existing voice acquisition block.
+          old = '''    if message.voice:\n        file_info = await bot.get_file(message.voice.file_id); stream = await bot.download_file(file_info.file_path)\n        if stream: audio_bytes = stream.read()\n        audio_mime = getattr(message.voice, "mime_type", None) or audio_mime\n    if not prompt and replied_context: prompt = "What are your thoughts on this?"'''
+          new = '''    sticker_bytes, sticker_mime = None, None\n    if message.voice:\n        file_info = await bot.get_file(message.voice.file_id); stream = await bot.download_file(file_info.file_path)\n        if stream: audio_bytes = stream.read()\n        audio_mime = getattr(message.voice, "mime_type", None) or audio_mime\n    elif message.sticker:\n        try:\n            sticker = message.sticker\n            # Static stickers are native WebP images, which Gemini supports directly.\n            if not sticker.is_animated and not sticker.is_video:\n                file_info = await bot.get_file(sticker.file_id)\n                stream = await bot.download_file(file_info.file_path)\n                if stream:\n                    sticker_bytes = stream.read()\n                    sticker_mime = "image/webp"\n            elif sticker.is_video:\n                # Telegram video stickers are VP9/WebM and Gemini supports video/webm.\n                file_info = await bot.get_file(sticker.file_id)\n                stream = await bot.download_file(file_info.file_path)\n                if stream:\n                    sticker_bytes = stream.read()\n                    sticker_mime = "video/webm"\n            elif sticker.thumbnail:\n                # TGS/Lottie is not a Gemini input format, so use Telegram's JPG/WEBP preview.\n                file_info = await bot.get_file(sticker.thumbnail.file_id)\n                stream = await bot.download_file(file_info.file_path)\n                if stream:\n                    sticker_bytes = stream.read()\n                    sticker_mime = "image/jpeg"\n        except Exception as sticker_error:\n            print(f"Sticker media acquisition error: {sticker_error}")\n    if not prompt and replied_context: prompt = "What are your thoughts on this?"\n    if message.sticker and not prompt and not replied_context:\n        prompt = "Describe this sticker and tell me what it appears to depict."'''
+          if old not in s:
+              raise SystemExit('Could not find voice block for sticker insertion')
+          s = s.replace(old, new, 1)
+
+          # A sticker in a group should behave like a reply-to-bot visual input; in private chats it can stand alone.
+          old_gate = '''    elif not (tagged or reply_to_bot or is_private): return\n    prompt = text'''
+          new_gate = '''    elif not (tagged or reply_to_bot or is_private): return\n    if message.sticker and not (reply_to_bot or is_private): return\n    prompt = text'''
+          if old_gate not in s:
+              raise SystemExit('Could not find conversation gate')
+          s = s.replace(old_gate, new_gate, 1)
+
+          # Pass sticker bytes to Gemini just like an image/video input.
+          old_contents = '''        contents = [types.Part.from_bytes(data=audio_bytes, mime_type=audio_mime), final_prompt] if audio_bytes else final_prompt'''
+          new_contents = '''        if audio_bytes:\n            contents = [types.Part.from_bytes(data=audio_bytes, mime_type=audio_mime), final_prompt]\n        elif sticker_bytes:\n            contents = [types.Part.from_bytes(data=sticker_bytes, mime_type=sticker_mime), final_prompt]\n        else:\n            contents = final_prompt'''
+          if old_contents not in s:
+              raise SystemExit('Could not find Gemini contents assignment')
+          s = s.replace(old_contents, new_contents, 1)
+
+          p.write_text(s)
+          PY
+      - name: Commit patched main.py and remove patch workflow
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add main.py
+          git commit -m 'feat: let Sen understand stickers' || true
+          git rm .github/workflows/apply-sticker-fix.yml
+          git commit -m 'chore: remove temporary patch workflow'
+          git push
