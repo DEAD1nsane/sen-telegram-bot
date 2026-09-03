@@ -2,6 +2,7 @@ import os
 import re
 import asyncio
 import html
+import tempfile
 from datetime import datetime, timezone
 from urllib.parse import urlsplit, urlunsplit
 
@@ -16,6 +17,7 @@ from aiogram.types import (
     InputRichBlockListItem,
     RichMessageButton, RichTextBold, RichTextItalic, RichTextUnderline,
     RichTextStrikethrough, RichTextCode, EphemeralMessageParameters,
+    FSInputFile,
 )
 from aiogram.filters import Command
 from aiogram.client.default import DefaultBotProperties
@@ -53,12 +55,19 @@ BOT_INFO = None
 INTERACTION_TTL = 300
 MENU_TTL = 30
 SEARCH_CACHE_TTL = 60
+AUDIO_CACHE_TTL = 60 * 60 * 24 * 30
 MENTION_ONLY_RE = re.compile(r"^(?:@[A-Za-z0-9_]{5,32}\s*)+$")
+TRIGGER_AUDIO_FILES = {
+    "sen": "Devin_The_Dude_Anythang.mp3",
+    "magic": "Do You Believe In Magic.mp3",
+    "magical": "Do You Believe In Magic.mp3",
+}
 
 
 def interaction_key(chat_id, user_id): return f"memory_interaction:{chat_id}:{user_id}"
 def menu_identity_key(chat_id, user_id): return f"memory_menu_identity:{chat_id}:{user_id}"
 def search_cache_key(query, news): return f"web_search:{'news' if news else 'general'}:{query.strip().lower()}"
+def audio_cache_key(filename): return f"keyword_audio_file_id:{filename}"
 
 async def set_interaction(chat_id, user_id, action):
     await redis_client.set(interaction_key(chat_id, user_id), action, ex=INTERACTION_TTL)
@@ -360,6 +369,12 @@ def detect_search_intent(text):
     question = re.search(r"\b(?:who|what|when|where|why|how|does|do|did|is|are|can|could|will|has|have)\b", t)
     return bool(question and len(t.split()) >= 5)
 
+def detect_explicit_search_intent(text):
+    t = re.sub(r"\s+", " ", (text or "")).strip().lower()
+    if not t: return False
+    explicit_markers = ("search", "google", "look up", "lookup", "find out", "search the web", "browse", "web search", "internet", "online", "news", "headlines", "latest", "newest", "recent", "today", "tonight", "this week", "right now", "currently", "what happened", "who won", "score", "price", "release date", "schedule", "status", "update", "source", "sources")
+    return any(marker in t for marker in explicit_markers)
+
 async def searx_request(query, category="general", time_range=None, page=1, limit=10):
     params = {"q": query, "format": "json", "categories": category, "language": "en", "pageno": page, "safesearch": 1}
     if time_range: params["time_range"] = time_range
@@ -444,6 +459,69 @@ async def download_telegram_media(file_id):
         print(f"Telegram media download error: {e}")
         return None
 
+async def send_keyword_audio(message, filename):
+    try:
+        cache_key = audio_cache_key(filename)
+        cached = await redis_client.get(cache_key)
+        audio = cached.decode() if isinstance(cached, bytes) else cached
+        if not audio:
+            path = os.path.join(os.path.dirname(os.path.abspath(__file__)), filename)
+            if not os.path.isfile(path):
+                print(f"Keyword audio file missing: {path}")
+                return False
+            sent = await message.answer_audio(
+                audio=FSInputFile(path),
+                reply_parameters=None if message.chat.type == "private" else ReplyParameters(message_id=message.message_id),
+            )
+            audio = getattr(getattr(sent, "audio", None), "file_id", None)
+            if audio:
+                try: await redis_client.set(cache_key, audio, ex=AUDIO_CACHE_TTL)
+                except Exception as e: print(f"Keyword audio cache write failure: {e}")
+            return True
+        await message.answer_audio(
+            audio=audio,
+            reply_parameters=None if message.chat.type == "private" else ReplyParameters(message_id=message.message_id),
+        )
+        return True
+    except Exception as e:
+        print(f"Keyword audio delivery error ({filename}): {e}")
+        return False
+
+async def get_gemini_video_file(media_bytes, media_mime, media_description):
+    suffix = ".mp4" if media_mime == "video/mp4" else ".bin"
+    temp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+            tmp.write(media_bytes)
+            temp_path = tmp.name
+        print(f"Gemini video upload starting: {len(media_bytes)} bytes, mime={media_mime}, description={media_description}")
+        uploaded = await asyncio.to_thread(
+            gemini_client.files.upload,
+            file=temp_path,
+            config=types.UploadFileConfig(mime_type=media_mime),
+        )
+        print(f"Gemini video uploaded: name={getattr(uploaded, 'name', None)} state={getattr(getattr(uploaded, 'state', None), 'name', getattr(uploaded, 'state', None))}")
+        for attempt in range(60):
+            state = getattr(uploaded, "state", None)
+            state_name = str(getattr(state, "name", state) or "").upper()
+            if state_name == "ACTIVE":
+                return uploaded
+            if state_name == "FAILED":
+                error = getattr(uploaded, "error", None)
+                raise RuntimeError(f"Gemini video processing failed: {error or 'unknown processing error'}")
+            await asyncio.sleep(1)
+            uploaded = await asyncio.to_thread(gemini_client.files.get, name=uploaded.name)
+        raise RuntimeError("Gemini video processing timed out after 60 seconds")
+    finally:
+        if temp_path:
+            try: os.unlink(temp_path)
+            except OSError: pass
+
+async def delete_gemini_file(uploaded):
+    if not uploaded or not getattr(uploaded, "name", None): return
+    try: await asyncio.to_thread(gemini_client.files.delete, name=uploaded.name)
+    except Exception as e: print(f"Gemini temporary video cleanup error: {e}")
+
 async def get_sticker_input(message):
     sticker = getattr(message, "sticker", None)
     if not sticker: return None, None, ""
@@ -510,6 +588,17 @@ async def handle_conversation(message):
     replied_video = bool(replied_video_media)
     has_media_input = bool(message.photo or message.voice or replied_video)
 
+    keyword_audio = None
+    if text_no_html and not text_no_html.startswith("/"):
+        if re.search(r"\bsen\b", text_no_html, re.I):
+            keyword_audio = TRIGGER_AUDIO_FILES["sen"]
+        elif re.search(r"\bmagical\b", text_no_html, re.I):
+            keyword_audio = TRIGGER_AUDIO_FILES["magical"]
+        elif re.search(r"\bmagic\b", text_no_html, re.I):
+            keyword_audio = TRIGGER_AUDIO_FILES["magic"]
+    if keyword_audio:
+        await send_keyword_audio(message, keyword_audio)
+
     if message.voice is not None:
         if not (tagged or reply_to_bot): return
     elif message.video is not None:
@@ -560,17 +649,19 @@ async def handle_conversation(message):
         if not media_bytes:
             await message.answer("I couldn't download that video to inspect it. Try sending the video again and reply to it.", reply_to_message_id=None if is_private else mid)
             return
+        print(f"Replied video downloaded: message_id={getattr(message.reply_to_message, 'message_id', None)} size={len(media_bytes)} mime={media_mime}")
 
     if not prompt and replied_context and not media_bytes: prompt = "What are your thoughts on this?"
     if not (prompt or replied_context or media_bytes): return
 
+    uploaded_gemini_video = None
     try:
         saved = await get_memories(str(uid))
         history_key = f"chat_history:{cid}:{uid}"
         raw_hist = await redis_client.lrange(history_key, 0, -1)
         history = [x.decode() if isinstance(x, bytes) else str(x) for x in raw_hist]
 
-        use_search = detect_search_intent(prompt)
+        use_search = detect_explicit_search_intent(prompt) if media_bytes else detect_search_intent(prompt)
         news = bool(re.search(r"\b(?:news|headlines|latest|today|breaking|recent)\b", prompt, re.I))
         search_query = normalize_search_query(prompt)
         search_context = await free_web_search(search_query, news=news) if use_search else ""
@@ -581,6 +672,8 @@ async def handle_conversation(message):
         if media_description: context.append(f"Incoming Media: {media_description}")
         if search_context: context.append("Web Search Context:\n" + search_context)
         elif use_search: context.append("Web Search Context:\nA web search was requested, but no usable results were returned. Do not pretend that a search result supports a claim.")
+        if media_bytes:
+            context.append("Media handling rule: The attached media is the primary evidence for the user's request. Answer what can actually be seen or heard in it. Do not substitute web results, conversation history, or guesses for details that should come from the media. If the media cannot be inspected reliably, say so instead of inventing what happened.")
         final_prompt = "\n\n".join(context) + ("\n\n" if context else "") + (prompt or "Process and answer this media input.")
 
         today = datetime.now(timezone.utc).strftime("%A, %B %d, %Y")
@@ -591,10 +684,11 @@ async def handle_conversation(message):
             "If joking or sarcastic, match the energy.\n"
             "If you do not know, say exactly: 'I don't have enough details to answer that accurately' without guessing.\n"
             "Do not assume personal details unless explicitly present in the memory list.\n"
+            "When media is attached, treat that media as primary evidence. Never fabricate visual or audio details. If you cannot reliably inspect it, clearly say that you cannot inspect it.\n"
             "Return Telegram Rich HTML for sendRichMessage. Use only HTML that Telegram Rich HTML actually supports: <b>, <strong>, <i>, <em>, <u>, <ins>, <s>, <strike>, <del>, <code>, <mark>, <sub>, <sup>, <tg-spoiler>, <a>, <tg-reference>, <tg-emoji>, <table>, <details>, and <summary>.\n"
             "Do NOT use <p>, <h1>-<h6>, <div>, <section>, <article>, <ul>, <ol>, or <li> in Rich HTML. Use normal newlines for paragraphs and <details><summary>...</summary>...</details> for collapsible sections.\n"
             "For mathematical answers, prefer <tg-math-block> for standalone equations and <tg-math> for inline equations. Put raw LaTeX inside those tags. You may also use $$...$$, \\[...\\], or \\(...\\) when useful; the bot converts those delimiters to Telegram math rendering automatically.\n"
-            "For current facts, news, prices, schedules, product information, Telegram features, or anything the user asks you to search/look up, use the supplied Web Search Context. Do not invent search results or claim a fact is current without supporting search context.\n"
+            "For current facts, news, prices, schedules, product information, Telegram features, or anything the user explicitly asks you to search/look up, use the supplied Web Search Context. Do not invent search results or claim a fact is current without supporting search context.\n"
             "When Web Search Context contains Image: URLs, an image may be useful as supporting media for the search result. If an image is genuinely useful, put exactly one marker [ATTACH_SEARCH_IMAGE: URL] in your response using one of the supplied Image URLs. Do not invent image URLs. Never use this marker for non-search media.\n"
             "Only search-result images may be sent as outgoing media. Do not generate slideshows, collages, presentations, images, videos, audio, or other media. If asked to create media, respond in text instead.\n"
             "Only show source links when the user explicitly asks for sources, citations, links, or URLs. When requested, put them at the very end as a compact rich-text footnote section using <details><summary>Sources</summary>...links...</details>. Otherwise do not display source URLs.\n"
@@ -605,7 +699,10 @@ async def handle_conversation(message):
         if history: instructions += "\nUse Recent Conversation Context for continuity without repeating it."
 
         safety = [types.SafetySetting(category=c, threshold="BLOCK_NONE") for c in ("HARM_CATEGORY_HATE_SPEECH", "HARM_CATEGORY_HARASSMENT", "HARM_CATEGORY_SEXUALLY_EXPLICIT", "HARM_CATEGORY_DANGEROUS_CONTENT")]
-        if media_bytes:
+        if media_bytes and media_mime and media_mime.startswith("video/"):
+            uploaded_gemini_video = await get_gemini_video_file(media_bytes, media_mime, media_description)
+            contents = [uploaded_gemini_video, final_prompt]
+        elif media_bytes:
             media_part = types.Part.from_bytes(data=media_bytes, mime_type=media_mime)
             contents = [media_part, final_prompt]
         else:
@@ -643,9 +740,13 @@ async def handle_conversation(message):
             error = "Whoa, I'm getting a little overwhelmed! Let me catch my breath. Try again in about 15 seconds."
         elif "429" in s or "RESOURCE_EXHAUSTED" in s:
             error = "Whoa, I'm getting a little overwhelmed! Let me catch my breath. Try again in about 10 seconds."
+        elif media_bytes and media_mime and media_mime.startswith("video/"):
+            error = "I couldn't reliably inspect that video, so I'm not going to make something up. Try the video again in a moment."
         else:
             error = "I ran into an unexpected problem processing that request."
         await message.answer(error, reply_to_message_id=None if is_private else mid)
+    finally:
+        await delete_gemini_file(uploaded_gemini_video)
 
 async def health_check(request): return web.json_response({"status":"ok","bot":BOT_INFO.username if BOT_INFO else None})
 
