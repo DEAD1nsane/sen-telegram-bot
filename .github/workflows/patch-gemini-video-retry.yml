@@ -20,17 +20,15 @@ jobs:
         run: |
           python - <<'PY'
           from pathlib import Path
+          import re
 
           path = Path("main.py")
           text = path.read_text()
 
-          # Add Gemini retry helper before the conversation handler.
-          marker = '@router.message(F.community_chat_added)\n'
-          helper = '''async def generate_gemini_response(contents, config, max_attempts=4):
-              # Gemini can temporarily return 503 UNAVAILABLE or 429 RESOURCE_EXHAUSTED.
-              # Retry those transient failures with exponential backoff before giving up.
+          if 'async def generate_gemini_response(' not in text:
+              marker = '@router.message(F.community_chat_added)\n'
+              helper = '''async def generate_gemini_response(contents, config, max_attempts=4):
               retry_delays = (2, 4, 8)
-              last_error = None
               for attempt in range(max_attempts):
                   try:
                       return await gemini_client.aio.models.generate_content(
@@ -39,7 +37,6 @@ jobs:
                           config=config,
                       )
                   except Exception as e:
-                      last_error = e
                       error_text = str(e).upper()
                       retryable = (
                           "503" in error_text
@@ -50,155 +47,100 @@ jobs:
                       if not retryable or attempt >= len(retry_delays):
                           raise
                       delay = retry_delays[attempt]
-                      print(
-                          f"Gemini temporary failure ({str(e)[:180]}). "
-                          f"Retrying in {delay}s, attempt {attempt + 2}/{max_attempts}."
-                      )
+                      print(f"Gemini temporary failure ({str(e)[:180]}). Retrying in {delay}s, attempt {attempt + 2}/{max_attempts}.")
                       await asyncio.sleep(delay)
-              raise last_error
 
           '''
-          if 'async def generate_gemini_response(' not in text:
               if marker not in text:
                   raise SystemExit("Conversation handler marker not found")
               text = text.replace(marker, helper + marker, 1)
 
-          # Receive regular videos as updates, but only process them when they are replied-to media.
-          old = '@router.message(F.text | F.caption | F.voice | F.photo)'
-          new = '@router.message(F.text | F.caption | F.voice | F.photo | F.video)'
+          text = text.replace(
+              '@router.message(F.text | F.caption | F.voice | F.photo)',
+              '@router.message(F.text | F.caption | F.voice | F.photo | F.video)',
+              1,
+          )
+
+          old = '    reply_to_bot = bool(message.reply_to_message and BOT_INFO and message.reply_to_message.from_user and message.reply_to_message.from_user.id == BOT_INFO.id)\n    has_media_input = bool(message.photo or message.voice)'
+          new = '    reply_to_bot = bool(message.reply_to_message and BOT_INFO and message.reply_to_message.from_user and message.reply_to_message.from_user.id == BOT_INFO.id)\n    replied_video = bool(message.reply_to_message and message.reply_to_message.video)\n    has_media_input = bool(message.photo or message.voice or replied_video)'
           if old not in text:
-              raise SystemExit("Conversation router decorator not found")
+              raise SystemExit("Media state lines not found")
           text = text.replace(old, new, 1)
 
-          # Identify a video being replied to. A video message itself must never trigger Sen merely because it has a caption/mention.
-          old = '''    reply_to_bot = bool(message.reply_to_message and BOT_INFO and message.reply_to_message.from_user and message.reply_to_message.from_user.id == BOT_INFO.id)
-              has_media_input = bool(message.photo or message.voice)
-
-              if message.voice is not None:
-                  if not (tagged or reply_to_bot): return
-              elif not (tagged or reply_to_bot or is_private): return
-          '''
-          new = '''    reply_to_bot = bool(message.reply_to_message and BOT_INFO and message.reply_to_message.from_user and message.reply_to_message.from_user.id == BOT_INFO.id)
-              replied_video = bool(message.reply_to_message and message.reply_to_message.video)
-              has_media_input = bool(message.photo or message.voice or replied_video)
-
-              if message.voice is not None:
-                  if not (tagged or reply_to_bot): return
-              elif message.video is not None:
-                  # Video analysis is intentionally reply-only. Mentioning Sen in a video's own caption
-                  # is not enough to make the bot process the video.
-                  if not (replied_video and (tagged or reply_to_bot)): return
-              elif not (tagged or reply_to_bot or is_private): return
-          '''
+          old = '    if message.voice is not None:\n        if not (tagged or reply_to_bot): return\n    elif not (tagged or reply_to_bot or is_private): return'
+          new = '    if message.voice is not None:\n        if not (tagged or reply_to_bot): return\n    elif message.video is not None:\n        if not (replied_video and (tagged or reply_to_bot)): return\n    elif not (tagged or reply_to_bot or is_private): return'
           if old not in text:
-              raise SystemExit("Conversation media gating block not found")
+              raise SystemExit("Conversation gating block not found")
           text = text.replace(old, new, 1)
 
-          # Include replied-to video media in Gemini input.
-          old = '''    if message.reply_to_message:
-                  replied_context = message.reply_to_message.text or message.reply_to_message.caption or ""
-                  if message.reply_to_message.sticker:
-                      replied_context += f"\\n[Replied-to message contains a sticker: {message.reply_to_message.sticker.emoji or 'sticker'}]"
-
-              media_bytes, media_mime, media_description = None, None, ""
-          '''
-          new = '''    if message.reply_to_message:
-                  replied_context = message.reply_to_message.text or message.reply_to_message.caption or ""
-                  if message.reply_to_message.sticker:
-                      replied_context += f"\\n[Replied-to message contains a sticker: {message.reply_to_message.sticker.emoji or 'sticker'}]"
-                  if message.reply_to_message.video:
-                      replied_context += "\\n[Replied-to message contains a video]"
-
-              media_bytes, media_mime, media_description = None, None, ""
-          '''
+          old = '        if message.reply_to_message.sticker:\n            replied_context += f"\\n[Replied-to message contains a sticker: {message.reply_to_message.sticker.emoji or \'sticker\'}]"'
+          new = old + '\n        if message.reply_to_message.video:\n            replied_context += "\\n[Replied-to message contains a video]"'
           if old not in text:
-              raise SystemExit("Reply context block not found")
+              raise SystemExit("Reply context sticker block not found")
           text = text.replace(old, new, 1)
 
-          old = '''    # A sticker is context only when the user replies to that sticker.
-              # Sending a sticker by itself must never trigger Sen.
-              if message.reply_to_message and message.reply_to_message.sticker and not media_bytes:
-                  media_bytes, media_mime, media_description = await get_sticker_input(message.reply_to_message)
+          marker = '    # A sticker is context only when the user replies to that sticker.\n    # Sending a sticker by itself must never trigger Sen.\n    if message.reply_to_message and message.reply_to_message.sticker and not media_bytes:\n        media_bytes, media_mime, media_description = await get_sticker_input(message.reply_to_message)\n'
+          video_block = '''
+    # A video is context only when the user replies to that video and addresses Sen.
+    # Telegram's official Bot API currently limits bot downloads through getFile to 20 MB.
+    if replied_video and not media_bytes:
+        video = message.reply_to_message.video
+        if video.file_size and video.file_size > 20 * 1024 * 1024:
+            await message.answer(
+                "That video is over Telegram's 20 MB bot download limit, so I can't inspect it.",
+                reply_to_message_id=None if is_private else mid,
+            )
+            return
+        media_bytes = await download_telegram_media(video.file_id)
+        media_mime = getattr(video, "mime_type", None) or "video/mp4"
+        media_description = "Replied-to video"
+        if not media_bytes:
+            await message.answer(
+                "I couldn't download that video to inspect it. Try sending the video again and reply to it.",
+                reply_to_message_id=None if is_private else mid,
+            )
+            return
+'''
+          if marker not in text:
+              raise SystemExit("Sticker context marker not found")
+          text = text.replace(marker, marker + video_block, 1)
 
-              if not prompt and replied_context and not media_bytes: prompt = "What are your thoughts on this?"
-          '''
-          new = '''    # A sticker is context only when the user replies to that sticker.
-              # Sending a sticker by itself must never trigger Sen.
-              if message.reply_to_message and message.reply_to_message.sticker and not media_bytes:
-                  media_bytes, media_mime, media_description = await get_sticker_input(message.reply_to_message)
-
-              # A video is context only when the user replies to that video and addresses Sen.
-              # Telegram's official Bot API currently limits bot downloads through getFile to 20 MB.
-              if replied_video and not media_bytes:
-                  video = message.reply_to_message.video
-                  if video.file_size and video.file_size > 20 * 1024 * 1024:
-                      await message.answer(
-                          "That video is over Telegram's 20 MB bot download limit, so I can't inspect it.",
-                          reply_to_message_id=None if is_private else mid,
-                      )
-                      return
-                  media_bytes = await download_telegram_media(video.file_id)
-                  media_mime = getattr(video, "mime_type", None) or "video/mp4"
-                  media_description = "Replied-to video"
-                  if not media_bytes:
-                      await message.answer(
-                          "I couldn't download that video to inspect it. Try sending the video again and reply to it.",
-                          reply_to_message_id=None if is_private else mid,
-                      )
-                      return
-
-              if not prompt and replied_context and not media_bytes: prompt = "What are your thoughts on this?"
-          '''
-          if old not in text:
-              raise SystemExit("Sticker media context block not found")
-          text = text.replace(old, new, 1)
-
-          # Use the retrying wrapper instead of calling generate_content directly.
           old = '''        response = await gemini_client.aio.models.generate_content(
-                  model="gemini-3.5-flash-lite",
-                  contents=contents,
-                  config=types.GenerateContentConfig(system_instruction=instructions, safety_settings=safety),
-              )
-          '''
+            model="gemini-3.5-flash-lite",
+            contents=contents,
+            config=types.GenerateContentConfig(system_instruction=instructions, safety_settings=safety),
+        )'''
           new = '''        response = await generate_gemini_response(
-                  contents,
-                  types.GenerateContentConfig(system_instruction=instructions, safety_settings=safety),
-              )
-          '''
+            contents,
+            types.GenerateContentConfig(system_instruction=instructions, safety_settings=safety),
+        )'''
           if old not in text:
-              raise SystemExit("Gemini generate_content call not found")
+              raise SystemExit("Gemini call not found")
           text = text.replace(old, new, 1)
 
-          # Make the model's media instructions explicit about replied-to videos.
-          old = '            "Only search-result images may be sent as outgoing media. Do not generate slideshows, collages, presentations, images, videos, audio, or other media. If asked to create media, respond in text instead.\\n"\n'
-          new = '            "Only search-result images may be sent as outgoing media. Do not generate slideshows, collages, presentations, images, videos, audio, or other media. If asked to create media, respond in text instead. Replied-to videos are incoming context only and may be analyzed or summarized; never send the replied-to video back out.\\n"\n'
-          if old not in text:
-              raise SystemExit("Media instruction line not found")
-          text = text.replace(old, new, 1)
-
-          # Replace the generic error response with useful transient-service messaging.
           old = '''    except Exception as e:
-              print(f"Gemini AI processing error: {e}")
-              error = "Whoa, I'm getting a little overwhelmed! Let me catch my breath." if "429" in str(e) else "I am currently broken right now, the owner needs to fix me."
-              await message.answer(error, reply_to_message_id=None if is_private else mid)
-          '''
+        print(f"Gemini AI processing error: {e}")
+        error = "Whoa, I'm getting a little overwhelmed! Let me catch my breath." if "429" in str(e) else "I am currently broken right now, the owner needs to fix me."
+        await message.answer(error, reply_to_message_id=None if is_private else mid)'''
           new = '''    except Exception as e:
-              print(f"Gemini AI processing error: {e}")
-              error_text = str(e).upper()
-              if "503" in error_text or "UNAVAILABLE" in error_text:
-                  error = "Whoa, I'm getting a little overwhelmed! Let me catch my breath. Try again in about 15 seconds."
-              elif "429" in error_text or "RESOURCE_EXHAUSTED" in error_text:
-                  error = "Whoa, I'm getting a little overwhelmed! Let me catch my breath. Try again in about 10 seconds."
-              else:
-                  error = "I ran into an unexpected problem processing that request."
-              await message.answer(error, reply_to_message_id=None if is_private else mid)
-          '''
+        print(f"Gemini AI processing error: {e}")
+        error_text = str(e).upper()
+        if "503" in error_text or "UNAVAILABLE" in error_text:
+            error = "Whoa, I'm getting a little overwhelmed! Let me catch my breath. Try again in about 15 seconds."
+        elif "429" in error_text or "RESOURCE_EXHAUSTED" in error_text:
+            error = "Whoa, I'm getting a little overwhelmed! Let me catch my breath. Try again in about 10 seconds."
+        else:
+            error = "I ran into an unexpected problem processing that request."
+        await message.answer(error, reply_to_message_id=None if is_private else mid)'''
           if old not in text:
-              raise SystemExit("Generic Gemini error block not found")
+              raise SystemExit("Gemini error block not found")
           text = text.replace(old, new, 1)
 
           path.write_text(text)
           PY
+
+      - name: Validate Python
+        run: python -m py_compile main.py
 
       - name: Commit patched main.py and remove temporary workflow
         run: |
