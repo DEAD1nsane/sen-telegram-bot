@@ -8,7 +8,7 @@ from urllib.parse import urlsplit, urlunsplit
 from aiohttp import web
 from aiogram import Bot, Dispatcher, Router, F
 from aiogram.types import (
-    Message, FSInputFile, CallbackQuery, BotCommand,
+    Message, CallbackQuery, BotCommand,
     BotCommandScopeAllGroupChats, BotCommandScopeAllPrivateChats,
     BotCommandScopeAllChatAdministrators, ReplyParameters,
     InputRichMessage, InputRichBlockParagraph,
@@ -54,6 +54,7 @@ INTERACTION_TTL = 300
 MENU_TTL = 30
 SEARCH_CACHE_TTL = 60
 MENTION_ONLY_RE = re.compile(r"^(?:@[A-Za-z0-9_]{5,32}\s*)+$")
+
 
 def interaction_key(chat_id, user_id): return f"memory_interaction:{chat_id}:{user_id}"
 def menu_identity_key(chat_id, user_id): return f"memory_menu_identity:{chat_id}:{user_id}"
@@ -384,7 +385,7 @@ async def free_web_search(query, news=False):
         else: results = await searx_request(search_query, "general", None, 1, 8)
         seen, out = set(), []
         for result in results:
-            title = (result.get("title") or "").strip(); content = (result.get("content") or result.get("snippet") or "").strip(); url = clean_url(result.get("url", "")); published = (result.get("publishedDate") or result.get("published_date") or "").strip(); source = (result.get("engine") or result.get("source") or "").strip()
+            title = (result.get("title") or "").strip(); content = (result.get("content") or result.get("snippet") or "").strip(); url = clean_url(result.get("url", "")); published = (result.get("publishedDate") or result.get("published_date") or "").strip(); source = (result.get("engine") or result.get("source") or "").strip(); image_url = (result.get("thumbnail") or result.get("img_src") or result.get("image") or "").strip()
             key = url.lower() if url else (title.lower(), content[:120].lower())
             if key in seen or not (title or content or url): continue
             seen.add(key); lines = []
@@ -393,6 +394,7 @@ async def free_web_search(query, news=False):
             if published: lines.append(f"Published: {published}")
             if content: lines.append(f"Content: {content}")
             if url: lines.append(f"URL: {url}")
+            if image_url: lines.append(f"Image: {image_url}")
             out.append("\n".join(lines))
         result_text = "\n\n".join(out)
         if result_text:
@@ -428,116 +430,173 @@ async def send_ai_response(chat_id, msg_id, response_text, is_private):
     if not is_private: kwargs["reply_parameters"] = ReplyParameters(message_id=msg_id)
     return await bot.send_rich_message(**kwargs)
 
-async def send_audio_track(chat_id, msg_id, key, file_path, title, performer, is_private):
-    try:
-        cached = await redis_client.get(f"audio_cache:{key}"); audio = cached.decode() if isinstance(cached, bytes) else cached
-        if not audio and os.path.exists(file_path): audio = FSInputFile(file_path)
-        if not audio: return
-        sent = await bot.send_audio(chat_id=chat_id, audio=audio, title=title, performer=performer, reply_to_message_id=None if is_private else msg_id)
-        if sent.audio and sent.audio.file_id: await redis_client.set(f"audio_cache:{key}", sent.audio.file_id)
-    except Exception as e: print(f"Audio media delivery fault record ({key}): {e}")
-
 def clean_ai_output(text):
     text = (text or "I didn't receive a response.").strip(); text = re.sub(r"^```(?:html)?\s*", "", text, flags=re.I); text = re.sub(r"\s*```$", "", text)
     return sanitize_rich_html(render_math_markup(text)).strip()
+
+async def download_telegram_media(file_id):
+    try:
+        file_info = await bot.get_file(file_id)
+        stream = await bot.download_file(file_info.file_path)
+        return stream.read() if stream else None
+    except Exception as e:
+        print(f"Telegram media download error: {e}")
+        return None
+
+async def get_sticker_input(message):
+    sticker = getattr(message, "sticker", None)
+    if not sticker: return None, None, ""
+    if not sticker.is_animated and not sticker.is_video:
+        data = await download_telegram_media(sticker.file_id)
+        return data, "image/webp", "Sticker"
+    thumbnail = getattr(sticker, "thumbnail", None)
+    if thumbnail:
+        data = await download_telegram_media(thumbnail.file_id)
+        return data, "image/webp", "Animated/video sticker thumbnail"
+    return None, None, "Sticker (animated/video; no usable thumbnail)"
 
 @router.message(F.community_chat_added)
 async def handle_community_added(message): print(f"Community binding topology registered: {message.chat.id}")
 @router.message(F.community_chat_removed)
 async def handle_community_removed(message): print(f"Community dropping context safely absorbed: {message.chat.id}")
 
-@router.message(F.text | F.caption | F.voice | F.sticker)
+@router.message(F.text | F.caption | F.voice | F.photo | F.sticker)
 async def handle_conversation(message):
     if message.audio is not None: return
     action = await get_interaction(message.chat.id, message.from_user.id)
     if action and message.text and not message.text.startswith("/"):
         if await process_memory_text(message, action): return
-    text = message.text or message.caption or ""; text_no_html = re.sub(r"<[^>]+>", "", text)
-    if re.search(r"\bsen\b", text_no_html, re.I): asyncio.create_task(send_audio_track(message.chat.id, message.message_id, "sen", "Devin_The_Dude_Anythang.mp3", "Anythang", "Devin The Dude", message.chat.type=="private"))
-    if re.search(r"\bmagic(?:al|ally)?\b", text_no_html, re.I): asyncio.create_task(send_audio_track(message.chat.id, message.message_id, "magic", "Do You Believe In Magic.mp3", "Do You Believe In Magic", "The Lovin' Spoonful", message.chat.type=="private"))
-    is_private = message.chat.type == "private"; bot_username = f"@{BOT_INFO.username}" if BOT_INFO and BOT_INFO.username else ""; lower = text_no_html.lower()
-    tagged = bool(bot_username) and bot_username.lower() in lower; tagged = tagged or "@gemini" in lower
+
+    text = message.text or message.caption or ""
+    text_no_html = re.sub(r"<[^>]+>", "", text)
+    is_private = message.chat.type == "private"
+    bot_username = f"@{BOT_INFO.username}" if BOT_INFO and BOT_INFO.username else ""
+    lower = text_no_html.lower()
+    tagged = bool(bot_username) and bot_username.lower() in lower
+    tagged = tagged or "@gemini" in lower
     reply_to_bot = bool(message.reply_to_message and BOT_INFO and message.reply_to_message.from_user and message.reply_to_message.from_user.id == BOT_INFO.id)
+    has_media_input = bool(message.photo or message.sticker or message.voice)
+
     if message.voice is not None:
         if not (tagged or reply_to_bot): return
     elif not (tagged or reply_to_bot or is_private): return
-    if message.sticker and not (reply_to_bot or is_private): return
+
     prompt = text
     if bot_username: prompt = re.sub(re.escape(bot_username), "", prompt, flags=re.I)
     prompt = re.sub(r"@gemini\b", "", prompt, flags=re.I).strip()
     if reply_to_bot and prompt and MENTION_ONLY_RE.fullmatch(prompt): return
-    if not re.sub(r"```(?:\w+)?", "", prompt).strip(): return
-    uid, cid, mid = message.from_user.id, message.chat.id, message.message_id; cooldown = f"cooldown:{uid}"
+    if not re.sub(r"```(?:\w+)?", "", prompt).strip() and not has_media_input and not message.reply_to_message: return
+
+    uid, cid, mid = message.from_user.id, message.chat.id, message.message_id
+    cooldown = f"cooldown:{uid}"
     if await redis_client.exists(cooldown):
         await message.answer("Slow down, request limit reached.", reply_to_message_id=None if is_private else mid); return
     await redis_client.set(cooldown, "1", ex=4)
-    replied_context = ""; audio_bytes, audio_mime = None, "audio/ogg"
-    if message.reply_to_message: replied_context = message.reply_to_message.text or message.reply_to_message.caption or ""
-    sticker_bytes, sticker_mime = None, None
+
+    replied_context = ""
+    if message.reply_to_message:
+        replied_context = message.reply_to_message.text or message.reply_to_message.caption or ""
+        if message.reply_to_message.sticker:
+            replied_context += f"\n[Replied-to message contains a sticker: {message.reply_to_message.sticker.emoji or 'sticker'}]"
+
+    media_bytes, media_mime, media_description = None, None, ""
     if message.voice:
-        file_info = await bot.get_file(message.voice.file_id); stream = await bot.download_file(file_info.file_path)
-        if stream: audio_bytes = stream.read()
-        audio_mime = getattr(message.voice, "mime_type", None) or audio_mime
+        media_bytes = await download_telegram_media(message.voice.file_id)
+        media_mime = getattr(message.voice, "mime_type", None) or "audio/ogg"
+        media_description = "Voice note"
     elif message.sticker:
-        try:
-            sticker = message.sticker
-            # Static stickers are native WebP images, which Gemini supports directly.
-            if not sticker.is_animated and not sticker.is_video:
-                file_info = await bot.get_file(sticker.file_id)
-                stream = await bot.download_file(file_info.file_path)
-                if stream:
-                    sticker_bytes = stream.read()
-                    sticker_mime = "image/webp"
-            elif sticker.is_video:
-                # Telegram video stickers are VP9/WebM and Gemini supports video/webm.
-                file_info = await bot.get_file(sticker.file_id)
-                stream = await bot.download_file(file_info.file_path)
-                if stream:
-                    sticker_bytes = stream.read()
-                    sticker_mime = "video/webm"
-            elif sticker.thumbnail:
-                # TGS/Lottie is not a Gemini input format, so use Telegram's JPG/WEBP preview.
-                file_info = await bot.get_file(sticker.thumbnail.file_id)
-                stream = await bot.download_file(file_info.file_path)
-                if stream:
-                    sticker_bytes = stream.read()
-                    sticker_mime = "image/jpeg"
-        except Exception as sticker_error:
-            print(f"Sticker media acquisition error: {sticker_error}")
-    if not prompt and replied_context: prompt = "What are your thoughts on this?"
-    if message.sticker and not prompt and not replied_context:
-        prompt = "Describe this sticker and tell me what it appears to depict."
-    if not (prompt or replied_context or audio_bytes): return
+        media_bytes, media_mime, media_description = await get_sticker_input(message)
+    elif message.photo:
+        media_bytes = await download_telegram_media(message.photo[-1].file_id)
+        media_mime = "image/jpeg"
+        media_description = "Photo"
+
+    if not prompt and replied_context and not media_bytes: prompt = "What are your thoughts on this?"
+    if not (prompt or replied_context or media_bytes): return
+
     try:
-        saved = await get_memories(str(uid)); history_key = f"chat_history:{cid}:{uid}"; raw_hist = await redis_client.lrange(history_key, 0, -1); history = [x.decode() if isinstance(x, bytes) else str(x) for x in raw_hist]
-        use_search = detect_search_intent(prompt); news = bool(re.search(r"\b(?:news|headlines|latest|today|breaking|recent)\b", prompt, re.I)); search_query = normalize_search_query(prompt); search_context = await free_web_search(search_query, news=news) if use_search else ""
+        saved = await get_memories(str(uid))
+        history_key = f"chat_history:{cid}:{uid}"
+        raw_hist = await redis_client.lrange(history_key, 0, -1)
+        history = [x.decode() if isinstance(x, bytes) else str(x) for x in raw_hist]
+
+        use_search = detect_search_intent(prompt)
+        news = bool(re.search(r"\b(?:news|headlines|latest|today|breaking|recent)\b", prompt, re.I))
+        search_query = normalize_search_query(prompt)
+        search_context = await free_web_search(search_query, news=news) if use_search else ""
+
         context = []
         if replied_context: context.append(f'Message User is Replying To:\n"{replied_context}"')
         if history: context.append("Recent Conversation Context:\n" + "\n".join(history))
+        if media_description: context.append(f"Incoming Media: {media_description}")
         if search_context: context.append("Web Search Context:\n" + search_context)
         elif use_search: context.append("Web Search Context:\nA web search was requested, but no usable results were returned. Do not pretend that a search result supports a claim.")
-        final_prompt = "\n\n".join(context) + ("\n\n" if context else "") + (prompt or "Process and answer this voice note.")
+        final_prompt = "\n\n".join(context) + ("\n\n" if context else "") + (prompt or "Process and answer this media input.")
+
         today = datetime.now(timezone.utc).strftime("%A, %B %d, %Y")
-        instructions = (f"Today's date is {today}.\nNever use standard AI pleasantries.\nKeep casual replies brief, but expand when asked for detail.\nIf the user changes subject, immediately follow the new subject.\nIf joking or sarcastic, match the energy.\nIf you do not know, say exactly: 'I don't have enough details to answer that accurately' without guessing.\nDo not assume personal details unless explicitly present in the memory list.\nReturn Telegram Rich HTML for sendRichMessage. Use only HTML that Telegram Rich HTML actually supports: <b>, <strong>, <i>, <em>, <u>, <ins>, <s>, <strike>, <del>, <code>, <mark>, <sub>, <sup>, <tg-spoiler>, <a>, <tg-reference>, <tg-emoji>, <table>, <details>, <summary>, and Telegram rich tags such as <tg-math>, <tg-math-block>, and <tg-collage>.\nDo NOT use <p>, <h1>-<h6>, <div>, <section>, <article>, <ul>, <ol>, or <li> in Rich HTML. Use normal newlines for paragraphs and <details><summary>...</summary>...</details> for collapsible sections.\nFor mathematical answers, prefer <tg-math-block> for standalone equations and <tg-math> for inline equations. Put raw LaTeX inside those tags. You may also use $$...$$, \\[...\\], or \\(...\\) when useful; the bot converts those delimiters to Telegram math rendering automatically.\nFor current facts, news, prices, schedules, product information, Telegram features, or anything the user asks you to search/look up, use the supplied Web Search Context. Do not invent search results or claim a fact is current without supporting search context.\nDo not use Markdown formatting or Markdown tables.")
+        instructions = (f"Today's date is {today}.\n"
+            "Never use standard AI pleasantries.\n"
+            "Keep casual replies brief, but expand when asked for detail.\n"
+            "If the user changes subject, immediately follow the new subject.\n"
+            "If joking or sarcastic, match the energy.\n"
+            "If you do not know, say exactly: 'I don't have enough details to answer that accurately' without guessing.\n"
+            "Do not assume personal details unless explicitly present in the memory list.\n"
+            "Return Telegram Rich HTML for sendRichMessage. Use only HTML that Telegram Rich HTML actually supports: <b>, <strong>, <i>, <em>, <u>, <ins>, <s>, <strike>, <del>, <code>, <mark>, <sub>, <sup>, <tg-spoiler>, <a>, <tg-reference>, <tg-emoji>, <table>, <details>, and <summary>.\n"
+            "Do NOT use <p>, <h1>-<h6>, <div>, <section>, <article>, <ul>, <ol>, or <li> in Rich HTML. Use normal newlines for paragraphs and <details><summary>...</summary>...</details> for collapsible sections.\n"
+            "For mathematical answers, prefer <tg-math-block> for standalone equations and <tg-math> for inline equations. Put raw LaTeX inside those tags. You may also use $$...$$, \\[...\\], or \\(...\\) when useful; the bot converts those delimiters to Telegram math rendering automatically.\n"
+            "For current facts, news, prices, schedules, product information, Telegram features, or anything the user asks you to search/look up, use the supplied Web Search Context. Do not invent search results or claim a fact is current without supporting search context.\n"
+            "When Web Search Context contains Image: URLs, an image may be useful as supporting media for the search result. If an image is genuinely useful, put exactly one marker [ATTACH_SEARCH_IMAGE: URL] in your response using one of the supplied Image URLs. Do not invent image URLs. Never use this marker for non-search media.\n"
+            "Only search-result images may be sent as outgoing media. Do not generate slideshows, collages, presentations, images, videos, audio, or other media. If asked to create media, respond in text instead.\n"
+            "Only show source links when the user explicitly asks for sources, citations, links, or URLs. When requested, put them at the very end as a compact rich-text footnote section using <details><summary>Sources</summary>...links...</details>. Otherwise do not display source URLs.\n"
+            "Do not use Markdown formatting or Markdown tables.")
         if saved: instructions += "\nUser memory directives:\n" + "\n".join(f"- {x}" for x in saved)
-        if search_context: instructions += "\nUse Web Search Context for current facts. Prefer the retrieved sources over stale model knowledge."
+        if search_context: instructions += "\nUse Web Search Context for current facts. Prefer retrieved sources over stale model knowledge."
         if use_search and not search_context: instructions += "\nA search was attempted but returned no usable results. Be explicit about that instead of fabricating sources or pretending to have searched."
         if history: instructions += "\nUse Recent Conversation Context for continuity without repeating it."
+
         safety = [types.SafetySetting(category=c, threshold="BLOCK_NONE") for c in ("HARM_CATEGORY_HATE_SPEECH", "HARM_CATEGORY_HARASSMENT", "HARM_CATEGORY_SEXUALLY_EXPLICIT", "HARM_CATEGORY_DANGEROUS_CONTENT")]
-        if audio_bytes:
-            contents = [types.Part.from_bytes(data=audio_bytes, mime_type=audio_mime), final_prompt]
-        elif sticker_bytes:
-            contents = [types.Part.from_bytes(data=sticker_bytes, mime_type=sticker_mime), final_prompt]
+        if media_bytes:
+            media_part = types.Part.from_bytes(data=media_bytes, mime_type=media_mime)
+            contents = [media_part, final_prompt]
         else:
             contents = final_prompt
-        response = await gemini_client.aio.models.generate_content(model="gemini-3.5-flash-lite", contents=contents, config=types.GenerateContentConfig(system_instruction=instructions, safety_settings=safety))
+
+        response = await gemini_client.aio.models.generate_content(
+            model="gemini-3.5-flash-lite",
+            contents=contents,
+            config=types.GenerateContentConfig(system_instruction=instructions, safety_settings=safety),
+        )
         response_text = clean_ai_output(response.text)
-        try: await send_ai_response(cid, mid, response_text, is_private)
+
+        search_image_url = None
+        image_marker = re.search(r"\[ATTACH_SEARCH_IMAGE:\s*(https?://[^\]\s]+)\]", response_text, re.I)
+        if image_marker and search_context:
+            candidate = image_marker.group(1).rstrip(".,)")
+            supplied_images = set(re.findall(r"Image:\s*(https?://\S+)", search_context, re.I))
+            if candidate in supplied_images:
+                search_image_url = candidate
+            response_text = re.sub(r"\s*\[ATTACH_SEARCH_IMAGE:\s*https?://[^\]\s]+\]\s*", "\n", response_text, flags=re.I).strip()
+
+        try:
+            await send_ai_response(cid, mid, response_text, is_private)
         except Exception as rich_error:
-            print(f"Rich response delivery error: {rich_error}"); fallback = html.unescape(re.sub(r"<[^>]+>", "", response_text)).strip() or "I didn't receive a response."; await message.answer(fallback, reply_to_message_id=None if is_private else mid)
-        clean_history = html.unescape(re.sub(r"<[^>]+>", "", response_text)).strip(); await redis_client.rpush(history_key, f"User: {prompt or 'Voice Note'}", f"Bot: {clean_history}"); await redis_client.ltrim(history_key, -10, -1)
+            print(f"Rich response delivery error: {rich_error}")
+            fallback = html.unescape(re.sub(r"<[^>]+>", "", response_text)).strip() or "I didn't receive a response."
+            await message.answer(fallback, reply_to_message_id=None if is_private else mid)
+
+        if search_image_url:
+            try:
+                await bot.send_photo(chat_id=cid, photo=search_image_url, reply_to_message_id=None if is_private else mid)
+            except Exception as media_error:
+                print(f"Search result image delivery error: {media_error}")
+
+        clean_history = html.unescape(re.sub(r"<[^>]+>", "", response_text)).strip()
+        await redis_client.rpush(history_key, f"User: {prompt or media_description or 'Media'}", f"Bot: {clean_history}")
+        await redis_client.ltrim(history_key, -10, -1)
     except Exception as e:
-        print(f"Gemini AI processing error: {e}"); error = "Whoa, I'm getting a little overwhelmed! Let me catch my breath." if "429" in str(e) else "I am currently broken right now, the owner needs to fix me."; await message.answer(error, reply_to_message_id=None if is_private else mid)
+        print(f"Gemini AI processing error: {e}")
+        error = "Whoa, I'm getting a little overwhelmed! Let me catch my breath." if "429" in str(e) else "I am currently broken right now, the owner needs to fix me."
+        await message.answer(error, reply_to_message_id=None if is_private else mid)
 
 async def health_check(request): return web.json_response({"status":"ok","bot":BOT_INFO.username if BOT_INFO else None})
 
