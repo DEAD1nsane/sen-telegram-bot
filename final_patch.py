@@ -2,6 +2,7 @@
 
 import html
 import re
+from contextvars import ContextVar
 
 
 def _get(obj, key, default=None):
@@ -117,7 +118,47 @@ def _walk_rich_media(obj, seen=None):
     return None
 
 
+_TEMP_FORGET_MEMORIES = ContextVar("sen_temp_forget_memories", default=False)
+
+
 def install(main_module):
+    original_get_memories = getattr(main_module, "get_memories", None)
+    if original_get_memories is not None:
+        async def get_memories_with_temp_forget(user_id_str):
+            if _TEMP_FORGET_MEMORIES.get():
+                return []
+            return await original_get_memories(user_id_str)
+        main_module.get_memories = get_memories_with_temp_forget
+        print("Installed temporary-memory-forget guard")
+
+        router = getattr(main_module, "router", None)
+        handlers = getattr(router, "message", None)
+        handlers = getattr(handlers, "handlers", []) if handlers is not None else []
+        for handler in handlers:
+            callback = getattr(handler, "callback", None)
+            if callback is None:
+                continue
+            callback_name = getattr(callback, "__name__", "")
+            if callback_name not in {"handle_conversation", "keyword_audio_first_handler"}:
+                continue
+
+            async def memory_aware_handler(message, _callback=callback):
+                text = getattr(message, "text", None) or getattr(message, "caption", None) or ""
+                temporary_forget = bool(re.search(
+                    r"\btemporarily\s+(?:forget|ignore)\s+(?:all\s+)?(?:your\s+)?(?:saved\s+)?memories?\b",
+                    text,
+                    re.I,
+                ))
+                token = _TEMP_FORGET_MEMORIES.set(temporary_forget)
+                try:
+                    return await _callback(message)
+                finally:
+                    _TEMP_FORGET_MEMORIES.reset(token)
+
+            handler.callback = memory_aware_handler
+            print(f"Installed temporary-memory-forget handler wrapper around {callback_name}")
+            break
+
     original_resolver = getattr(main_module, "get_replied_video_media", None)
     if original_resolver is not None:
         def resolve_replied_media(message):
