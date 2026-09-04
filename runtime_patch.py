@@ -12,13 +12,25 @@ _SEARCH_STATE = ContextVar("sen_search_state", default=("", ""))
 def _media_tuple(media, label):
     if media is None:
         return None
+    if isinstance(media, dict) or hasattr(media, "get"):
+        try:
+            file_id = media.get("file_id")
+            if file_id:
+                return file_id, media.get("mime_type") or "video/mp4", media.get("file_size"), label
+        except Exception:
+            pass
     file_id = getattr(media, "file_id", None)
-    mime_type = getattr(media, "mime_type", None) or "video/mp4"
-    file_size = getattr(media, "file_size", None)
     if file_id:
-        return file_id, mime_type, file_size, label
-    if isinstance(media, dict) and media.get("file_id"):
-        return media["file_id"], media.get("mime_type") or "video/mp4", media.get("file_size"), label
+        return file_id, getattr(media, "mime_type", None) or "video/mp4", getattr(media, "file_size", None), label
+    return None
+
+
+def _mapping_get(obj, key):
+    if isinstance(obj, dict) or hasattr(obj, "get"):
+        try:
+            return obj.get(key)
+        except Exception:
+            return None
     return None
 
 
@@ -33,47 +45,41 @@ def _find_rich_video(obj, seen=None):
         return None
     seen.add(oid)
 
-    if isinstance(obj, dict):
-        block_type = str(obj.get("type", "")).lower()
-        if block_type == "video":
-            found = _media_tuple(obj.get("video"), "Advanced editor video")
-            if found:
-                return found
-        if block_type == "animation":
-            found = _media_tuple(obj.get("animation"), "Advanced editor animation")
-            if found:
-                return found
-        for key in ("video", "animation"):
-            found = _media_tuple(obj.get(key), "Advanced editor video")
-            if found:
-                return found
-        for value in obj.values():
-            found = _find_rich_video(value, seen)
-            if found:
-                return found
-        return None
-
-    if isinstance(obj, (list, tuple, set)):
-        for value in obj:
-            found = _find_rich_video(value, seen)
-            if found:
-                return found
-        return None
-
-    block_type = str(getattr(obj, "type", "")).lower()
+    block_type = str(_mapping_get(obj, "type") or getattr(obj, "type", "")).lower()
     if block_type == "video":
-        found = _media_tuple(getattr(obj, "video", None), "Advanced editor video")
+        found = _media_tuple(_mapping_get(obj, "video") or getattr(obj, "video", None), "Advanced editor video")
         if found:
             return found
     if block_type == "animation":
-        found = _media_tuple(getattr(obj, "animation", None), "Advanced editor animation")
+        found = _media_tuple(_mapping_get(obj, "animation") or getattr(obj, "animation", None), "Advanced editor animation")
         if found:
             return found
 
-    # RichMessage.blocks is the authoritative structure for Advanced Editor media.
-    blocks = getattr(obj, "blocks", None)
+    for key, label in (("video", "Advanced editor video"), ("animation", "Advanced editor animation")):
+        found = _media_tuple(_mapping_get(obj, key) or getattr(obj, key, None), label)
+        if found:
+            return found
+
+    # RichMessage.blocks is the normal typed aiogram representation.
+    blocks = _mapping_get(obj, "blocks")
+    if blocks is None:
+        blocks = getattr(obj, "blocks", None)
     if blocks is not None:
         found = _find_rich_video(blocks, seen)
+        if found:
+            return found
+
+    # aiogram/Pydantic can retain raw Telegram fields in model_extra.
+    extra = getattr(obj, "model_extra", None)
+    if extra:
+        found = _find_rich_video(extra, seen)
+        if found:
+            return found
+
+    # Some Telegram Python libraries expose unknown/raw fields through api_kwargs.
+    api_kwargs = getattr(obj, "api_kwargs", None)
+    if api_kwargs:
+        found = _find_rich_video(api_kwargs, seen)
         if found:
             return found
 
@@ -86,6 +92,20 @@ def _find_rich_video(obj, seen=None):
     except Exception:
         pass
 
+    if isinstance(obj, (list, tuple, set)):
+        for value in obj:
+            found = _find_rich_video(value, seen)
+            if found:
+                return found
+    elif isinstance(obj, dict) or hasattr(obj, "items"):
+        try:
+            for value in obj.values():
+                found = _find_rich_video(value, seen)
+                if found:
+                    return found
+        except Exception:
+            pass
+
     return None
 
 
@@ -94,7 +114,6 @@ def _get_replied_video_media(message, original_getter):
     if not replied:
         return None
 
-    # Check the normal Telegram video field first.
     try:
         result = original_getter(message)
         if result:
@@ -102,23 +121,34 @@ def _get_replied_video_media(message, original_getter):
     except Exception as exc:
         print(f"Normal replied-media resolver error: {exc}")
 
-    # Advanced Editor messages store media under Message.rich_message.blocks.
+    # First inspect the typed RichMessage field.
     rich_message = getattr(replied, "rich_message", None)
     found = _find_rich_video(rich_message)
     if found:
         print(
-            f"Advanced editor reply video found: message_id={getattr(replied, 'message_id', None)} "
+            f"Advanced editor reply media found: message_id={getattr(replied, 'message_id', None)} "
             f"file_id={found[0]} size={found[2]} mime={found[1]}"
         )
         return found
 
-    # Some aiogram/Pydantic representations expose the complete message only through model_dump().
+    # Then inspect every raw/extra representation aiogram may have retained.
+    for attr in ("model_extra", "api_kwargs"):
+        raw = getattr(replied, attr, None)
+        if raw:
+            found = _find_rich_video(raw)
+            if found:
+                print(
+                    f"Advanced editor reply media found in {attr}: message_id={getattr(replied, 'message_id', None)} "
+                    f"file_id={found[0]} size={found[2]} mime={found[1]}"
+                )
+                return found
+
     try:
         dumped = replied.model_dump(mode="python", exclude_none=True)
         found = _find_rich_video(dumped)
         if found:
             print(
-                f"Advanced editor reply video found in message dump: message_id={getattr(replied, 'message_id', None)} "
+                f"Advanced editor reply media found in message dump: message_id={getattr(replied, 'message_id', None)} "
                 f"file_id={found[0]} size={found[2]} mime={found[1]}"
             )
             return found
@@ -127,12 +157,15 @@ def _get_replied_video_media(message, original_getter):
 
     if rich_message is not None:
         blocks = getattr(rich_message, "blocks", None)
-        block_types = []
-        for block in blocks or []:
-            block_types.append(str(getattr(block, "type", None)))
+        block_types = [str(getattr(block, "type", None)) for block in (blocks or [])]
         print(
-            f"Advanced editor reply contained no usable video: message_id={getattr(replied, 'message_id', None)} "
+            f"Advanced editor reply contained no usable media: message_id={getattr(replied, 'message_id', None)} "
             f"rich_message=True blocks={block_types}"
+        )
+    else:
+        print(
+            f"Advanced editor reply contained no rich_message field: message_id={getattr(replied, 'message_id', None)} "
+            f"extra={bool(getattr(replied, 'model_extra', None))} api_kwargs={bool(getattr(replied, 'api_kwargs', None))}"
         )
     return None
 
