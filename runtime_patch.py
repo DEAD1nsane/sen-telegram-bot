@@ -136,6 +136,33 @@ def _find_message_by_id(obj, message_id, seen=None):
                     return found
         except Exception:
             pass
+    else:
+        # feed_update receives an aiogram Update model during polling, so the
+        # raw fallback must walk its nested Message objects too.
+        for attr in (
+            "message",
+            "edited_message",
+            "channel_post",
+            "edited_channel_post",
+            "business_message",
+            "edited_business_message",
+        ):
+            try:
+                value = getattr(obj, attr, None)
+            except Exception:
+                value = None
+            if value is not None:
+                found = _find_message_by_id(value, message_id, seen)
+                if found is not None:
+                    return found
+        try:
+            dump = obj.model_dump(mode="python", exclude_none=True)
+            if dump is not obj:
+                found = _find_message_by_id(dump, message_id, seen)
+                if found is not None:
+                    return found
+        except Exception:
+            pass
     return None
 
 
