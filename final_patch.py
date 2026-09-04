@@ -174,6 +174,7 @@ def install(main_module):
         main_module.get_replied_video_media = resolve_replied_media
         print("Installed final Rich/Advanced Editor media resolver")
 
+    original_free_search = None
     original_send = getattr(main_module, "send_ai_response", None)
     if original_send is not None:
         original_free_search = getattr(main_module, "free_web_search", None)
@@ -233,14 +234,14 @@ def install(main_module):
         main_module.send_ai_response = send_clean_response
         print("Installed final raw-output/source sanitizer")
 
-        if original_free_search is not None:
-            async def tracked_search(query, news=False):
-                result = await original_free_search(query, news=news)
-                main_module._SEN_LAST_SEARCH = (query or "", result or "")
-                return result
-            main_module.free_web_search = tracked_search
-            main_module._SEN_LAST_SEARCH = ("", "")
-            print("Installed deterministic search-context tracking")
+    if original_free_search is not None:
+        async def tracked_search(query, news=False):
+            result = await original_free_search(query, news=news)
+            main_module._SEN_LAST_SEARCH = (query or "", result or "")
+            return result
+        main_module.free_web_search = tracked_search
+        main_module._SEN_LAST_SEARCH = ("", "")
+        print("Installed deterministic search-context tracking")
 
     original_generate = getattr(main_module, "generate_gemini_response", None)
     if original_generate is not None:
