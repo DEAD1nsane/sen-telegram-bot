@@ -9,9 +9,11 @@ import sitecustomize  # noqa: F401,E402
 import main
 import runtime_patch
 import replied_media_patch
+import final_patch
 
 runtime_patch.install(main)
 replied_media_patch.install(main)
+final_patch.install(main)
 
 
 if __name__ == "__main__":
