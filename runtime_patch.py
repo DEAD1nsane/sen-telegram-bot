@@ -274,16 +274,29 @@ def install(main_module):
         main_module.get_replied_video_media = lambda message: _get_replied_video_media(message, original_getter)
         print("Installed advanced-editor reply video compatibility patch")
 
-    # Preserve the raw Bot API update while aiogram dispatches it. This gives
-    # the media resolver one source of truth even if the current aiogram model
-    # does not yet expose a newly-added RichMessage subtype.
+    # Polling uses Dispatcher.feed_update(), not feed_raw_update(). Capture the
+    # already-parsed Update model while it is still inside the dispatcher call.
+    # This preserves RichMessage.blocks for the resolver and also works for
+    # webhook/synthetic paths that call feed_update directly.
     dispatcher = getattr(main_module, "dp", None)
-    original_feed_raw_update = getattr(dispatcher, "feed_raw_update", None) if dispatcher is not None else None
-    if original_feed_raw_update is not None:
-        async def feed_raw_update_with_capture(update, **kwargs):
+    original_feed_update = getattr(dispatcher, "feed_update", None) if dispatcher is not None else None
+    if original_feed_update is not None:
+        async def feed_update_with_capture(bot, update, **kwargs):
             token = _RAW_UPDATE.set(update)
             try:
-                return await original_feed_raw_update(update, **kwargs)
+                return await original_feed_update(bot, update, **kwargs)
+            finally:
+                _RAW_UPDATE.reset(token)
+        dispatcher.feed_update = feed_update_with_capture
+        print("Installed feed-update capture for advanced-editor media")
+
+    # Keep raw-update capture too for callers that explicitly use feed_raw_update.
+    original_feed_raw_update = getattr(dispatcher, "feed_raw_update", None) if dispatcher is not None else None
+    if original_feed_raw_update is not None:
+        async def feed_raw_update_with_capture(bot, update, **kwargs):
+            token = _RAW_UPDATE.set(update)
+            try:
+                return await original_feed_raw_update(bot, update, **kwargs)
             finally:
                 _RAW_UPDATE.reset(token)
         dispatcher.feed_raw_update = feed_raw_update_with_capture
