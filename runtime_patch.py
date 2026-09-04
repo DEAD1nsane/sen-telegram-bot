@@ -179,6 +179,16 @@ def _get_replied_video_media(message, original_getter):
         print(f"Normal replied-media resolver error: {exc}")
 
     rich_message = getattr(replied, "rich_message", None)
+    if rich_message is not None:
+        try:
+            rich_dump = rich_message.model_dump(mode="python", exclude_none=True)
+            print(
+                f"Advanced editor reply rich_message received: "
+                f"message_id={getattr(replied, 'message_id', None)} "
+                f"keys={list(rich_dump.keys()) if isinstance(rich_dump, dict) else type(rich_dump).__name__}"
+            )
+        except Exception:
+            pass
     found = _find_rich_video(rich_message)
     if found:
         print(
@@ -328,6 +338,36 @@ def install(main_module):
                 _RAW_UPDATE.reset(token)
         dispatcher.feed_raw_update = feed_raw_update_with_capture
         print("Installed raw-update capture for advanced-editor media")
+
+    # When no media bytes were recovered, Gemini may still receive a Telegram
+    # reply-preview label such as "Video" as replied_context. Strip those
+    # placeholder-only reply blocks and explicitly tell the model that no media
+    # was supplied, so it cannot turn the transport label into a false claim.
+    gemini_models = getattr(getattr(main_module, "gemini_client", None), "aio", None)
+    gemini_models = getattr(gemini_models, "models", None)
+    original_generate_content = getattr(gemini_models, "generate_content", None) if gemini_models is not None else None
+    if original_generate_content is not None:
+        async def generate_content_with_media_guard(*args, **kwargs):
+            contents = kwargs.get("contents")
+            if isinstance(contents, str):
+                contents = re.sub(
+                    r'Message User is Replying To:\s*"(?:Video|GIF|Animation|Photo|Audio|Voice message|Video message|Document)"\s*',
+                    '',
+                    contents,
+                    flags=re.I,
+                )
+                contents = (
+                    "MEDIA AVAILABILITY RULE: No actual media attachment was recovered for this request. "
+                    "Do not claim to have seen, heard, watched, or inspected media. "
+                    "Do not infer that the user supplied media from Telegram reply-preview labels or wording. "
+                    "Answer only from the text and other context actually supplied.\n\n"
+                    + contents
+                )
+                kwargs["contents"] = contents
+            return await original_generate_content(*args, **kwargs)
+
+        gemini_models.generate_content = generate_content_with_media_guard
+        print("Installed no-media Gemini guard")
 
     original_search = getattr(main_module, "free_web_search", None)
     if original_search is not None:
