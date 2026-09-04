@@ -7,6 +7,7 @@ from contextvars import ContextVar
 
 
 _SEARCH_STATE = ContextVar("sen_search_state", default=("", ""))
+_RAW_UPDATE = ContextVar("sen_raw_update", default=None)
 
 
 def _media_tuple(media, label):
@@ -60,7 +61,6 @@ def _find_rich_video(obj, seen=None):
         if found:
             return found
 
-    # RichMessage.blocks is the normal typed aiogram representation.
     blocks = _mapping_get(obj, "blocks")
     if blocks is None:
         blocks = getattr(obj, "blocks", None)
@@ -69,14 +69,12 @@ def _find_rich_video(obj, seen=None):
         if found:
             return found
 
-    # aiogram/Pydantic can retain raw Telegram fields in model_extra.
     extra = getattr(obj, "model_extra", None)
     if extra:
         found = _find_rich_video(extra, seen)
         if found:
             return found
 
-    # Some Telegram Python libraries expose unknown/raw fields through api_kwargs.
     api_kwargs = getattr(obj, "api_kwargs", None)
     if api_kwargs:
         found = _find_rich_video(api_kwargs, seen)
@@ -109,6 +107,38 @@ def _find_rich_video(obj, seen=None):
     return None
 
 
+def _find_message_by_id(obj, message_id, seen=None):
+    if obj is None:
+        return None
+    if seen is None:
+        seen = set()
+    oid = id(obj)
+    if oid in seen:
+        return None
+    seen.add(oid)
+
+    candidate_id = _mapping_get(obj, "message_id")
+    if candidate_id is None:
+        candidate_id = getattr(obj, "message_id", None)
+    if candidate_id == message_id:
+        return obj
+
+    if isinstance(obj, (list, tuple, set)):
+        for value in obj:
+            found = _find_message_by_id(value, message_id, seen)
+            if found is not None:
+                return found
+    elif isinstance(obj, dict) or hasattr(obj, "items"):
+        try:
+            for value in obj.values():
+                found = _find_message_by_id(value, message_id, seen)
+                if found is not None:
+                    return found
+        except Exception:
+            pass
+    return None
+
+
 def _get_replied_video_media(message, original_getter):
     replied = getattr(message, "reply_to_message", None)
     if not replied:
@@ -121,17 +151,15 @@ def _get_replied_video_media(message, original_getter):
     except Exception as exc:
         print(f"Normal replied-media resolver error: {exc}")
 
-    # First inspect the typed RichMessage field.
     rich_message = getattr(replied, "rich_message", None)
     found = _find_rich_video(rich_message)
     if found:
         print(
             f"Advanced editor reply media found: message_id={getattr(replied, 'message_id', None)} "
-            f"file_id={found[0]} size={found[2]} mime={found[1]}"
+            f"size={found[2]} mime={found[1]}"
         )
         return found
 
-    # Then inspect every raw/extra representation aiogram may have retained.
     for attr in ("model_extra", "api_kwargs"):
         raw = getattr(replied, attr, None)
         if raw:
@@ -139,7 +167,7 @@ def _get_replied_video_media(message, original_getter):
             if found:
                 print(
                     f"Advanced editor reply media found in {attr}: message_id={getattr(replied, 'message_id', None)} "
-                    f"file_id={found[0]} size={found[2]} mime={found[1]}"
+                    f"size={found[2]} mime={found[1]}"
                 )
                 return found
 
@@ -149,11 +177,26 @@ def _get_replied_video_media(message, original_getter):
         if found:
             print(
                 f"Advanced editor reply media found in message dump: message_id={getattr(replied, 'message_id', None)} "
-                f"file_id={found[0]} size={found[2]} mime={found[1]}"
+                f"size={found[2]} mime={found[1]}"
             )
             return found
     except Exception as exc:
         print(f"Advanced editor message dump error: {exc}")
+
+    # Last resort: inspect the exact raw Message object from the incoming update.
+    # This catches cases where aiogram's typed Message model discarded a newer
+    # RichMessage subtype while validating the update.
+    raw_update = _RAW_UPDATE.get()
+    if raw_update is not None:
+        raw_replied = _find_message_by_id(raw_update, getattr(replied, "message_id", None))
+        if raw_replied is not None:
+            found = _find_rich_video(raw_replied)
+            if found:
+                print(
+                    f"Advanced editor reply media found in raw update: message_id={getattr(replied, 'message_id', None)} "
+                    f"size={found[2]} mime={found[1]}"
+                )
+                return found
 
     if rich_message is not None:
         blocks = getattr(rich_message, "blocks", None)
@@ -165,7 +208,8 @@ def _get_replied_video_media(message, original_getter):
     else:
         print(
             f"Advanced editor reply contained no rich_message field: message_id={getattr(replied, 'message_id', None)} "
-            f"extra={bool(getattr(replied, 'model_extra', None))} api_kwargs={bool(getattr(replied, 'api_kwargs', None))}"
+            f"raw_update={raw_update is not None} extra={bool(getattr(replied, 'model_extra', None))} "
+            f"api_kwargs={bool(getattr(replied, 'api_kwargs', None))}"
         )
     return None
 
@@ -198,7 +242,6 @@ def _source_links(search_context):
     entries = _source_entries(search_context)
     if not entries:
         return ""
-
     lines = ["<details><summary>Sources</summary>"]
     for i, (title, url) in enumerate(entries, 1):
         anchor = f"sen-source-{i}"
@@ -230,6 +273,21 @@ def install(main_module):
     if original_getter is not None:
         main_module.get_replied_video_media = lambda message: _get_replied_video_media(message, original_getter)
         print("Installed advanced-editor reply video compatibility patch")
+
+    # Preserve the raw Bot API update while aiogram dispatches it. This gives
+    # the media resolver one source of truth even if the current aiogram model
+    # does not yet expose a newly-added RichMessage subtype.
+    dispatcher = getattr(main_module, "dp", None)
+    original_feed_raw_update = getattr(dispatcher, "feed_raw_update", None) if dispatcher is not None else None
+    if original_feed_raw_update is not None:
+        async def feed_raw_update_with_capture(update, **kwargs):
+            token = _RAW_UPDATE.set(update)
+            try:
+                return await original_feed_raw_update(update, **kwargs)
+            finally:
+                _RAW_UPDATE.reset(token)
+        dispatcher.feed_raw_update = feed_raw_update_with_capture
+        print("Installed raw-update capture for advanced-editor media")
 
     original_search = getattr(main_module, "free_web_search", None)
     if original_search is not None:
