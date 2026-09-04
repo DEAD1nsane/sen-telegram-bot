@@ -9,8 +9,21 @@ from contextvars import ContextVar
 _SEARCH_STATE = ContextVar("sen_search_state", default=("", ""))
 
 
+def _media_tuple(media, label):
+    if media is None:
+        return None
+    file_id = getattr(media, "file_id", None)
+    mime_type = getattr(media, "mime_type", None) or "video/mp4"
+    file_size = getattr(media, "file_size", None)
+    if file_id:
+        return file_id, mime_type, file_size, label
+    if isinstance(media, dict) and media.get("file_id"):
+        return media["file_id"], media.get("mime_type") or "video/mp4", media.get("file_size"), label
+    return None
+
+
 def _find_rich_video(obj, seen=None):
-    """Find video/animation media anywhere inside a Telegram RichMessage."""
+    """Find a Telegram Rich Message video/animation in received message data."""
     if obj is None:
         return None
     if seen is None:
@@ -23,17 +36,17 @@ def _find_rich_video(obj, seen=None):
     if isinstance(obj, dict):
         block_type = str(obj.get("type", "")).lower()
         if block_type == "video":
-            media = obj.get("video")
-            if isinstance(media, dict) and media.get("file_id"):
-                return media["file_id"], media.get("mime_type") or "video/mp4", media.get("file_size"), "Rich editor video"
+            found = _media_tuple(obj.get("video"), "Advanced editor video")
+            if found:
+                return found
         if block_type == "animation":
-            media = obj.get("animation")
-            if isinstance(media, dict) and media.get("file_id"):
-                return media["file_id"], media.get("mime_type") or "video/mp4", media.get("file_size"), "Rich editor video animation"
+            found = _media_tuple(obj.get("animation"), "Advanced editor animation")
+            if found:
+                return found
         for key in ("video", "animation"):
-            media = obj.get(key)
-            if isinstance(media, dict) and media.get("file_id"):
-                return media["file_id"], media.get("mime_type") or "video/mp4", media.get("file_size"), "Rich editor video"
+            found = _media_tuple(obj.get(key), "Advanced editor video")
+            if found:
+                return found
         for value in obj.values():
             found = _find_rich_video(value, seen)
             if found:
@@ -49,13 +62,20 @@ def _find_rich_video(obj, seen=None):
 
     block_type = str(getattr(obj, "type", "")).lower()
     if block_type == "video":
-        media = getattr(obj, "video", None)
-        if media is not None and getattr(media, "file_id", None):
-            return media.file_id, getattr(media, "mime_type", None) or "video/mp4", getattr(media, "file_size", None), "Rich editor video"
+        found = _media_tuple(getattr(obj, "video", None), "Advanced editor video")
+        if found:
+            return found
     if block_type == "animation":
-        media = getattr(obj, "animation", None)
-        if media is not None and getattr(media, "file_id", None):
-            return media.animation.file_id, getattr(media.animation, "mime_type", None) or "video/mp4", getattr(media.animation, "file_size", None), "Rich editor video animation"
+        found = _media_tuple(getattr(obj, "animation", None), "Advanced editor animation")
+        if found:
+            return found
+
+    # RichMessage.blocks is the authoritative structure for Advanced Editor media.
+    blocks = getattr(obj, "blocks", None)
+    if blocks is not None:
+        found = _find_rich_video(blocks, seen)
+        if found:
+            return found
 
     try:
         dump = obj.model_dump(mode="python", exclude_none=True)
@@ -66,18 +86,6 @@ def _find_rich_video(obj, seen=None):
     except Exception:
         pass
 
-    for name in dir(obj):
-        if name.startswith("_"):
-            continue
-        try:
-            value = getattr(obj, name)
-        except Exception:
-            continue
-        if callable(value) or isinstance(value, (str, bytes, int, float, bool)):
-            continue
-        found = _find_rich_video(value, seen)
-        if found:
-            return found
     return None
 
 
@@ -85,6 +93,8 @@ def _get_replied_video_media(message, original_getter):
     replied = getattr(message, "reply_to_message", None)
     if not replied:
         return None
+
+    # Check the normal Telegram video field first.
     try:
         result = original_getter(message)
         if result:
@@ -92,18 +102,38 @@ def _get_replied_video_media(message, original_getter):
     except Exception as exc:
         print(f"Normal replied-media resolver error: {exc}")
 
-    candidates = [getattr(replied, "rich_message", None), replied]
-    for candidate in candidates:
-        try:
-            found = _find_rich_video(candidate)
-            if found:
-                print(
-                    f"Rich reply video found: message_id={getattr(replied, 'message_id', None)} "
-                    f"file_id={found[0]} size={found[2]} mime={found[1]}"
-                )
-                return found
-        except Exception as exc:
-            print(f"Rich reply media candidate error: {exc}")
+    # Advanced Editor messages store media under Message.rich_message.blocks.
+    rich_message = getattr(replied, "rich_message", None)
+    found = _find_rich_video(rich_message)
+    if found:
+        print(
+            f"Advanced editor reply video found: message_id={getattr(replied, 'message_id', None)} "
+            f"file_id={found[0]} size={found[2]} mime={found[1]}"
+        )
+        return found
+
+    # Some aiogram/Pydantic representations expose the complete message only through model_dump().
+    try:
+        dumped = replied.model_dump(mode="python", exclude_none=True)
+        found = _find_rich_video(dumped)
+        if found:
+            print(
+                f"Advanced editor reply video found in message dump: message_id={getattr(replied, 'message_id', None)} "
+                f"file_id={found[0]} size={found[2]} mime={found[1]}"
+            )
+            return found
+    except Exception as exc:
+        print(f"Advanced editor message dump error: {exc}")
+
+    if rich_message is not None:
+        blocks = getattr(rich_message, "blocks", None)
+        block_types = []
+        for block in blocks or []:
+            block_types.append(str(getattr(block, "type", None)))
+        print(
+            f"Advanced editor reply contained no usable video: message_id={getattr(replied, 'message_id', None)} "
+            f"rich_message=True blocks={block_types}"
+        )
     return None
 
 
@@ -150,12 +180,7 @@ def _source_links(search_context):
 
 
 def _replace_model_source_blocks(text):
-    """Replace model-generated source/citation blocks with verified search sources.
-
-    The collapsible <details> container is intentionally preserved as Telegram
-    Rich Messages support it natively. Only the source block's contents are
-    replaced so invented or stale URLs cannot survive alongside verified ones.
-    """
+    """Replace model-generated source/citation blocks with verified search sources."""
     pattern = re.compile(r"<details\b[^>]*>.*?</details>", re.I | re.S)
 
     def replace(match):
@@ -171,7 +196,7 @@ def install(main_module):
     original_getter = getattr(main_module, "get_replied_video_media", None)
     if original_getter is not None:
         main_module.get_replied_video_media = lambda message: _get_replied_video_media(message, original_getter)
-        print("Installed rich-editor reply video compatibility patch")
+        print("Installed advanced-editor reply video compatibility patch")
 
     original_search = getattr(main_module, "free_web_search", None)
     if original_search is not None:
