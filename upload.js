@@ -22,6 +22,13 @@ const expandHome = (filepath) =>
 const FILES_TO_UPLOAD = [
   { localPath: "main.py", driveName: "main.py.txt" },
   { localPath: "requirements.txt", driveName: "requirements.txt" },
+  { localPath: "sen/__init__.py", driveName: "sen/__init__.py.txt" },
+  { localPath: "sen/config.py", driveName: "sen/config.py.txt" },
+  { localPath: "sen/handlers.py", driveName: "sen/handlers.py.txt" },
+  { localPath: "sen/media.py", driveName: "sen/media.py.txt" },
+  { localPath: "sen/memory.py", driveName: "sen/memory.py.txt" },
+  { localPath: "sen/search.py", driveName: "sen/search.py.txt" },
+  { localPath: "sen/storage.py", driveName: "sen/storage.py.txt" },
   {
     localPath: expandHome(
       "~/storage/shared/Backups/Termux/.termux.properties.txt",
