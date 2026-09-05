@@ -137,16 +137,33 @@ async def main() -> None:
     await site.start()
     print(f"Operational check dashboard running on port {port}")
 
+    from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
+
+    webhook_url = f"https://sen-telegram-bot-production.up.railway.app/webhook"
     try:
-        await bot.delete_webhook(drop_pending_updates=True)
+        await bot.set_webhook(url=webhook_url, drop_pending_updates=True)
+        print(f"Webhook set to {webhook_url}")
     except Exception as e:
-        print(f"Non-critical webhook clearance notice: {e}")
-    try:
-        await dp.start_polling(bot)
-    finally:
+        print(f"Webhook setup error: {e}")
+
+    async def on_shutdown(app):
         await bot.session.close()
         await redis_client.aclose()
-        await runner.cleanup()
+
+    app = web.Application()
+    app.router.add_get("/", health_check)
+    app.router.add_get("/health", health_check)
+    SimpleRequestHandler(dispatcher=dp, bot=bot).register(app, path="/webhook")
+    setup_application(app, dp, bot=bot)
+    app.on_cleanup.append(on_shutdown)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    port = int(__import__("os").environ.get("PORT", "8080"))
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+    print(f"Webhook server running on port {port}")
+
+    await asyncio.Event().wait()
 
 
 if __name__ == "__main__":
