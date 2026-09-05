@@ -127,16 +127,7 @@ def sanitize_rich_html(text: str) -> str:
     """Strip unsupported HTML tags for Telegram RichMessage."""
     if not text:
         return text
-    text = re.sub(r"<p\b[^>]*>", "", text, flags=re.I)
-    text = re.sub(r"</p>", "\n\n", text, flags=re.I)
-    text = re.sub(r"<h[1-6]\b[^>]*>(.*?)</h[1-6]>", r"<b>\1</b>\n\n", text, flags=re.I | re.S)
     text = re.sub(r"<br\s*/?>", "\n", text, flags=re.I)
-    text = re.sub(r"<div\b[^>]*>", "", text, flags=re.I)
-    text = re.sub(r"</div>", "\n", text, flags=re.I)
-    text = re.sub(r"<section\b[^>]*>", "", text, flags=re.I)
-    text = re.sub(r"</section>", "\n", text, flags=re.I)
-    text = re.sub(r"<article\b[^>]*>", "", text, flags=re.I)
-    text = re.sub(r"</article>", "\n", text, flags=re.I)
     text = re.sub(r"\n{3,}", "\n\n", text)
     return text.strip()
 
@@ -542,8 +533,7 @@ def register_handlers(router: Router, bot: "Bot") -> None:
                 "If you do not know, say exactly: 'I don't have enough details to answer that accurately' without guessing.\n"
                 "Do not assume personal details unless explicitly present in the memory list.\n"
                 "When media is attached, treat that media as primary evidence. Never fabricate visual or audio details. If you cannot reliably inspect it, clearly say that you cannot inspect it.\n"
-                "Return Telegram Rich HTML for sendRichMessage. Use only HTML that Telegram Rich HTML actually supports: <b>, <strong>, <i>, <em>, <u>, <ins>, <s>, <strike>, <del>, <code>, <mark>, <sub>, <sup>, <tg-spoiler>, <a>, <tg-reference>, <tg-emoji>, <table>, <details>, <summary>, <ul>, <ol>, <li>, <tg-math>, and <tg-math-block>.\n"
-                "Do NOT use <p>, <div>, <section>, or <article> in Rich HTML. Use normal newlines for paragraphs.\n"
+                "Return Telegram Rich HTML for sendRichMessage. Supported tags: <b>, <strong>, <i>, <em>, <u>, <ins>, <s>, <strike>, <del>, <code>, <pre>, <mark>, <sub>, <sup>, <tg-spoiler>, <a>, <tg-reference>, <tg-emoji>, <h1>-<h6>, <p>, <footer>, <hr/>, <ul>, <ol>, <li>, <blockquote>, <aside>, <table>, <details>, <summary>, <tg-math>, <tg-math-block>, <img>, <video>, <audio>, <tg-button>, <tg-button-row>, <tg-time>. Use whichever tags best fit the content naturally.\n"
                 "For mathematical answers: You MUST include the actual LaTeX equation wrapped in $$...$$ for block equations or \\(...\\) for inline equations. Example: $$\\Delta P = P_{BTC} - P_{ETH}$$. Never just label an equation without writing it. Never output raw LaTeX without delimiters.\n"
                 "For current facts, news, prices, schedules, product information, Telegram features, or anything the user explicitly asks you to search/look up, use the supplied Web Search Context. Do not invent search results or claim a fact is current without supporting search context.\n"
                 "When Web Search Context contains Image: URLs, an image may be useful as supporting media for the search result. If an image is genuinely useful, put exactly one marker [ATTACH_SEARCH_IMAGE: URL] in your response using one of the supplied Image URLs. Do not invent image URLs. Never use this marker for non-search media.\n"
