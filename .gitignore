@@ -3,3 +3,6 @@ google-cloud-sdk/
 google-cloud-cli-linux-arm.tar.gz
 .env
 __pycache__/
+.ruff_cache/
+.venv/
+*.pyc
