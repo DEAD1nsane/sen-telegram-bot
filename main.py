@@ -126,17 +126,6 @@ async def main() -> None:
     from sen.handlers import register_handlers
     register_handlers(dp, bot)
 
-    # Health check web server
-    app = web.Application()
-    app.router.add_get("/", health_check)
-    app.router.add_get("/health", health_check)
-    runner = web.AppRunner(app)
-    await runner.setup()
-    port = int(__import__("os").environ.get("PORT", "8080"))
-    site = web.TCPSite(runner, "0.0.0.0", port)
-    await site.start()
-    print(f"Operational check dashboard running on port {port}")
-
     from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
 
     webhook_url = f"https://sen-telegram-bot-production.up.railway.app/webhook"
