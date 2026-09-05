@@ -206,19 +206,15 @@ def source_entries(search_context: str) -> list[tuple[str, str]]:
 
 
 def source_links(search_context: str) -> str:
-    """Build a collapsible source footnote section."""
+    """Build a collapsible source footnote section with numbered links."""
     entries = source_entries(search_context)
     if not entries:
         return ""
     lines = ["<details><summary>Sources</summary>"]
     for i, (title, url) in enumerate(entries, 1):
-        anchor = f"sen-source-{i}"
         safe_title = html.escape(title, quote=False)
         safe_url = html.escape(url, quote=True)
-        lines.append(
-            f'<p><a href="#{anchor}">[{i}]</a> '
-            f'<a name="{anchor}"></a><a href="{safe_url}">{safe_title}</a></p>'
-        )
+        lines.append(f'<p>[<a href="{safe_url}">{i}</a>] {safe_title}</p>')
     lines.append("</details>")
     return "\n\n" + "\n".join(lines)
 
@@ -239,6 +235,18 @@ def replace_model_source_blocks(text: str) -> str:
 
     text = pattern.sub(_replace, text or "")
 
+    SOURCE_NAMES = re.compile(
+        r"GeeksforGeeks|Digital Aptech|Treehouse|Tech Insider|Stanza|Coddy|Proxidize|Udacity|"
+        r"Stanford|W3Schools|MDN|freeCodeCamp|Baeldung|Medium|Dev\.to|Stack Overflow|Reddit|"
+        r"Javatpoint|TutorialsPoint|Guru99|Simplilearn|CodingNinjas|Intellipaat|Edureka|"
+        r"Coursera|Udemy|Pluralsight|Educative|HackerRank|LeetCode|Codecademy|Khan Academy|"
+        r"MIT OCW|Roadmap\.sh|Chudovo|Bacancy|Scaler|InterviewBit|KnowledgeHut|"
+        r"mygreatlearning|Analytics Vidhya|Towards Data Science|KDnuggets|DataCamp|"
+        r"CodeSignal|Exercism|The Odin Project|Full Stack Open|Boot\.dev|Wesionary|"
+        r"Section\.io|YouTube|Google Developers|Apple Developer|Microsoft Learn|"
+        r"AWS Docs|Cloudflare Docs|DigitalOcean|Linode|Heroku|Vercel|Netlify",
+        re.I,
+    )
     lines = text.split("\n")
     cleaned = []
     in_source_block = False
@@ -252,7 +260,7 @@ def replace_model_source_blocks(text: str) -> str:
         if in_source_block and not stripped:
             in_source_block = False
             continue
-        if re.match(r"^(?:GeeksforGeeks|Digital Aptech|Treehouse|Tech Insider|Stanza|Coddy|Proxidize|Udacity|Stanford|W3Schools|MDN|freeCodeCamp|Baeldung|Medium|Dev\.to|Stack Overflow|YouTube|Reddit|Javatpoint|TutorialsPoint|Guru99|Simplilearn|CodingNinjas|Intellipaat|Edureka|Coursera|Udemy|Pluralsight|Educative|HackerRank|LeetCode|Codecademy|Khan Academy|MIT OCW|Roadmap\.sh|Chudovo|Bacancy|Alogithmic|Scaler|InterviewBit|KnowledgeHut|mygreatlearning|Analytics Vidhya|Towards Data Science|KDnuggets|DataCamp|CodeSignal|Exercism|The Odin Project|Full Stack Open|App Academy|Boot\.dev|Wesionary|Section\.io|Guru99|Javatpoint)\b", stripped, re.I):
+        if SOURCE_NAMES.search(stripped) and not re.search(r"[<>(){}]", stripped):
             continue
         cleaned.append(line)
 
