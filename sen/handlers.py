@@ -158,13 +158,9 @@ def clean_ai_output(text: str) -> str:
             lang = m.group(1).lower()
             code_lines = []
             i += 1
-            while i < len(lines) and (lines[i].startswith("    ") or lines[i].startswith("\t") or lines[i].strip() == ""):
-                if lines[i].strip() == "":
-                    code_lines.append("")
-                    i += 1
-                    if i < len(lines) and not (lines[i].startswith("    ") or lines[i].startswith("\t")):
-                        break
-                    continue
+            while i < len(lines):
+                if LANG_LABELS.match(lines[i].strip()):
+                    break
                 code_lines.append(lines[i])
                 i += 1
             while code_lines and code_lines[-1].strip() == "":
