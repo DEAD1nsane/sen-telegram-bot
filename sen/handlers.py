@@ -127,6 +127,7 @@ def sanitize_rich_html(text: str) -> str:
     """Strip unsupported HTML tags for Telegram RichMessage."""
     if not text:
         return text
+    text = re.sub(r"<div\b[^>]*>|</div>|<section\b[^>]*>|</section>|<article\b[^>]*>|</article>", "", text, flags=re.I)
     text = re.sub(r"<br\s*/?>", "\n", text, flags=re.I)
     text = re.sub(r"\n{3,}", "\n\n", text)
     return text.strip()
