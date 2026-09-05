@@ -424,12 +424,13 @@ def register_handlers(router: Router, bot: "Bot") -> None:
         has_media_input = bool(message.photo or message.voice or replied_video)
 
         keyword_audio = None
-        if text_no_html and not text_no_html.startswith("/") and (tagged or reply_to_bot or is_private):
-            if re.search(r"\bsen\b", text_no_html, re.I):
+        if text_no_html and not text_no_html.startswith("/"):
+            code_stripped = _strip_code_spans(text, entities)
+            if re.search(r"\bsen\b", code_stripped, re.I):
                 keyword_audio = TRIGGER_AUDIO_FILES["sen"]
-            elif re.search(r"\bmagical\b", text_no_html, re.I):
+            elif re.search(r"\bmagical\b", code_stripped, re.I):
                 keyword_audio = TRIGGER_AUDIO_FILES["magical"]
-            elif re.search(r"\bmagic\b", text_no_html, re.I):
+            elif re.search(r"\bmagic\b", code_stripped, re.I):
                 keyword_audio = TRIGGER_AUDIO_FILES["magic"]
         if keyword_audio:
             await send_keyword_audio(message, keyword_audio)
