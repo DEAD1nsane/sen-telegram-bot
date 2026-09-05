@@ -593,9 +593,9 @@ def register_handlers(router: Router, bot: "Bot") -> None:
             print(f"Gemini AI processing error: {e}")
             s = str(e).upper()
             if "503" in s or "UNAVAILABLE" in s:
-                error = "Whoa, I'm getting a little overwhelmed! Let me catch my breath. Try again in about 15 seconds."
+                error = "Gemini is overloaded (503). Try again in a few seconds."
             elif "429" in s or "RESOURCE_EXHAUSTED" in s:
-                error = "Whoa, I'm getting a little overwhelmed! Let me catch my breath. Try again in about 10 seconds."
+                error = "Rate limited by Gemini (429). Wait a moment and try again."
             elif media_bytes and media_mime and media_mime.startswith("video/"):
                 error = "I couldn't reliably inspect that video, so I'm not going to make something up. Try the video again in a moment."
             else:
