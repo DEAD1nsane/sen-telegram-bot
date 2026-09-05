@@ -138,6 +138,12 @@ def clean_ai_output(text: str) -> str:
     text = (text or "I didn't receive a response.").strip()
     text = re.sub(r"^```(?:html)?\s*", "", text, flags=re.I)
     text = re.sub(r"\s*```$", "", text)
+    text = re.sub(
+        r"```(\w+)\n(.*?)```",
+        lambda m: f"<pre><code class=\"language-{m.group(1)}\">{m.group(2).strip()}</code></pre>",
+        text, flags=re.S,
+    )
+    text = re.sub(r"```\n?(.*?)```", lambda m: f"<pre><code>{m.group(1).strip()}</code></pre>", text, flags=re.S)
     return sanitize_rich_html(render_math_markup(text)).strip()
 
 
