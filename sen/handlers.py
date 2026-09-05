@@ -134,7 +134,7 @@ def sanitize_rich_html(text: str) -> str:
 
 
 def clean_ai_output(text: str) -> str:
-    """Strip markdown code fences and sanitize for RichMessage."""
+    """Strip markdown code fences, convert plain text lists, and sanitize for RichMessage."""
     text = (text or "I didn't receive a response.").strip()
     text = re.sub(r"^```(?:html)?\s*", "", text, flags=re.I)
     text = re.sub(r"\s*```$", "", text)
@@ -144,6 +144,27 @@ def clean_ai_output(text: str) -> str:
         text, flags=re.S,
     )
     text = re.sub(r"```\n?(.*?)```", lambda m: f"<pre><code>{m.group(1).strip()}</code></pre>", text, flags=re.S)
+
+    lines = text.split("\n")
+    result = []
+    in_list = False
+    for line in lines:
+        stripped = line.strip()
+        bullet_match = re.match(r"^[•\-\*]\s+(.+)", stripped)
+        if bullet_match:
+            if not in_list:
+                result.append("<ul>")
+                in_list = True
+            result.append(f"<li>{bullet_match.group(1)}</li>")
+        else:
+            if in_list:
+                result.append("</ul>")
+                in_list = False
+            result.append(line)
+    if in_list:
+        result.append("</ul>")
+    text = "\n".join(result)
+
     return sanitize_rich_html(render_math_markup(text)).strip()
 
 
