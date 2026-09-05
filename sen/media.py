@@ -382,7 +382,7 @@ async def send_keyword_audio(message: Message, filename: str) -> bool:
         reply_params = (
             None
             if message.chat.type == "private"
-            else __import__("aiogram.types", fromlist=["ReplyParameters"]).ReplyParameters(message_id=message.message_id),
+            else __import__("aiogram.types", fromlist=["ReplyParameters"]).ReplyParameters(message_id=message.message_id)
         )
         path = os.path.join(_AUDIO_DIR, filename)
         if not os.path.isfile(path):
