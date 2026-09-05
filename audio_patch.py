@@ -13,12 +13,7 @@ def _get(obj, key, default=None):
 
 
 def _entity_ranges(text, entities):
-    """Return Python string ranges for Telegram code/pre entities.
-
-    Telegram entity offsets are measured in UTF-16 code units, while Python
-    string indexes are Unicode code points. Convert the entity boundaries so
-    mentions inside Telegram's actual monospace/code formatting are ignored.
-    """
+    """Return Python string ranges for Telegram code/pre entities."""
     ranges = []
     if not text or not entities:
         return ranges
@@ -37,7 +32,6 @@ def _entity_ranges(text, entities):
         offset = _get(entity, "offset", 0)
         length = _get(entity, "length", 0)
         end_offset = offset + length
-
         start = next((i for i, units in enumerate(cumulative) if units >= offset), None)
         end = next((i for i, units in enumerate(cumulative) if units >= end_offset), None)
         if start is not None and end is not None:
@@ -47,16 +41,11 @@ def _entity_ranges(text, entities):
 
 
 def _strip_code_spans(text, entities=None):
-    """Remove fenced/inline code and Telegram code/pre entities."""
+    """Remove literal and Telegram-formatted inline/fenced code."""
     text = text or ""
-
-    # Telegram may preserve literal backticks, so keep this fallback for
-    # messages where the formatting has not been converted into entities.
     text = re.sub(r"```[\s\S]*?```", lambda m: " " * len(m.group()), text)
     text = re.sub(r"`[^`\n]*`", lambda m: " " * len(m.group()), text)
 
-    # Telegram clients normally send formatting as entities. Mask those ranges
-    # as well, including monospace/code formatting without literal backticks.
     ranges = _entity_ranges(text, entities)
     if ranges:
         chars = list(text)
@@ -64,7 +53,6 @@ def _strip_code_spans(text, entities=None):
             for i in range(start, end):
                 chars[i] = " "
         text = "".join(chars)
-
     return text
 
 
@@ -73,7 +61,11 @@ def _wrap_conversation_handler(main_module):
     handlers = getattr(getattr(router, "message", None), "handlers", [])
     for handler in handlers:
         callback = getattr(handler, "callback", None)
-        if callback is None or getattr(callback, "__name__", "") != "handle_conversation":
+        callback_name = getattr(callback, "__name__", "") if callback else ""
+        # final_patch wraps the conversation handler before this module loads,
+        # so its callback is named memory_aware_handler rather than
+        # handle_conversation. The previous guard therefore never installed.
+        if callback_name not in {"handle_conversation", "keyword_audio_first_handler", "memory_aware_handler"}:
             continue
 
         async def guarded_handler(message, _callback=callback):
@@ -86,18 +78,16 @@ def _wrap_conversation_handler(main_module):
             bot_info = getattr(main_module, "BOT_INFO", None)
             username = _get(bot_info, "username")
             if username:
-                mention_re = re.compile(
-                    r"(?<![A-Za-z0-9_])@" + re.escape(username) + r"\b", re.I
-                )
+                mention_re = re.compile(r"(?<![A-Za-z0-9_])@" + re.escape(username) + r"\b", re.I)
                 code_stripped = _strip_code_spans(text, entities)
+                # Only suppress the handler when every bot mention is inside
+                # code. A normal mention elsewhere must still trigger it.
                 if mention_re.search(text) and not mention_re.search(code_stripped):
-                    # Every occurrence of the bot mention is inside inline,
-                    # monospace, or fenced code. Do not trigger the bot.
                     return
             return await _callback(message)
 
         handler.callback = guarded_handler
-        print("Installed code-span mention guard")
+        print(f"Installed code-span mention guard around {callback_name}")
         return
 
 
@@ -110,8 +100,7 @@ def _install_direct_keyword_audio(main_module):
                 return False
 
             # Always upload the original file directly from the repository root.
-            # Do not cache/reuse a Telegram file_id and do not re-encode the file,
-            # so Telegram receives the original embedded audio metadata unchanged.
+            # Do not cache/reuse a Telegram file_id and do not re-encode the file.
             await message.answer_audio(
                 audio=main_module.FSInputFile(path),
                 reply_parameters=(
