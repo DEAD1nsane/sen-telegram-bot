@@ -425,7 +425,12 @@ def register_handlers(router: Router, bot: "Bot") -> None:
 
         keyword_audio = None
         if text_no_html and not text_no_html.startswith("/"):
-            code_stripped = _strip_code_spans(text, entities)
+            msg_entities = (
+                getattr(message, "entities", None)
+                if message.text is not None
+                else getattr(message, "caption_entities", None)
+            )
+            code_stripped = _strip_code_spans(text, msg_entities)
             if re.search(r"\bsen\b", code_stripped, re.I):
                 keyword_audio = TRIGGER_AUDIO_FILES["sen"]
             elif re.search(r"\bmagical\b", code_stripped, re.I):
