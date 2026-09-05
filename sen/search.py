@@ -241,15 +241,18 @@ def replace_model_source_blocks(text: str) -> str:
 
     lines = text.split("\n")
     cleaned = []
-    skip_source_block = False
+    in_source_block = False
     for line in lines:
         stripped = line.strip()
-        if re.match(r"^[-•]\s+\S.+(?:blog|comparison|guide|vs\.?|difference|202\d)", stripped, re.I):
-            skip_source_block = True
+        if re.match(r"^[-•]\s+\S.+(?:blog|comparison|guide|vs\.?|difference|202\d|full|key|what|which|should|10\+|underrated|battle|head.to.head)", stripped, re.I):
+            in_source_block = True
             continue
-        if skip_source_block and re.match(r"^[-•]\s+\S", stripped):
+        if in_source_block and re.match(r"^[-•]\s+\S", stripped):
             continue
-        skip_source_block = False
+        if in_source_block and not stripped:
+            in_source_block = False
+            continue
+        in_source_block = False
         cleaned.append(line)
 
     return "\n".join(cleaned)

@@ -145,6 +145,12 @@ def clean_ai_output(text: str) -> str:
     )
     text = re.sub(r"```\n?(.*?)```", lambda m: f"<pre><code>{m.group(1).strip()}</code></pre>", text, flags=re.S)
 
+    text = re.sub(
+        r"^(Python|JavaScript|JS|Py|Bash|Shell|HTML|CSS|JSON|TypeScript|TS|Java|C|C\+\+|Go|Rust|Ruby|PHP|SQL|Markdown|YAML|XML|Swift|Kotlin|R|MATLAB|Lua|Perl|Scala|Haskell|Objective-C|Assembly|Shell|Zsh|PowerShell|Batch|Dockerfile|Makefile|Nginx|Apache|LaTeX|TeX):\s*\n((?:[ \t]+.*\n?)+)",
+        lambda m: f"<pre><code class=\"language-{m.group(1).lower()}\">{m.group(2).strip()}</code></pre>",
+        text, flags=re.M,
+    )
+
     lines = text.split("\n")
     result = []
     list_stack = []
