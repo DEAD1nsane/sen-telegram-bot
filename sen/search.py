@@ -237,7 +237,22 @@ def replace_model_source_blocks(text: str) -> str:
             return ""
         return block
 
-    return pattern.sub(_replace, text or "")
+    text = pattern.sub(_replace, text or "")
+
+    lines = text.split("\n")
+    cleaned = []
+    skip_source_block = False
+    for line in lines:
+        stripped = line.strip()
+        if re.match(r"^[-•]\s+\S.+(?:blog|comparison|guide|vs\.?|difference|202\d)", stripped, re.I):
+            skip_source_block = True
+            continue
+        if skip_source_block and re.match(r"^[-•]\s+\S", stripped):
+            continue
+        skip_source_block = False
+        cleaned.append(line)
+
+    return "\n".join(cleaned)
 
 
 def asked_for_sources(text: str) -> bool:
