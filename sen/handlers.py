@@ -147,22 +147,27 @@ def clean_ai_output(text: str) -> str:
 
     lines = text.split("\n")
     result = []
-    in_list = False
+    list_stack = []
     for line in lines:
         stripped = line.strip()
+        indent = len(line) - len(line.lstrip())
         bullet_match = re.match(r"^[•\-\*]\s+(.+)", stripped)
         if bullet_match:
-            if not in_list:
+            while list_stack and list_stack[-1] > indent:
+                result.append("</ul>")
+                list_stack.pop()
+            if not list_stack or list_stack[-1] < indent:
                 result.append("<ul>")
-                in_list = True
+                list_stack.append(indent)
             result.append(f"<li>{bullet_match.group(1)}</li>")
         else:
-            if in_list:
+            while list_stack:
                 result.append("</ul>")
-                in_list = False
+                list_stack.pop()
             result.append(line)
-    if in_list:
+    while list_stack:
         result.append("</ul>")
+        list_stack.pop()
     text = "\n".join(result)
 
     return sanitize_rich_html(render_math_markup(text)).strip()
