@@ -30,7 +30,7 @@ from .config import (
     redis_client,
     interaction_key,
 )
-from .storage import get_memories, clear_interaction, clear_menu_identity, get_interaction
+from .storage import get_memories, clear_interaction, clear_menu_identity, get_interaction, set_interaction
 from .memory import (
     close_menu,
     edit_memory_menu,
@@ -181,7 +181,7 @@ async def send_ai_response(bot: "Bot", chat_id: int, msg_id: int, response_text:
 
 async def generate_gemini_response(contents, config, max_attempts: int = 4):
     """Call Gemini with visual grounding rule and retry on transient errors."""
-    from config import gemini_client
+    from .config import gemini_client
     from google.genai import types
 
     grounding = (
@@ -481,7 +481,7 @@ def register_handlers(router: Router, bot: "Bot") -> None:
             media_description = "Photo"
 
         if message.reply_to_message and message.reply_to_message.sticker and not media_bytes:
-            from media import _get_sticker_input
+            from .media import _get_sticker_input
             media_bytes, media_mime, media_description = await _get_sticker_input(bot, message.reply_to_message)
 
         if replied_video_media and not media_bytes:

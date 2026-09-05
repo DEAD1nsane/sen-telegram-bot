@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import html
+import re
 from typing import TYPE_CHECKING
 
 from aiogram.types import (
