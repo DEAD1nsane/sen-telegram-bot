@@ -82,7 +82,7 @@ async def main() -> None:
         async def feed_update_with_capture(bot, update, **kwargs):
             token = _RAW_UPDATE.set(update)
             try:
-                return await original_feed_update(bot_instance, update, **kwargs)
+                return await original_feed_update(bot, update, **kwargs)
             finally:
                 _RAW_UPDATE.reset(token)
         dp.feed_update = feed_update_with_capture
@@ -92,7 +92,7 @@ async def main() -> None:
         async def feed_raw_update_with_capture(bot, update, **kwargs):
             token = _RAW_UPDATE.set(update)
             try:
-                return await original_feed_raw_update(bot_instance, update, **kwargs)
+                return await original_feed_raw_update(bot, update, **kwargs)
             finally:
                 _RAW_UPDATE.reset(token)
         dp.feed_raw_update = feed_raw_update_with_capture
