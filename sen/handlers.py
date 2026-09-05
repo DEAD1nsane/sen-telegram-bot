@@ -533,6 +533,7 @@ def register_handlers(router: Router, bot: "Bot") -> None:
                 "Do not assume personal details unless explicitly present in the memory list.\n"
                 "When media is attached, treat that media as primary evidence. Never fabricate visual or audio details. If you cannot reliably inspect it, say so.\n"
                 "Return Telegram Rich HTML for sendRichMessage. Use whichever tags best fit the content naturally.\n"
+                "For code snippets, always use <pre><code class=\"language-xxx\">...</code></pre> where xxx is the language name (python, javascript, etc). Never use bare <pre> or <code> without the language class for multi-line code.\n"
                 "For mathematical answers: wrap standalone equations in $$...$$ and inline math in \\(...\\). Never output raw LaTeX without delimiters.\n"
                 "When Web Search Context contains Image: URLs, put exactly one marker [ATTACH_SEARCH_IMAGE: URL] in your response if the image is genuinely useful. Never use this marker for non-search media.\n"
                 "Only search-result images may be sent as outgoing media. Do not generate slideshows, collages, presentations, images, videos, audio, or other media. If asked to create media, respond in text instead.\n"
