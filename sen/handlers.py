@@ -424,7 +424,7 @@ def register_handlers(router: Router, bot: "Bot") -> None:
         has_media_input = bool(message.photo or message.voice or replied_video)
 
         keyword_audio = None
-        if text_no_html and not text_no_html.startswith("/"):
+        if text_no_html and not text_no_html.startswith("/") and (tagged or reply_to_bot or is_private):
             if re.search(r"\bsen\b", text_no_html, re.I):
                 keyword_audio = TRIGGER_AUDIO_FILES["sen"]
             elif re.search(r"\bmagical\b", text_no_html, re.I):
