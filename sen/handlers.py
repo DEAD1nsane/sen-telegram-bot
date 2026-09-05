@@ -137,9 +137,6 @@ def sanitize_rich_html(text: str) -> str:
     text = re.sub(r"</section>", "\n", text, flags=re.I)
     text = re.sub(r"<article\b[^>]*>", "", text, flags=re.I)
     text = re.sub(r"</article>", "\n", text, flags=re.I)
-    text = re.sub(r"<ul\b[^>]*>|</ul>|<ol\b[^>]*>|</ol>", "", text, flags=re.I)
-    text = re.sub(r"<li\b[^>]*>", "• ", text, flags=re.I)
-    text = re.sub(r"</li>", "\n", text, flags=re.I)
     text = re.sub(r"\n{3,}", "\n\n", text)
     return text.strip()
 
@@ -539,9 +536,9 @@ def register_handlers(router: Router, bot: "Bot") -> None:
                 "If you do not know, say exactly: 'I don't have enough details to answer that accurately' without guessing.\n"
                 "Do not assume personal details unless explicitly present in the memory list.\n"
                 "When media is attached, treat that media as primary evidence. Never fabricate visual or audio details. If you cannot reliably inspect it, clearly say that you cannot inspect it.\n"
-                "Return Telegram Rich HTML for sendRichMessage. Use only HTML that Telegram Rich HTML actually supports: <b>, <strong>, <i>, <em>, <u>, <ins>, <s>, <strike>, <del>, <code>, <mark>, <sub>, <sup>, <tg-spoiler>, <a>, <tg-reference>, <tg-emoji>, <table>, <details>, and <summary>.\n"
-                "Do NOT use <p>, <h1>-<h6>, <div>, <section>, <article>, <ul>, <ol>, or <li> in Rich HTML. Use normal newlines for paragraphs and <details><summary>...</summary>...</details> for collapsible sections.\n"
-                "For mathematical answers, prefer <tg-math-block> for standalone equations and <tg-math> for inline equations. Put raw LaTeX inside those tags. You may also use $$...$$, \\[...\\], or \\(...\\) when useful; the bot converts those delimiters to Telegram math rendering automatically.\n"
+                "Return Telegram Rich HTML for sendRichMessage. Use only HTML that Telegram Rich HTML actually supports: <b>, <strong>, <i>, <em>, <u>, <ins>, <s>, <strike>, <del>, <code>, <mark>, <sub>, <sup>, <tg-spoiler>, <a>, <tg-reference>, <tg-emoji>, <table>, <details>, <summary>, <ul>, <ol>, <li>, <tg-math>, and <tg-math-block>.\n"
+                "Do NOT use <p>, <h1>-<h6>, <div>, <section>, or <article> in Rich HTML. Use normal newlines for paragraphs and <details><summary>...</summary>...</details> for collapsible sections.\n"
+                "For mathematical answers: ALWAYS wrap standalone equations in $$...$$ and inline math in \\(...\\). The bot converts these to Telegram's native math rendering. Never output raw LaTeX without these delimiters.\n"
                 "For current facts, news, prices, schedules, product information, Telegram features, or anything the user explicitly asks you to search/look up, use the supplied Web Search Context. Do not invent search results or claim a fact is current without supporting search context.\n"
                 "When Web Search Context contains Image: URLs, an image may be useful as supporting media for the search result. If an image is genuinely useful, put exactly one marker [ATTACH_SEARCH_IMAGE: URL] in your response using one of the supplied Image URLs. Do not invent image URLs. Never use this marker for non-search media.\n"
                 "Only search-result images may be sent as outgoing media. Do not generate slideshows, collages, presentations, images, videos, audio, or other media. If asked to create media, respond in text instead.\n"
