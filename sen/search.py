@@ -120,7 +120,7 @@ async def searx_request(
     async with httpx.AsyncClient(follow_redirects=True, timeout=12.0) as client:
         r = await client.get(SEARXNG_URL, params=params, headers=headers)
         if r.status_code != 200:
-            raise RuntimeError(f"SearXNG HTTP {r.status_code}: {r.text[:200]}")
+            raise RuntimeError(f"SearXNG HTTP {r.status_code}")
         return r.json().get("results", []) or []
 
 

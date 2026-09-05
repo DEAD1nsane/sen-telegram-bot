@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import html
 import re
 from datetime import datetime, timezone
@@ -12,7 +13,6 @@ from aiogram.filters import Command
 from aiogram.types import (
     CallbackQuery,
     BotCommand,
-    BotCommandScopeAllChatAdministrators,
     BotCommandScopeAllChatAdministrators,
     BotCommandScopeAllGroupChats,
     BotCommandScopeAllPrivateChats,
@@ -197,8 +197,7 @@ async def generate_gemini_response(contents, config, max_attempts: int = 4):
             if not retryable or attempt >= len(retry_delays):
                 raise
             delay = retry_delays[attempt]
-            print(f"Gemini temporary failure ({str(e)[:180]}). Retrying in {delay}s, attempt {attempt + 2}/{max_attempts}.")
-            import asyncio
+            print(f"Gemini temporary failure. Retrying in {delay}s, attempt {attempt + 2}/{max_attempts}.")
             await asyncio.sleep(delay)
 
 
@@ -224,12 +223,12 @@ def register_handlers(router: Router, bot: "Bot") -> None:
             try:
                 await send_memory_menu(bot, cid, uid, text, "main", incoming)
             except Exception as e:
-                print(f"Memory menu send error: {e}")
+                print(f"Memory menu send error: {type(e).__name__}")
         else:
             try:
                 await send_memory_menu(bot, cid, uid, text)
             except Exception as e:
-                print(f"Private memory menu error: {e}")
+                print(f"Private memory menu error: {type(e).__name__}")
 
     @router.callback_query(F.data == "memory_view")
     async def handle_memory_view(callback: CallbackQuery):
@@ -269,7 +268,7 @@ def register_handlers(router: Router, bot: "Bot") -> None:
             await callback.bot.send_rich_message(chat_id=callback.message.chat.id, rich_message=InputRichMessage(blocks=share_blocks))
             await callback.answer("Memories shared with the group!", show_alert=True)
         except Exception as e:
-            print(f"Memory share error: {e}")
+            print(f"Memory share error: {type(e).__name__}")
             await callback.answer("Failed to share memories to group.", show_alert=True)
 
     @router.callback_query(F.data == "memory_add")
@@ -358,8 +357,8 @@ def register_handlers(router: Router, bot: "Bot") -> None:
             try:
                 await bot.delete_message(message.chat.id, message.reply_to_message.message_id)
             except Exception as e:
-                print(f"/del target deletion error: {e}")
-        print(f"[/del] user_id={message.from_user.id} chat_id={message.chat.id} ephemeral_message_id={getattr(message, 'ephemeral_message_id', None)}")
+                print(f"/del target deletion error: {type(e).__name__}")
+        print("[/del] executed")
 
     @router.message(F.community_chat_added)
     async def handle_community_added(message: Message):
@@ -452,10 +451,9 @@ def register_handlers(router: Router, bot: "Bot") -> None:
 
         uid, cid, mid = message.from_user.id, message.chat.id, message.message_id
         cooldown = f"cooldown:{uid}"
-        if await redis_client.exists(cooldown):
+        if not await redis_client.set(cooldown, "1", ex=4, nx=True):
             await message.answer("Slow down, request limit reached.", reply_to_message_id=None if is_private else mid)
             return
-        await redis_client.set(cooldown, "1", ex=4)
 
         replied_context = ""
         if message.reply_to_message:
@@ -590,7 +588,7 @@ def register_handlers(router: Router, bot: "Bot") -> None:
             await redis_client.rpush(history_key, f"User: {prompt or media_description or 'Media'}", f"Bot: {clean_history}")
             await redis_client.ltrim(history_key, -10, -1)
         except Exception as e:
-            print(f"Gemini AI processing error: {e}")
+            print(f"Gemini AI processing error: {type(e).__name__}: {str(e)[:120]}")
             s = str(e).upper()
             if "503" in s or "UNAVAILABLE" in s:
                 error = "Gemini is overloaded (503). Try again in a few seconds."

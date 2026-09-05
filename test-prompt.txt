@@ -1,0 +1,1 @@
+@SenAnythangBot search for the latest Bitcoin price and compare it to Ethereum, format the results in a table inside a collapsible section, include the price difference as a LaTeX equation, and add a bulleted list of key factors affecting each

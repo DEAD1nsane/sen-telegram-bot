@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 import re
 import tempfile
 from contextvars import ContextVar
 from typing import Any
 
-from aiogram.types import Message, FSInputFile
+from google.genai import types
+
+from aiogram.types import Message, FSInputFile, ReplyParameters
 
 from .config import gemini_client, AUDIO_METADATA
 
@@ -251,7 +254,7 @@ async def download_telegram_media(bot, file_id: str) -> bytes | None:
         stream = await bot.download_file(file_info.file_path)
         return stream.read() if stream else None
     except Exception as e:
-        print(f"Telegram media download error: {e}")
+        print(f"Telegram media download error: {type(e).__name__}")
         return None
 
 
@@ -330,10 +333,10 @@ async def get_gemini_video_file(media_bytes: bytes, media_mime: str, media_descr
             tmp.write(media_bytes)
             temp_path = tmp.name
         print(f"Gemini video upload starting: {len(media_bytes)} bytes, mime={media_mime}, description={media_description}")
-        uploaded = await __import__("asyncio").to_thread(
+        uploaded = await asyncio.to_thread(
             gemini_client.files.upload,
             file=temp_path,
-            config=__import__("google.genai", fromlist=["types"]).types.UploadFileConfig(mime_type=media_mime),
+            config=types.UploadFileConfig(mime_type=media_mime),
         )
         print(f"Gemini video uploaded: name={getattr(uploaded, 'name', None)} state={getattr(getattr(uploaded, 'state', None), 'name', getattr(uploaded, 'state', None))}")
         import asyncio
@@ -361,9 +364,9 @@ async def delete_gemini_file(uploaded) -> None:
     if not uploaded or not getattr(uploaded, "name", None):
         return
     try:
-        await __import__("asyncio").to_thread(gemini_client.files.delete, name=uploaded.name)
+        await asyncio.to_thread(gemini_client.files.delete, name=uploaded.name)
     except Exception as e:
-        print(f"Gemini temporary video cleanup error: {e}")
+        print(f"Gemini temporary video cleanup error: {type(e).__name__}")
 
 
 # ---------------------------------------------------------------------------
@@ -382,7 +385,7 @@ async def send_keyword_audio(message: Message, filename: str) -> bool:
         reply_params = (
             None
             if message.chat.type == "private"
-            else __import__("aiogram.types", fromlist=["ReplyParameters"]).ReplyParameters(message_id=message.message_id)
+            else ReplyParameters(message_id=message.message_id)
         )
         path = os.path.join(_AUDIO_DIR, filename)
         if not os.path.isfile(path):
@@ -396,5 +399,5 @@ async def send_keyword_audio(message: Message, filename: str) -> bool:
         await message.answer_audio(**kwargs)
         return True
     except Exception as e:
-        print(f"Keyword audio delivery error ({filename}): {e}")
+        print(f"Keyword audio delivery error ({filename}): {type(e).__name__}")
         return False

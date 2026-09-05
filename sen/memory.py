@@ -296,7 +296,7 @@ async def process_memory_text(message, action: str, temp_forget: bool = False) -
     cid = message.chat.id
     key = f"memory_list:{uid}"
     if action == "add":
-        for part in [p.strip()[:200] for p in message.text.split(",,") if p.strip()][:10]:
+        for part in [re.sub(r"<[^>]+>", "", p.strip())[:200] for p in message.text.split(",,") if p.strip()][:10]:
             if await redis_client.lpos(key, part) is None:
                 await redis_client.rpush(key, part)
         await redis_client.ltrim(key, -25, -1)
@@ -308,7 +308,7 @@ async def process_memory_text(message, action: str, temp_forget: bool = False) -
         idx = int(parts[0]) - 1
         raw = await redis_client.lrange(key, 0, -1)
         if 0 <= idx < len(raw):
-            await redis_client.lset(key, idx, parts[1].strip()[:200])
+            await redis_client.lset(key, idx, re.sub(r"<[^>]+>", "", parts[1].strip())[:200])
         await clear_interaction(cid, uid)
     elif action == "forget":
         memories = await get_memories(str(uid), temp_forget)

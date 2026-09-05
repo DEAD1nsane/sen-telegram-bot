@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 
 from aiohttp import web
 from aiogram import Bot, Dispatcher
@@ -128,7 +129,7 @@ async def main() -> None:
 
     from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
 
-    webhook_url = f"https://sen-telegram-bot-production.up.railway.app/webhook"
+    webhook_url = os.environ.get("WEBHOOK_URL", "https://sen-telegram-bot-production.up.railway.app/webhook")
     try:
         await bot.set_webhook(url=webhook_url, drop_pending_updates=True)
         print(f"Webhook set to {webhook_url}")

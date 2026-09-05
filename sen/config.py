@@ -22,10 +22,7 @@ if not redis_url:
     )
 if "upstash" in redis_url.lower() and redis_url.startswith("redis://"):
     redis_url = redis_url.replace("redis://", "rediss://", 1)
-redis_client = redis.from_url(
-    redis_url,
-    ssl_cert_reqs=None if redis_url.startswith("rediss://") else "required",
-)
+redis_client = redis.from_url(redis_url)
 
 # ---------------------------------------------------------------------------
 # API keys
