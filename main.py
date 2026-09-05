@@ -79,7 +79,7 @@ async def main() -> None:
 
     original_feed_update = getattr(dp, "feed_update", None)
     if original_feed_update is not None:
-        async def feed_update_with_capture(bot_instance, update, **kwargs):
+        async def feed_update_with_capture(bot, update, **kwargs):
             token = _RAW_UPDATE.set(update)
             try:
                 return await original_feed_update(bot_instance, update, **kwargs)
@@ -89,7 +89,7 @@ async def main() -> None:
 
     original_feed_raw_update = getattr(dp, "feed_raw_update", None)
     if original_feed_raw_update is not None:
-        async def feed_raw_update_with_capture(bot_instance, update, **kwargs):
+        async def feed_raw_update_with_capture(bot, update, **kwargs):
             token = _RAW_UPDATE.set(update)
             try:
                 return await original_feed_raw_update(bot_instance, update, **kwargs)
