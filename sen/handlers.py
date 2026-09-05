@@ -218,7 +218,7 @@ async def generate_gemini_response(contents, config, max_attempts: int = 4):
 # ---------------------------------------------------------------------------
 
 
-def register_handlers(router: Router, bot: "Bot", dp: "Dispatcher") -> None:
+def register_handlers(router: Router, bot: "Bot") -> None:
     """Register all message and callback handlers."""
 
     @router.message(Command("memories"))

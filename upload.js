@@ -22,13 +22,13 @@ const expandHome = (filepath) =>
 const FILES_TO_UPLOAD = [
   { localPath: "main.py", driveName: "main.py.txt" },
   { localPath: "requirements.txt", driveName: "requirements.txt" },
-  { localPath: "sen/__init__.py", driveName: "sen/__init__.py.txt" },
-  { localPath: "sen/config.py", driveName: "sen/config.py.txt" },
-  { localPath: "sen/handlers.py", driveName: "sen/handlers.py.txt" },
-  { localPath: "sen/media.py", driveName: "sen/media.py.txt" },
-  { localPath: "sen/memory.py", driveName: "sen/memory.py.txt" },
-  { localPath: "sen/search.py", driveName: "sen/search.py.txt" },
-  { localPath: "sen/storage.py", driveName: "sen/storage.py.txt" },
+  { localPath: "sen/__init__.py", driveName: "__init__.py.txt", folder: "sen" },
+  { localPath: "sen/config.py", driveName: "config.py.txt", folder: "sen" },
+  { localPath: "sen/handlers.py", driveName: "handlers.py.txt", folder: "sen" },
+  { localPath: "sen/media.py", driveName: "media.py.txt", folder: "sen" },
+  { localPath: "sen/memory.py", driveName: "memory.py.txt", folder: "sen" },
+  { localPath: "sen/search.py", driveName: "search.py.txt", folder: "sen" },
+  { localPath: "sen/storage.py", driveName: "storage.py.txt", folder: "sen" },
   {
     localPath: expandHome(
       "~/storage/shared/Backups/Termux/.termux.properties.txt",
@@ -56,7 +56,22 @@ const MIME_TYPES = {
   ".txt": "text/plain",
 };
 
-async function uploadFile(localPath, driveName) {
+async function ensureFolder(name, parentId) {
+  const res = await drive.files.list({
+    q: `name = '${name}' and '${parentId}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false`,
+    fields: "files(id, name)",
+    spaces: "drive",
+  });
+  if (res.data.files.length > 0) return res.data.files[0].id;
+  const created = await drive.files.create({
+    requestBody: { name, parents: [parentId], mimeType: "application/vnd.google-apps.folder" },
+    fields: "id, name",
+  });
+  console.log(`Created folder: ${created.data.name} (ID: ${created.data.id})`);
+  return created.data.id;
+}
+
+async function uploadFile(localPath, driveName, parentId) {
   let filePath = path.isAbsolute(localPath)
     ? localPath
     : path.join(__dirname, localPath);
@@ -71,7 +86,7 @@ async function uploadFile(localPath, driveName) {
 
   try {
     const listResponse = await drive.files.list({
-      q: `name = '${driveName}' and '${FOLDER_ID}' in parents and trashed = false`,
+      q: `name = '${driveName}' and '${parentId}' in parents and trashed = false`,
       fields: "files(id, name)",
       spaces: "drive",
     });
@@ -97,7 +112,7 @@ async function uploadFile(localPath, driveName) {
       const response = await drive.files.create({
         requestBody: {
           name: driveName,
-          parents: [FOLDER_ID],
+          parents: [parentId],
         },
         media: {
           mimeType: mimeType,
@@ -115,9 +130,33 @@ async function uploadFile(localPath, driveName) {
   }
 }
 
+async function deleteOldFlatFiles(parentId, names) {
+  for (const name of names) {
+    try {
+      const res = await drive.files.list({
+        q: `name = '${name}' and '${parentId}' in parents and trashed = false`,
+        fields: "files(id, name)",
+        spaces: "drive",
+      });
+      for (const file of res.data.files || []) {
+        await drive.files.delete({ fileId: file.id });
+        console.log(`Deleted old flat file: ${name}`);
+      }
+    } catch (e) {
+      // ignore
+    }
+  }
+}
+
 async function syncAll() {
+  const senFolderId = await ensureFolder("sen", FOLDER_ID);
+  await deleteOldFlatFiles(FOLDER_ID, [
+    "sen/__init__.py.txt", "sen/config.py.txt", "sen/handlers.py.txt",
+    "sen/media.py.txt", "sen/memory.py.txt", "sen/search.py.txt", "sen/storage.py.txt",
+  ]);
   for (const item of FILES_TO_UPLOAD) {
-    await uploadFile(item.localPath, item.driveName);
+    const parentId = item.folder === "sen" ? senFolderId : FOLDER_ID;
+    await uploadFile(item.localPath, item.driveName, parentId);
   }
 }
 
