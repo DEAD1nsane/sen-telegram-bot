@@ -145,11 +145,35 @@ def clean_ai_output(text: str) -> str:
     )
     text = re.sub(r"```\n?(.*?)```", lambda m: f"<pre><code>{m.group(1).strip()}</code></pre>", text, flags=re.S)
 
-    text = re.sub(
-        r"^(Python|JavaScript|JS|Py|Bash|Shell|HTML|CSS|JSON|TypeScript|TS|Java|C|C\+\+|Go|Rust|Ruby|PHP|SQL|Markdown|YAML|XML|Swift|Kotlin|R|MATLAB|Lua|Perl|Scala|Haskell|Objective-C|Assembly|Shell|Zsh|PowerShell|Batch|Dockerfile|Makefile|Nginx|Apache|LaTeX|TeX):\s*\n((?:[ \t]+.*\n?)+)",
-        lambda m: f"<pre><code class=\"language-{m.group(1).lower()}\">{m.group(2).strip()}</code></pre>",
-        text, flags=re.M,
+    LANG_LABELS = re.compile(
+        r"^(Python|JavaScript|JS|Py|Bash|Shell|HTML|CSS|JSON|TypeScript|TS|Java|C|C\+\+|Go|Rust|Ruby|PHP|SQL|YAML|XML|Swift|Kotlin|R|Lua|Perl|Scala|Haskell):\s*$",
+        re.I,
     )
+    lines = text.split("\n")
+    result = []
+    i = 0
+    while i < len(lines):
+        m = LANG_LABELS.match(lines[i].strip())
+        if m:
+            lang = m.group(1).lower()
+            code_lines = []
+            i += 1
+            while i < len(lines) and (lines[i].startswith("    ") or lines[i].startswith("\t") or lines[i].strip() == ""):
+                if lines[i].strip() == "":
+                    code_lines.append("")
+                    i += 1
+                    if i < len(lines) and not (lines[i].startswith("    ") or lines[i].startswith("\t")):
+                        break
+                    continue
+                code_lines.append(lines[i])
+                i += 1
+            while code_lines and code_lines[-1].strip() == "":
+                code_lines.pop()
+            result.append(f"<pre><code class=\"language-{lang}\">{chr(10).join(code_lines).strip()}</code></pre>")
+        else:
+            result.append(lines[i])
+            i += 1
+    text = "\n".join(result)
 
     lines = text.split("\n")
     result = []

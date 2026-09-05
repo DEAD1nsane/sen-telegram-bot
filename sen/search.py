@@ -252,7 +252,8 @@ def replace_model_source_blocks(text: str) -> str:
         if in_source_block and not stripped:
             in_source_block = False
             continue
-        in_source_block = False
+        if re.match(r"^(?:GeeksforGeeks|Digital Aptech|Treehouse|Tech Insider|Stanza|Coddy|Proxidize|Udacity|Stanford|W3Schools|MDN|freeCodeCamp|Baeldung|Medium|Dev\.to|Stack Overflow|YouTube|Reddit|Javatpoint|TutorialsPoint|Guru99|Simplilearn|CodingNinjas|Intellipaat|Edureka|Coursera|Udemy|Pluralsight|Educative|HackerRank|LeetCode|Codecademy|Khan Academy|MIT OCW|Roadmap\.sh|Chudovo|Bacancy|Alogithmic|Scaler|InterviewBit|KnowledgeHut|mygreatlearning|Analytics Vidhya|Towards Data Science|KDnuggets|DataCamp|CodeSignal|Exercism|The Odin Project|Full Stack Open|App Academy|Boot\.dev|Wesionary|Section\.io|Guru99|Javatpoint)\b", stripped, re.I):
+            continue
         cleaned.append(line)
 
     return "\n".join(cleaned)
