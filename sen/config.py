@@ -46,6 +46,8 @@ if not GEMINI_API_KEY:
 gemini_client = genai.Client(api_key=GEMINI_API_KEY)
 OWNER_ID = int(os.getenv("OWNER_ID", "0"))
 
+BOT_INFO = None
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------

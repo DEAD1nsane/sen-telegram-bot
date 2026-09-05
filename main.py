@@ -9,13 +9,13 @@ from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 
 from sen.config import API_TOKEN, gemini_client, redis_client
+import sen.config as _cfg
 from sen.handlers import register_handlers
 
 # ---------------------------------------------------------------------------
 # Globals
 # ---------------------------------------------------------------------------
 
-BOT_INFO = None
 bot = Bot(token=API_TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
 dp = Dispatcher()
 
@@ -26,7 +26,7 @@ dp = Dispatcher()
 
 
 async def health_check(request: web.Request) -> web.Response:
-    return web.json_response({"status": "ok", "bot": BOT_INFO.username if BOT_INFO else None})
+    return web.json_response({"status": "ok", "bot": _cfg.BOT_INFO.username if _cfg.BOT_INFO else None})
 
 
 # ---------------------------------------------------------------------------
@@ -70,9 +70,8 @@ async def configure_commands() -> None:
 
 
 async def main() -> None:
-    global BOT_INFO
-    BOT_INFO = await bot.get_me()
-    print(f"Logged in successfully as @{BOT_INFO.username}")
+    _cfg.BOT_INFO = await bot.get_me()
+    print(f"Logged in successfully as @{_cfg.BOT_INFO.username}")
     await configure_commands()
 
     # Install raw-update capture for advanced editor media

@@ -21,8 +21,8 @@ from aiogram.types import (
     ReplyParameters,
 )
 
+from . import config as _cfg
 from .config import (
-    BOT_INFO,
     MENTION_ONLY_RE,
     OWNER_ID,
     TRIGGER_AUDIO_FILES,
@@ -362,9 +362,9 @@ def register_handlers(router: Router, bot: "Bot") -> None:
             return
         if (
             message.reply_to_message
-            and BOT_INFO
+            and _cfg.BOT_INFO
             and message.reply_to_message.from_user
-            and message.reply_to_message.from_user.id == BOT_INFO.id
+            and message.reply_to_message.from_user.id == _cfg.BOT_INFO.id
         ):
             try:
                 await bot.delete_message(message.chat.id, message.reply_to_message.message_id)
@@ -391,9 +391,9 @@ def register_handlers(router: Router, bot: "Bot") -> None:
             if message.text is not None
             else getattr(message, "caption_entities", None)
         )
-        if BOT_INFO and BOT_INFO.username:
+        if _cfg.BOT_INFO and _cfg.BOT_INFO.username:
             mention_re = re.compile(
-                r"(?<![A-Za-z0-9_])@" + re.escape(BOT_INFO.username) + r"\b", re.I
+                r"(?<![A-Za-z0-9_])@" + re.escape(_cfg.BOT_INFO.username) + r"\b", re.I
             )
             code_stripped = _strip_code_spans(text, entities)
             if mention_re.search(text) and not mention_re.search(code_stripped):
@@ -412,15 +412,15 @@ def register_handlers(router: Router, bot: "Bot") -> None:
         text = message.text or message.caption or ""
         text_no_html = re.sub(r"<[^>]+>", "", text)
         is_private = message.chat.type == "private"
-        bot_username = f"@{BOT_INFO.username}" if BOT_INFO and BOT_INFO.username else ""
+        bot_username = f"@{_cfg.BOT_INFO.username}" if _cfg.BOT_INFO and _cfg.BOT_INFO.username else ""
         lower = text_no_html.lower()
         tagged = bool(bot_username) and bot_username.lower() in lower
         tagged = tagged or "@gemini" in lower
         reply_to_bot = bool(
             message.reply_to_message
-            and BOT_INFO
+            and _cfg.BOT_INFO
             and message.reply_to_message.from_user
-            and message.reply_to_message.from_user.id == BOT_INFO.id
+            and message.reply_to_message.from_user.id == _cfg.BOT_INFO.id
         )
         replied_video_media = get_replied_video_media(message)
         replied_video = bool(replied_video_media)
