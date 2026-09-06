@@ -171,32 +171,6 @@ def clean_ai_output(text: str) -> str:
             i += 1
     text = "\n".join(result)
 
-    lines = text.split("\n")
-    result = []
-    list_stack = []
-    for line in lines:
-        stripped = line.strip()
-        indent = len(line) - len(line.lstrip())
-        bullet_match = re.match(r"^[•\-\*·‣∙➤►▸▹◦○●▪▫–—]\s*(.+)", stripped)
-        if bullet_match:
-            while list_stack and list_stack[-1] > indent:
-                result.append("</ul>")
-                list_stack.pop()
-            if not list_stack or list_stack[-1] < indent:
-                result.append("<ul>")
-                list_stack.append(indent)
-            result.append(f"<li>{bullet_match.group(1)}</li>")
-        else:
-            while list_stack:
-                result.append("</ul>")
-                list_stack.pop()
-            result.append(line)
-    while list_stack:
-        result.append("</ul>")
-        list_stack.pop()
-    text = "\n".join(result)
-    if "<ul>" in text:
-        print(f"[clean_ai_output] Lists converted: {text.count('<ul>')} ul tags")
     return sanitize_rich_html(render_math_markup(text)).strip()
 
 
@@ -275,7 +249,7 @@ def register_handlers(router: Router, bot: "Bot") -> None:
         await clear_interaction(cid, uid)
         await clear_menu_identity(cid, uid)
         name = html.escape(get_user_display_name(message.from_user))
-        text = f"<b>Memory Center</b>\n\nWelcome, {name}.\n\nKeep track of the details and instructions you've asked Sen to remember. Changes here affect how Sen responds to you."
+        text = f"<b>Memory Center</b>\n\nWelcome, {name}.\n\nKeep track of the details and instructions you've asked TGB to remember. Changes here affect how TGB responds to you."
         if message.chat.type in {"group", "supergroup"}:
             if incoming is None:
                 return
@@ -295,7 +269,7 @@ def register_handlers(router: Router, bot: "Bot") -> None:
             return
         await callback.answer()
         memories = await get_memories(str(callback.from_user.id))
-        body = "<b>What Sen Remembers</b>\n\nThese are the saved instructions and details currently available to Sen."
+        body = "<b>What TGB Remembers</b>\n\nThese are the saved instructions and details currently available to TGB."
         if not memories:
             body += "\n\nNothing has been saved yet."
         await edit_memory_menu(bot, callback, body, "view", memories)
@@ -318,7 +292,7 @@ def register_handlers(router: Router, bot: "Bot") -> None:
             InputRichMessage,
         )
         from .memory import rich_text_from_markup
-        share_blocks = [InputRichBlockSectionHeading(text=f"What Sen Remembers for {safe_first_name}", size=3)]
+        share_blocks = [InputRichBlockSectionHeading(text=f"What TGB Remembers for {safe_first_name}", size=3)]
         share_blocks.append(InputRichBlockList(items=[
             InputRichBlockListItem(blocks=[InputRichBlockParagraph(text=rich_text_from_markup(memory))], value=i, type="1")
             for i, memory in enumerate(memories, 1)
@@ -336,7 +310,7 @@ def register_handlers(router: Router, bot: "Bot") -> None:
             return
         await set_interaction(callback.message.chat.id, callback.from_user.id, "add")
         await callback.answer()
-        await edit_memory_menu(bot, callback, "<b>Add a Memory</b>\n\nTell Sen what you'd like to keep in mind for future conversations.\n\nYou can add several items at once by separating them with <code>,,</code>.", "back_close")
+        await edit_memory_menu(bot, callback, "<b>Add a Memory</b>\n\nTell TGB what you'd like to keep in mind for future conversations.\n\nYou can add several items at once by separating them with <code>,,</code>.", "back_close")
 
     @router.callback_query(F.data == "memory_edit")
     async def handle_memory_edit(callback: CallbackQuery):
@@ -394,7 +368,7 @@ def register_handlers(router: Router, bot: "Bot") -> None:
         await clear_interaction(callback.message.chat.id, callback.from_user.id)
         await callback.answer()
         name = html.escape(get_user_display_name(callback.from_user))
-        await edit_memory_menu(bot, callback, f"<b>Memory Center</b>\n\nWelcome, {name}.\n\nKeep track of the details and instructions you've asked Sen to remember. Changes here affect how Sen responds to you.", "main")
+        await edit_memory_menu(bot, callback, f"<b>Memory Center</b>\n\nWelcome, {name}.\n\nKeep track of the details and instructions you've asked TGB to remember. Changes here affect how TGB responds to you.", "main")
 
     @router.callback_query(F.data == "memory_close")
     async def handle_memory_close(callback: CallbackQuery):
