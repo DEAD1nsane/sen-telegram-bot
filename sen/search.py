@@ -206,18 +206,16 @@ def source_entries(search_context: str) -> list[tuple[str, str]]:
 
 
 def source_links(search_context: str) -> str:
-    """Build a collapsible source footnote section with numbered links."""
+    """Build a collapsible source section with domain names."""
     entries = source_entries(search_context)
     if not entries:
         return ""
-    lines = ["<details><summary>Sources</summary>"]
-    for i, (title, url) in enumerate(entries, 1):
-        safe_title = html.escape(title, quote=False)
-        safe_url = html.escape(url, quote=True)
+    domains = []
+    for title, url in entries:
         domain = re.sub(r"https?://(www\.)?", "", url).split("/")[0]
-        lines.append(f'<p>[<a href="{safe_url}">{i}</a>] {safe_title} - <code>{domain}</code></p>')
-    lines.append("</details>")
-    return "\n\n" + "\n".join(lines)
+        if domain not in domains:
+            domains.append(domain)
+    return "\n\n" + "<details><summary>Sources</summary>" + " | ".join(domains) + "</details>"
 
 
 def replace_model_source_blocks(text: str) -> str:
