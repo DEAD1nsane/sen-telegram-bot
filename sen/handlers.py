@@ -206,16 +206,8 @@ def clean_ai_output(text: str, plain_lists: bool = False) -> str:
 
 
 async def send_ai_response(bot: "Bot", chat_id: int, msg_id: int, response_text: str, is_private: bool):
-    """Send a response, appending source links if the user asked for them."""
-    query, search_context = get_search_state()
-    wants_sources = asked_for_sources(query)
-    cleaned = response_text
-    if search_context and wants_sources:
-        cleaned = replace_model_source_blocks(cleaned).rstrip()
-        entries = source_entries(search_context)
-        if entries:
-            cleaned += source_links(search_context)
-    rich = InputRichMessage(html=sanitize_rich_html(render_math_markup(cleaned)))
+    """Send a response."""
+    rich = InputRichMessage(html=sanitize_rich_html(render_math_markup(response_text)))
     kwargs: dict = {"chat_id": chat_id, "rich_message": rich}
     if not is_private:
         kwargs["reply_parameters"] = ReplyParameters(message_id=msg_id)
