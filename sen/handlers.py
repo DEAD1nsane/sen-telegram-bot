@@ -623,14 +623,7 @@ def register_handlers(router: Router, bot: "Bot") -> None:
             plain_lists = bool(re.search(r"\b(?:plain|non[- ]?rich|without formatting|no formatting|no rich text|as text|just text|raw text)\b", prompt or "", re.I))
             response_text = clean_ai_output(response.text, plain_lists=plain_lists)
 
-            search_image_url = None
-            image_marker = re.search(r"\[ATTACH_SEARCH_IMAGE:\s*(https?://[^\]\s]+)\]", response_text, re.I)
-            if image_marker and search_context:
-                candidate = image_marker.group(1).rstrip(".,)")
-                supplied_images = set(re.findall(r"Image:\s*(https?://\S+)", search_context, re.I))
-                if candidate in supplied_images:
-                    search_image_url = candidate
-                response_text = re.sub(r"\s*\[ATTACH_SEARCH_IMAGE:\s*https?://[^\]\s]+\]\s*", "\n", response_text, flags=re.I).strip()
+            response_text = re.sub(r"\s*\[ATTACH_SEARCH_IMAGE:\s*https?://[^\]\s]+\]\s*", "\n", response_text, flags=re.I).strip()
 
             try:
                 await send_ai_response(bot, cid, mid, response_text, is_private)
@@ -638,12 +631,6 @@ def register_handlers(router: Router, bot: "Bot") -> None:
                 print(f"Rich response delivery error: {rich_error}")
                 fallback = html.unescape(re.sub(r"<[^>]+>", "", response_text)).strip() or "I didn't receive a response."
                 await message.answer(fallback, reply_to_message_id=None if is_private else mid)
-
-            if search_image_url:
-                try:
-                    await bot.send_photo(chat_id=cid, photo=search_image_url, reply_to_message_id=None if is_private else mid)
-                except Exception as media_error:
-                    print(f"Search result image delivery error: {media_error}")
 
             clean_history = html.unescape(re.sub(r"<[^>]+>", "", response_text)).strip()
             await redis_client.rpush(history_key, f"User: {prompt or media_description or 'Media'}", f"Bot: {clean_history}")
