@@ -177,7 +177,7 @@ def clean_ai_output(text: str) -> str:
     for line in lines:
         stripped = line.strip()
         indent = len(line) - len(line.lstrip())
-        bullet_match = re.match(r"^[•\-\*]\s+(.+)", stripped)
+        bullet_match = re.match(r"^[•\-\*·‣∙➤►▸▹◦○●▪▫–—]\s*(.+)", stripped)
         if bullet_match:
             while list_stack and list_stack[-1] > indent:
                 result.append("</ul>")
@@ -195,7 +195,8 @@ def clean_ai_output(text: str) -> str:
         result.append("</ul>")
         list_stack.pop()
     text = "\n".join(result)
-
+    if "<ul>" in text:
+        print(f"[clean_ai_output] Lists converted: {text.count('<ul>')} ul tags")
     return sanitize_rich_html(render_math_markup(text)).strip()
 
 
