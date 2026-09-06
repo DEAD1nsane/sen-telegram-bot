@@ -207,7 +207,7 @@ def clean_ai_output(text: str) -> str:
 async def send_ai_response(bot: "Bot", chat_id: int, msg_id: int, response_text: str, is_private: bool):
     """Send a response, appending source links if the user asked for them."""
     query, search_context = get_search_state()
-    wants_sources = asked_for_sources(query)
+    wants_sources = asked_for_sources(query) or asked_for_sources(response_text[:200])
     cleaned = response_text
     if search_context and wants_sources:
         cleaned = replace_model_source_blocks(cleaned).rstrip()

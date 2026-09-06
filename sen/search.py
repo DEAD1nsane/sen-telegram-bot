@@ -214,7 +214,8 @@ def source_links(search_context: str) -> str:
     for i, (title, url) in enumerate(entries, 1):
         safe_title = html.escape(title, quote=False)
         safe_url = html.escape(url, quote=True)
-        lines.append(f'<p>[<a href="{safe_url}">{i}</a>] {safe_title}</p>')
+        domain = re.sub(r"https?://(www\.)?", "", url).split("/")[0]
+        lines.append(f'<p>[<a href="{safe_url}">{i}</a>] {safe_title} - <code>{domain}</code></p>')
     lines.append("</details>")
     return "\n\n" + "\n".join(lines)
 
@@ -271,7 +272,7 @@ def asked_for_sources(text: str) -> bool:
     """Return True if the user explicitly asked for sources."""
     return bool(
         re.search(
-            r"\b(?:source|sources|citation|citations|reference|references|footnote|footnotes|links?|urls?)\b",
+            r"\b(?:source|sources|citation|citations|reference|references|footnote|footnotes|links?|urls?|cite|cited|attribut|credit)\b",
             text or "",
             re.I,
         )
