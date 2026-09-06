@@ -317,7 +317,7 @@ def register_handlers(router: Router, bot: "Bot") -> None:
             InputRichBlockSectionHeading,
             InputRichMessage,
         )
-        from memory import rich_text_from_markup
+        from .memory import rich_text_from_markup
         share_blocks = [InputRichBlockSectionHeading(text=f"What Sen Remembers for {safe_first_name}", size=3)]
         share_blocks.append(InputRichBlockList(items=[
             InputRichBlockListItem(blocks=[InputRichBlockParagraph(text=rich_text_from_markup(memory))], value=i, type="1")
