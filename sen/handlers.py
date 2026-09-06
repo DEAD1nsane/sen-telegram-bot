@@ -133,7 +133,7 @@ def sanitize_rich_html(text: str) -> str:
     return text.strip()
 
 
-def clean_ai_output(text: str) -> str:
+def clean_ai_output(text: str, plain_lists: bool = False) -> str:
     """Strip markdown code fences, convert plain text lists, and sanitize for RichMessage."""
     text = (text or "I didn't receive a response.").strip()
     text = re.sub(r"^```(?:html)?\s*", "", text, flags=re.I)
@@ -170,6 +170,32 @@ def clean_ai_output(text: str) -> str:
             result.append(lines[i])
             i += 1
     text = "\n".join(result)
+
+    if not plain_lists:
+        lines = text.split("\n")
+        result = []
+        list_stack = []
+        for line in lines:
+            stripped = line.strip()
+            indent = len(line) - len(line.lstrip())
+            bullet_match = re.match(r"^[•\-\*·‣∙➤►▸▹◦○●▪▫–—]\s*(.+)", stripped)
+            if bullet_match:
+                while list_stack and list_stack[-1] > indent:
+                    result.append("</ul>")
+                    list_stack.pop()
+                if not list_stack or list_stack[-1] < indent:
+                    result.append("<ul>")
+                    list_stack.append(indent)
+                result.append(f"<li>{bullet_match.group(1)}</li>")
+            else:
+                while list_stack:
+                    result.append("</ul>")
+                    list_stack.pop()
+                result.append(line)
+        while list_stack:
+            result.append("</ul>")
+            list_stack.pop()
+        text = "\n".join(result)
 
     return sanitize_rich_html(render_math_markup(text)).strip()
 
@@ -594,7 +620,8 @@ def register_handlers(router: Router, bot: "Bot") -> None:
                 contents = final_prompt
 
             response = await generate_gemini_response(contents, types.GenerateContentConfig(system_instruction=instructions, safety_settings=safety))
-            response_text = clean_ai_output(response.text)
+            plain_lists = bool(re.search(r"\b(?:plain|non[- ]?rich|without formatting|no formatting|no rich text|as text|just text|raw text)\b", prompt or "", re.I))
+            response_text = clean_ai_output(response.text, plain_lists=plain_lists)
 
             search_image_url = None
             image_marker = re.search(r"\[ATTACH_SEARCH_IMAGE:\s*(https?://[^\]\s]+)\]", response_text, re.I)
