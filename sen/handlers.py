@@ -120,11 +120,29 @@ def sanitize_rich_html(text: str) -> str:
     return text.strip()
 
 
+def _ensure_list_breaks(text: str) -> str:
+    """Ensure numbered and bullet list items are on separate lines for markdown rendering."""
+    if not text:
+        return text
+    text = re.sub(
+        r'(?<=[.;:!?])\s+(\d+)\.\s+',
+        r'\n\n\1. ',
+        text,
+    )
+    text = re.sub(
+        r'(?<=[.;:!?])\s+([-•*])\s+',
+        r'\n\n\1 ',
+        text,
+    )
+    return text
+
+
 def clean_ai_output(text: str, plain_lists: bool = False) -> str:
     """Strip markdown code fences, convert plain text lists, and sanitize for RichMessage."""
     text = (text or "I didn't receive a response.").strip()
     text = re.sub(r"^```(?:html)?\s*", "", text, flags=re.I)
     text = re.sub(r"\s*```$", "", text)
+    text = _ensure_list_breaks(text)
 
     LANG_LABELS = re.compile(
         r"^(Python|JavaScript|JS|Py|Bash|Shell|HTML|CSS|JSON|TypeScript|TS|Java|C|C\+\+|Go|Rust|Ruby|PHP|SQL|YAML|XML|Swift|Kotlin|R|Lua|Perl|Scala|Haskell):\s*$",
