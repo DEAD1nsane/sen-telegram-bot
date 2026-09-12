@@ -133,6 +133,23 @@ def sanitize_rich_html(text: str) -> str:
     return text.strip()
 
 
+def _markdown_to_rich_html(text: str) -> str:
+    """Convert Markdown formatting to Telegram Rich HTML tags."""
+    if not text:
+        return text
+    text = re.sub(r"__([^_]+?)__", r"<b>\1</b>", text)
+    text = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", text)
+    text = re.sub(r"(?<!\w)_([^_\s].*?[^_\s])_(?!\w)", r"<i>\1</i>", text)
+    text = re.sub(r"(?<!\w)\*(?!\*)(.+?)(?<!\*)\*(?!\w)", r"<i>\1</i>", text)
+    text = re.sub(r"~~(.+?)~~", r"<s>\1</s>", text)
+    text = re.sub(r"`([^`\n]+?)`", r"<code>\1</code>", text)
+    text = re.sub(r"\[([^\]]+?)\]\((https?://[^\)]+?)\)", r'<a href="\2">\1</a>', text)
+    text = re.sub(r"^(#{1,6})\s+(.+)$", lambda m: f"<b>{m.group(2).strip()}</b>", text, flags=re.M)
+    text = re.sub(r"^>\s?(.+)$", lambda m: f"<i>{m.group(1)}</i>", text, flags=re.M)
+    text = re.sub(r"^---+$", "—", text, flags=re.M)
+    return text
+
+
 def clean_ai_output(text: str, plain_lists: bool = False) -> str:
     """Strip markdown code fences, convert plain text lists, and sanitize for RichMessage."""
     text = (text or "I didn't receive a response.").strip()
@@ -144,6 +161,7 @@ def clean_ai_output(text: str, plain_lists: bool = False) -> str:
         text, flags=re.S,
     )
     text = re.sub(r"```\n?(.*?)```", lambda m: f"<pre><code>{m.group(1).strip()}</code></pre>", text, flags=re.S)
+    text = _markdown_to_rich_html(text)
 
     LANG_LABELS = re.compile(
         r"^(Python|JavaScript|JS|Py|Bash|Shell|HTML|CSS|JSON|TypeScript|TS|Java|C|C\+\+|Go|Rust|Ruby|PHP|SQL|YAML|XML|Swift|Kotlin|R|Lua|Perl|Scala|Haskell):\s*$",
