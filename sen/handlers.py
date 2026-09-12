@@ -102,24 +102,11 @@ def _strip_code_spans(text: str, entities=None) -> str:
 
 
 def render_math_markup(text: str) -> str:
-    """Convert $$, \\[, \\( math delimiters to Telegram math tags."""
+    """Normalize math delimiters for Telegram RichMessage markdown."""
     if not text:
         return text
-    protected: list[str] = []
-
-    def protect(match: re.Match) -> str:
-        protected.append(match.group(0))
-        return f"\x00MATH{len(protected) - 1}\x00"
-
-    text = re.sub(
-        r"<tg-math>.*?</tg-math>|<tg-math-block>.*?</tg-math-block>|<pre>.*?</pre>|<code>.*?</code>",
-        protect, text, flags=re.I | re.S,
-    )
-    text = re.sub(r"\$\$(.+?)\$\$", lambda m: f"<tg-math-block>{html.escape(m.group(1).strip())}</tg-math-block>", text, flags=re.S)
-    text = re.sub(r"\\\[(.+?)\\\]", lambda m: f"<tg-math-block>{html.escape(m.group(1).strip())}</tg-math-block>", text, flags=re.S)
-    text = re.sub(r"\\\((.+?)\\\)", lambda m: f"<tg-math>{html.escape(m.group(1).strip())}</tg-math>", text, flags=re.S)
-    for i, value in enumerate(protected):
-        text = text.replace(f"\x00MATH{i}\x00", value)
+    text = re.sub(r"\\\[(.+?)\\\]", lambda m: f"$${m.group(1).strip()}$$", text, flags=re.S)
+    text = re.sub(r"\\\((.+?)\\\)", lambda m: f"${m.group(1).strip()}$", text, flags=re.S)
     return text
 
 
@@ -133,35 +120,11 @@ def sanitize_rich_html(text: str) -> str:
     return text.strip()
 
 
-def _markdown_to_rich_html(text: str) -> str:
-    """Convert Markdown formatting to Telegram Rich HTML tags."""
-    if not text:
-        return text
-    text = re.sub(r"__([^_]+?)__", r"<b>\1</b>", text)
-    text = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", text)
-    text = re.sub(r"(?<!\w)_([^_\s].*?[^_\s])_(?!\w)", r"<i>\1</i>", text)
-    text = re.sub(r"(?<!\w)\*(?!\*)(.+?)(?<!\*)\*(?!\w)", r"<i>\1</i>", text)
-    text = re.sub(r"~~(.+?)~~", r"<s>\1</s>", text)
-    text = re.sub(r"`([^`\n]+?)`", r"<code>\1</code>", text)
-    text = re.sub(r"\[([^\]]+?)\]\((https?://[^\)]+?)\)", r'<a href="\2">\1</a>', text)
-    text = re.sub(r"^(#{1,6})\s+(.+)$", lambda m: f"<b>{m.group(2).strip()}</b>", text, flags=re.M)
-    text = re.sub(r"^>\s?(.+)$", lambda m: f"<i>{m.group(1)}</i>", text, flags=re.M)
-    text = re.sub(r"^---+$", "—", text, flags=re.M)
-    return text
-
-
 def clean_ai_output(text: str, plain_lists: bool = False) -> str:
     """Strip markdown code fences, convert plain text lists, and sanitize for RichMessage."""
     text = (text or "I didn't receive a response.").strip()
     text = re.sub(r"^```(?:html)?\s*", "", text, flags=re.I)
     text = re.sub(r"\s*```$", "", text)
-    text = re.sub(
-        r"```(\w+)\n(.*?)```",
-        lambda m: f"<pre><code class=\"language-{m.group(1)}\">{m.group(2).strip()}</code></pre>",
-        text, flags=re.S,
-    )
-    text = re.sub(r"```\n?(.*?)```", lambda m: f"<pre><code>{m.group(1).strip()}</code></pre>", text, flags=re.S)
-    text = _markdown_to_rich_html(text)
 
     LANG_LABELS = re.compile(
         r"^(Python|JavaScript|JS|Py|Bash|Shell|HTML|CSS|JSON|TypeScript|TS|Java|C|C\+\+|Go|Rust|Ruby|PHP|SQL|YAML|XML|Swift|Kotlin|R|Lua|Perl|Scala|Haskell):\s*$",
@@ -183,39 +146,13 @@ def clean_ai_output(text: str, plain_lists: bool = False) -> str:
                 i += 1
             while code_lines and code_lines[-1].strip() == "":
                 code_lines.pop()
-            result.append(f"<pre><code class=\"language-{lang}\">{chr(10).join(code_lines).strip()}</code></pre>")
+            result.append(f"```{lang}\n{chr(10).join(code_lines).strip()}\n```")
         else:
             result.append(lines[i])
             i += 1
     text = "\n".join(result)
 
-    if not plain_lists:
-        lines = text.split("\n")
-        result = []
-        list_stack = []
-        for line in lines:
-            stripped = line.strip()
-            indent = len(line) - len(line.lstrip())
-            bullet_match = re.match(r"^[•\-\*·‣∙➤►▸▹◦○●▪▫–—]\s*(.+)", stripped)
-            if bullet_match:
-                while list_stack and list_stack[-1] > indent:
-                    result.append("</ul>")
-                    list_stack.pop()
-                if not list_stack or list_stack[-1] < indent:
-                    result.append("<ul>")
-                    list_stack.append(indent)
-                result.append(f"<li>{bullet_match.group(1)}</li>")
-            else:
-                while list_stack:
-                    result.append("</ul>")
-                    list_stack.pop()
-                result.append(line)
-        while list_stack:
-            result.append("</ul>")
-            list_stack.pop()
-        text = "\n".join(result)
-
-    return sanitize_rich_html(render_math_markup(text)).strip()
+    return render_math_markup(text).strip()
 
 
 # ---------------------------------------------------------------------------
@@ -225,7 +162,7 @@ def clean_ai_output(text: str, plain_lists: bool = False) -> str:
 
 async def send_ai_response(bot: "Bot", chat_id: int, msg_id: int, response_text: str, is_private: bool):
     """Send a response."""
-    rich = InputRichMessage(html=sanitize_rich_html(render_math_markup(response_text)))
+    rich = InputRichMessage(markdown=response_text)
     kwargs: dict = {"chat_id": chat_id, "rich_message": rich}
     if not is_private:
         kwargs["reply_parameters"] = ReplyParameters(message_id=msg_id)
