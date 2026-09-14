@@ -24,13 +24,13 @@
   },
   "homepage": "https://github.com",
   "dependencies": {
-    "@railway/cli": "^5.45.7",
     "beautify": "^0.0.8",
     "dotenv": "^16.4.5",
     "googleapis": "^176.0.0",
     "node": "^26.8.1"
   },
   "devDependencies": {
+    "@railway/cli": "^5.45.7",
     "husky": "^9.1.5",
     "lint-staged": "^15.2.9",
     "prettier": "^3.9.6"
