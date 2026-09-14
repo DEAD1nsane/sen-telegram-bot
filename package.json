@@ -26,16 +26,12 @@
   "dependencies": {
     "beautify": "^0.0.8",
     "dotenv": "^16.4.5",
-    "googleapis": "^176.0.0",
-    "node": "^26.8.1"
+    "googleapis": "^176.0.0"
   },
   "devDependencies": {
     "@railway/cli": "^5.45.7",
     "husky": "^9.1.5",
     "lint-staged": "^15.2.9",
     "prettier": "^3.9.6"
-  },
-  "allowScripts": {
-    "@railway/cli@0.3.1": true
   }
 }
