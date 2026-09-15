@@ -369,6 +369,25 @@ async def delete_gemini_file(uploaded) -> None:
         print(f"Gemini temporary video cleanup error: {type(e).__name__}")
 
 
+async def _get_sticker_input(bot, message: Message) -> tuple[bytes, str, str] | tuple[None, None, None]:
+    """Download a sticker from a replied-to message and return (bytes, mime, description)."""
+    sticker = getattr(message, "sticker", None)
+    if not sticker:
+        return None, None, None
+    file_id = sticker.file_id
+    mime = "image/webp"
+    if getattr(sticker, "is_video", False):
+        mime = "video/mp4"
+    elif getattr(sticker, "is_animated", False):
+        mime = "application/x-tgsticker"
+    emoji = getattr(sticker, "emoji", "") or ""
+    description = f"Sticker{': ' + emoji if emoji else ''}"
+    data = await download_telegram_media(bot, file_id)
+    if not data:
+        return None, None, None
+    return data, mime, description
+
+
 # ---------------------------------------------------------------------------
 # Keyword audio delivery
 # ---------------------------------------------------------------------------
