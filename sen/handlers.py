@@ -58,7 +58,7 @@ from .media import (
     get_replied_video_media,
     send_keyword_audio,
 )
-from .minesweeper import MinesweeperGame, save_game, load_game, delete_game
+from .minesweeper import MinesweeperGame, save_game, load_game, delete_game, GAME_TTL
 
 if TYPE_CHECKING:
     from aiogram import Bot, Dispatcher
@@ -545,6 +545,60 @@ def register_handlers(router: Router, bot: "Bot") -> None:
             url += f"&owner={owner}"
         await callback.answer(url=url)
 
+    async def _schedule_inactivity_collapse(chat_id: int, user_id: int, name: str, msg) -> None:
+        """Arm (or re-arm) the 30s no-tap collapse for a mines game.
+
+        Each tap overwrites the marker, so only the latest task fires.
+        Marker TTL is generous so a stalled event loop can't silently
+        expire it before the task wakes.
+        """
+        import time
+
+        collapse_key = f"ms_collapse:{chat_id}:{user_id}"
+        ts = str(int(time.time()))
+        await redis_client.set(collapse_key, f"inactive:{ts}", ex=120)
+        print(f"[COLLAPSE] armed inactive {chat_id}:{user_id} ts={ts}")
+
+        async def _collapse():
+            import asyncio
+
+            await asyncio.sleep(30)
+            try:
+                stored = await redis_client.get(collapse_key)
+                stored_val = stored.decode() if isinstance(stored, bytes) else str(stored) if stored else ""
+                if stored_val != f"inactive:{ts}":
+                    print(f"[COLLAPSE] inactive superseded/expired {chat_id}:{user_id}")
+                    return
+                current = await load_game(chat_id, user_id)
+                if current and not current.game_over:
+                    from aiogram.types import (
+                        InputRichMessage,
+                        InputRichBlockParagraph,
+                        RichTextBold,
+                        RichTextSubscript,
+                    )
+
+                    rich = InputRichMessage(
+                        blocks=[
+                            InputRichBlockParagraph(
+                                text=[
+                                    RichTextBold(
+                                        text=[RichTextSubscript(text=f"⏱️ {name}'s game — inactivity timed out")]
+                                    )
+                                ]
+                            )
+                        ]
+                    )
+                    await msg.edit_text(text=None, rich_message=rich)
+                    await delete_game(chat_id, user_id)
+                    await redis_client.delete(f"ms_flag:{chat_id}:{user_id}")
+                    await redis_client.delete(collapse_key)
+                    print(f"[COLLAPSE] inactive fired {chat_id}:{user_id}")
+            except Exception as e:
+                print(f"[COLLAPSE inactive] failed: {type(e).__name__}: {e}")
+
+        asyncio.create_task(_collapse())
+
     @router.message(Command("mini"))
     async def handle_mini(message: Message):
         await message.answer("Open the Minesweeper Mini App panel:\nhttps://t.me/SenAnythangBot/mines")
@@ -557,6 +611,7 @@ def register_handlers(router: Router, bot: "Bot") -> None:
         if "reset" in text:
             await delete_game(cid, uid)
             await redis_client.delete(f"ms_flag:{cid}:{uid}")
+            await redis_client.delete(f"ms_collapse:{cid}:{uid}")
             await message.answer("✅ Game reset. Send /mines to start fresh.")
             return
 
@@ -623,11 +678,19 @@ def register_handlers(router: Router, bot: "Bot") -> None:
             # the run into bot_command entities (which drop subscript styling).
             tip = "💡 Tip: customize with /\u200bmines 8x8 10 mines | /\u200bmines reset to clear stuck games"
             blocks.append(InputRichBlockParagraph(text=[RichTextBold(text=[RichTextSubscript(text=tip)])]))
-        await bot.send_rich_message(
-            chat_id=cid,
-            rich_message=InputRichMessage(blocks=blocks),
-            reply_parameters=ReplyParameters(message_id=message.message_id) if message.chat.type != "private" else None,
-        )
+        try:
+            sent_board = await bot.send_rich_message(
+                chat_id=cid,
+                rich_message=InputRichMessage(blocks=blocks),
+                reply_parameters=ReplyParameters(message_id=message.message_id)
+                if message.chat.type != "private"
+                else None,
+            )
+        except Exception:
+            sent_board = None
+        if sent_board is not None:
+            name = html.escape(message.from_user.first_name or "Player")
+            await _schedule_inactivity_collapse(cid, uid, name, sent_board)
         try:
             await message.delete()
         except Exception:
@@ -750,51 +813,9 @@ def register_handlers(router: Router, bot: "Bot") -> None:
             )
             await callback.answer()
 
-            # Schedule inactivity collapse — each tap resets via timestamp
-            import time
-
-            ts = str(int(time.time()))
-            collapse_key = f"ms_collapse:{cid}:{uid}"
-            await redis_client.set(collapse_key, f"inactive:{ts}", ex=35)
-
-            async def collapse_inactive():
-                import asyncio
-
-                await asyncio.sleep(30)
-                try:
-                    stored = await redis_client.get(collapse_key)
-                    stored_val = stored.decode() if isinstance(stored, bytes) else str(stored) if stored else ""
-                    if stored_val != f"inactive:{ts}":
-                        return
-                    current = await load_game(cid, uid)
-                    if current and not current.game_over:
-                        from aiogram.types import (
-                            InputRichMessage,
-                            InputRichBlockParagraph,
-                            RichTextBold,
-                            RichTextSubscript,
-                        )
-
-                        name = html.escape(callback.from_user.first_name or "Player")
-                        rich = InputRichMessage(
-                            blocks=[
-                                InputRichBlockParagraph(
-                                    text=[
-                                        RichTextBold(
-                                            text=[RichTextSubscript(text=f"⏱️ {name}'s game — inactivity timed out")]
-                                        )
-                                    ]
-                                )
-                            ]
-                        )
-                        await callback.message.edit_text(text=None, rich_message=rich)
-                        await delete_game(cid, uid)
-                        await redis_client.delete(f"ms_flag:{cid}:{uid}")
-                        await redis_client.delete(collapse_key)
-                except Exception as e:
-                    print(f"[COLLAPSE inactive] failed: {type(e).__name__}: {e}")
-
-            asyncio.create_task(collapse_inactive())
+            # Re-arm inactivity collapse — each tap resets the 30s window.
+            name = html.escape(callback.from_user.first_name or "Player")
+            await _schedule_inactivity_collapse(cid, uid, name, callback.message)
 
     @router.message(F.community_chat_added)
     async def handle_community_added(message: Message):

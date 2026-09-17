@@ -40,6 +40,7 @@ class MinesweeperGame:
 
     def __post_init__(self):
         import time
+
         if not self.created_at:
             self.created_at = time.time()
         if not self.board:
@@ -55,12 +56,7 @@ class MinesweeperGame:
                 if 0 <= r < self.rows and 0 <= c < self.cols:
                     safe_zone.add((r, c))
 
-        candidates = [
-            (r, c)
-            for r in range(self.rows)
-            for c in range(self.cols)
-            if (r, c) not in safe_zone
-        ]
+        candidates = [(r, c) for r in range(self.rows) for c in range(self.cols) if (r, c) not in safe_zone]
         mine_positions = random.sample(candidates, min(self.mines, len(candidates)))
 
         for r, c in mine_positions:
@@ -102,8 +98,10 @@ class MinesweeperGame:
 
     def _flood_reveal(self, row: int, col: int) -> None:
         if (
-            row < 0 or row >= self.rows
-            or col < 0 or col >= self.cols
+            row < 0
+            or row >= self.rows
+            or col < 0
+            or col >= self.cols
             or self.revealed[row][col]
             or self.flagged[row][col]
         ):
@@ -141,6 +139,7 @@ class MinesweeperGame:
 
     def get_rich_message(self, flag_mode: bool = False, creator_uid: int = 0) -> InputRichMessage:
         from .memory import rich_text_from_markup
+
         blocks = []
 
         # Header
@@ -151,9 +150,12 @@ class MinesweeperGame:
             else:
                 header = f"<b>💥 GAME OVER!</b>  <code>{self.rows}×{self.cols}</code>"
         else:
-            header = f"<b>💣 MINESWEEPER</b>  <code>{self.rows}×{self.cols}</code>  <b>{self.mines} mines</b>  🚩 {flags}"
+            header = (
+                f"<b>💣 MINESWEEPER</b>  <code>{self.rows}×{self.cols}</code>  <b>{self.mines} mines</b>  🚩 {flags}"
+            )
 
         from aiogram.types import InputRichBlockParagraph
+
         blocks.append(InputRichBlockParagraph(text=rich_text_from_markup(header)))
 
         # Board buttons — one row per board row
@@ -166,10 +168,14 @@ class MinesweeperGame:
 
         # Control buttons
         flag_text = "💣 Tap to return to game" if flag_mode else "🚩 Tap to place flags"
-        blocks.append(InputRichBlockButtons(buttons=[
-            RichMessageButton(text=flag_text, callback_data=f"ms:{creator_uid}:flag_toggle"),
-            RichMessageButton(text="❓ How to play", callback_data=f"ms:{creator_uid}:howto"),
-        ]))
+        blocks.append(
+            InputRichBlockButtons(
+                buttons=[
+                    RichMessageButton(text=flag_text, callback_data=f"ms:{creator_uid}:flag_toggle"),
+                    RichMessageButton(text="❓ How to play", callback_data=f"ms:{creator_uid}:howto"),
+                ]
+            )
+        )
 
         return InputRichMessage(blocks=blocks)
 
@@ -184,6 +190,7 @@ class MinesweeperGame:
             "game_over": self.game_over,
             "won": self.won,
             "first_move": self.first_move,
+            "created_at": self.created_at,
         }
 
     @classmethod
@@ -198,6 +205,7 @@ class MinesweeperGame:
             game_over=data["game_over"],
             won=data["won"],
             first_move=data["first_move"],
+            created_at=data.get("created_at", 0),
         )
 
 
