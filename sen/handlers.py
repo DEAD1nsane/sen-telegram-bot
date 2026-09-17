@@ -16,6 +16,7 @@ from aiogram.types import (
     BotCommandScopeAllChatAdministrators,
     BotCommandScopeAllGroupChats,
     BotCommandScopeAllPrivateChats,
+    ChosenInlineResult,
     InlineQuery,
     InlineQueryResultGame,
     InputRichMessage,
@@ -517,16 +518,56 @@ def register_handlers(router: Router, bot: "Bot") -> None:
         keyboard = InlineKeyboardMarkup(
             inline_keyboard=[[InlineKeyboardButton(text="💣 Play Minesweeper", callback_game={})]]
         )
-        await message.answer_game(game_short_name=GAME_SHORT_NAME, reply_markup=keyboard)
+        sent = await message.answer_game(game_short_name=GAME_SHORT_NAME, reply_markup=keyboard)
+        try:
+            await redis_client.set(f"game_owner:{sent.chat.id}:{sent.message_id}", str(message.from_user.id), ex=86400)
+        except Exception:
+            pass
 
     @router.callback_query(F.game_short_name == "minesweeper")
     async def handle_game_callback(callback: CallbackQuery):
-        await callback.answer(url=MINESWEEPER_APP_URL)
+        uid = callback.from_user.id
+        owner = None
+        try:
+            if callback.message is not None:
+                raw = await redis_client.get(f"game_owner:{callback.message.chat.id}:{callback.message.message_id}")
+                if raw:
+                    owner = int(raw.decode() if isinstance(raw, bytes) else str(raw))
+            elif callback.inline_message_id:
+                raw = await redis_client.get(f"game_owner_inline:{callback.inline_message_id}")
+                if raw:
+                    owner = int(raw.decode() if isinstance(raw, bytes) else str(raw))
+        except Exception:
+            owner = None
+        if owner and uid != owner:
+            await callback.answer(
+                "Only the summoner can play this one. Summon your own with /play or inline.",
+                show_alert=True,
+            )
+            return
+        url = MINESWEEPER_APP_URL
+        sep = "&" if "?" in url else "?"
+        url = f"{url}{sep}uid={uid}"
+        if owner:
+            url += f"&owner={owner}"
+        await callback.answer(url=url)
 
     @router.inline_query()
     async def handle_inline_game(inline: InlineQuery):
-        result = InlineQueryResultGame(id="minesweeper", game_short_name=GAME_SHORT_NAME)
+        result = InlineQueryResultGame(id=f"minesweeper-{inline.from_user.id}", game_short_name=GAME_SHORT_NAME)
         await inline.answer([result], cache_time=0, is_personal=True)
+
+    @router.chosen_inline_result()
+    async def handle_chosen_inline_game(chosen: ChosenInlineResult):
+        try:
+            if chosen.result_id.startswith("minesweeper") and chosen.inline_message_id:
+                await redis_client.set(
+                    f"game_owner_inline:{chosen.inline_message_id}",
+                    str(chosen.from_user.id),
+                    ex=86400,
+                )
+        except Exception:
+            pass
 
     @router.message(Command("mines"))
     async def handle_mines(message: Message):
