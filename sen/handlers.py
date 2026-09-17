@@ -601,7 +601,17 @@ def register_handlers(router: Router, bot: "Bot") -> None:
 
     @router.message(Command("mini"))
     async def handle_mini(message: Message):
-        await message.answer("Open the Minesweeper Mini App panel:\nhttps://t.me/SenAnythangBot/mines")
+        from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+
+        keyboard = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [InlineKeyboardButton(text="💣 Play Minesweeper", url="https://t.me/SenAnythangBot/mines")]
+            ]
+        )
+        await message.answer(
+            "Play Minesweeper in Telegram! Tap cells to reveal, flag mines, and clear the board without exploding.",
+            reply_markup=keyboard,
+        )
 
     @router.message(Command("mines"))
     async def handle_mines(message: Message):
