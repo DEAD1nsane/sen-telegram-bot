@@ -136,6 +136,7 @@ class MinesweeperGame:
             return HIDDEN
 
     def get_rich_message(self, flag_mode: bool = False, status: str = "") -> InputRichMessage:
+        from .memory import rich_text_from_markup
         blocks = []
 
         # Header
@@ -149,7 +150,7 @@ class MinesweeperGame:
             header = f"<b>💣 MINESWEEPER</b>  <code>{self.rows}×{self.cols}</code>  <b>{self.mines} mines</b>  🚩 {flags}"
 
         from aiogram.types import InputRichBlockParagraph
-        blocks.append(InputRichBlockParagraph(text=header))
+        blocks.append(InputRichBlockParagraph(text=rich_text_from_markup(header)))
 
         # Board buttons — one row per board row
         for r in range(self.rows):
