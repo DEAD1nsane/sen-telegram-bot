@@ -392,10 +392,10 @@ async def _get_sticker_input(bot, message: Message) -> tuple[bytes, str, str] | 
 # Image to ASCII art conversion
 # ---------------------------------------------------------------------------
 
-ASCII_CHARS = "@%#*+=-:. "
+ASCII_CHARS = "$@B%8&WM#*oahkbdpqwmZO0QLCJUYXzcvunxrjft/\\|()1{}[]?-_+~<>i!lI;:,\"^`'. "
 
 
-def image_to_ascii(image_bytes: bytes, width: int = 80) -> str:
+def image_to_ascii(image_bytes: bytes, width: int = 60) -> str:
     """Convert image bytes to ASCII art string."""
     from io import BytesIO
     from PIL import Image
