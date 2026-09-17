@@ -523,6 +523,7 @@ def register_handlers(router: Router, bot: "Bot") -> None:
         if mine_m:
             mines = int(mine_m.group(1))
         mines = min(mines, (rows * cols) - 9)
+        mines = max(mines, min(5, (rows * cols) // 4))
 
         import time
 
