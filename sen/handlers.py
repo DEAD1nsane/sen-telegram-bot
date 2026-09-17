@@ -394,8 +394,11 @@ def register_handlers(router: Router, bot: "Bot") -> None:
 
     @router.callback_query(F.data == "memory_add")
     async def handle_memory_add(callback: CallbackQuery):
+        print(f"[DEBUG] memory_add callback from user {callback.from_user.id}")
         if not await authorize_memory_callback(callback, bot):
+            print(f"[DEBUG] memory_add authorization failed")
             return
+        print(f"[DEBUG] memory_add setting interaction for chat {callback.message.chat.id}")
         await set_interaction(callback.message.chat.id, callback.from_user.id, "add")
         await callback.answer()
         await edit_memory_menu(
@@ -800,6 +803,7 @@ def register_handlers(router: Router, bot: "Bot") -> None:
 
     async def _handle_conversation_inner(message: Message, bot: "Bot", temp_forget: bool):
         action = await get_interaction(message.chat.id, message.from_user.id)
+        print(f"[DEBUG] interaction check: action={action}, text={message.text[:30] if message.text else None}")
         if action and message.text and not message.text.startswith("/"):
             if await process_memory_text(message, action, temp_forget):
                 return
