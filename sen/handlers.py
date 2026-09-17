@@ -159,6 +159,7 @@ def _markdown_to_rich_html(text: str) -> str:
     text = re.sub(r"(?<!\w)_([^_\s].*?[^_\s])_(?!\w)", r"<i>\1</i>", text)
     text = re.sub(r"(?<!\w)\*(?!\*)(.+?)(?<!\*)\*(?!\w)", r"<i>\1</i>", text)
     text = re.sub(r"~~(.+?)~~", r"<s>\1</s>", text)
+    text = re.sub(r"\|\|(.+?)\|\|", r'<span class="tg-spoiler">\1</span>', text)
     text = re.sub(r"`([^`\n]+?)`", r"<code>\1</code>", text)
     text = re.sub(r"\[([^\]]+?)\]\((https?://[^\)]+?)\)", r'<a href="\2">\1</a>', text)
     text = re.sub(r"^(#{1,6})\s+(.+)$", lambda m: f"<b>{m.group(2).strip()}</b>", text, flags=re.M)
@@ -635,7 +636,8 @@ def register_handlers(router: Router, bot: "Bot") -> None:
                 "Only show source links when the user explicitly asks for sources, citations, links, or URLs. When requested, put them at the very end as a compact rich-text footnote section using <details><summary>Sources</summary>...links...</details>.\n"
                 "For tables: use HTML <table>, <tr>, <td>, <th> tags. Never use Markdown pipe tables.\n"
                 "Use code fences only for actual code. Do not wrap tables or non-code content in code fences.\n"
-                "When the user asks for ASCII art or to convert an image to ASCII, respond with ONLY the marker [CONVERT_IMAGE_TO_ASCII] on its own line. Do not generate the ASCII art yourself."
+                "When the user asks for ASCII art or to convert an image to ASCII, respond with ONLY the marker [CONVERT_IMAGE_TO_ASCII] on its own line. Do not generate the ASCII art yourself.\n"
+                "For interactive games like Minesweeper: use a table with spoiler tags (||text||) to hide unrevealed cells. Use 💣 for mines, numbers 1-8 for adjacent mine counts, and ⬜ for empty revealed cells. Example grid: ||⬜|| ||1|| ||💣|| etc."
             )
             if saved:
                 instructions += "\nUser memory directives:\n" + "\n".join(f"- {x}" for x in saved)
