@@ -518,6 +518,7 @@ def register_handlers(router: Router, bot: "Bot") -> None:
         sent = await message.answer_game(game_short_name=GAME_SHORT_NAME, reply_markup=keyboard)
         try:
             await redis_client.set(f"game_owner:{sent.chat.id}:{sent.message_id}", str(message.from_user.id), ex=86400)
+            await redis_client.set(f"game_last:{sent.chat.id}", str(sent.message_id), ex=86400)
         except Exception:
             pass
 
@@ -544,6 +545,28 @@ def register_handlers(router: Router, bot: "Bot") -> None:
         if owner:
             url += f"&owner={owner}"
         await callback.answer(url=url)
+
+    @router.message(Command("scores"))
+    async def handle_scores(message: Message):
+        uid, cid = message.from_user.id, message.chat.id
+        raw = await redis_client.get(f"game_last:{cid}")
+        if not raw:
+            await message.answer("No /play game posted here yet.")
+            return
+        mid = int(raw.decode() if isinstance(raw, bytes) else str(raw))
+        try:
+            scores = await bot.get_game_high_scores(user_id=uid, chat_id=cid, message_id=mid)
+        except Exception as e:
+            print(f"[SCORES] failed: {type(e).__name__}: {e}")
+            scores = []
+        if not scores:
+            await message.answer("No scores on the board yet — win a game and tap 📤 Share score.")
+            return
+        lines = []
+        for s in scores[:10]:
+            name = html.escape(s.user.first_name or "Player")
+            lines.append(f"{s.position}. {name} — {s.score}")
+        await message.answer("🏆 <b>Minesweeper high scores</b>\n" + "\n".join(lines))
 
     async def _schedule_inactivity_collapse(chat_id: int, user_id: int, name: str, msg) -> None:
         """Arm (or re-arm) the 30s no-tap collapse for a mines game.

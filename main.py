@@ -47,19 +47,22 @@ async def configure_commands() -> None:
         BotCommand(command="memories", description="Open your private memory menu", is_ephemeral=True),
         BotCommand(command="del", description="Delete a bot message", is_ephemeral=True),
         BotCommand(command="play", description="Play the Minesweeper web game"),
-        BotCommand(command="mines", description="Play Minesweeper in chat"),
+        BotCommand(command="scores", description="Show Minesweeper high scores"),
+        BotCommand(command="mines", description="Play Minesweeper in chat using Python"),
     ]
     private = [
         BotCommand(command="memories", description="Manage your instructed memories"),
         BotCommand(command="del", description="Delete a bot message"),
         BotCommand(command="play", description="Play the Minesweeper web game"),
-        BotCommand(command="mines", description="Play Minesweeper in chat"),
+        BotCommand(command="scores", description="Show Minesweeper high scores"),
+        BotCommand(command="mines", description="Play Minesweeper in chat using Python"),
     ]
     admin = [
         BotCommand(command="memories", description="Open your private memory menu", is_ephemeral=True),
         BotCommand(command="del", description="Delete a bot message", is_ephemeral=True),
         BotCommand(command="play", description="Play the Minesweeper web game"),
-        BotCommand(command="mines", description="Play Minesweeper in chat"),
+        BotCommand(command="scores", description="Show Minesweeper high scores"),
+        BotCommand(command="mines", description="Play Minesweeper in chat using Python"),
     ]
     try:
         await bot.set_my_commands(admin, scope=BotCommandScopeAllChatAdministrators())
