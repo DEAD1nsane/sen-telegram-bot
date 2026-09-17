@@ -389,28 +389,6 @@ async def _get_sticker_input(bot, message: Message) -> tuple[bytes, str, str] | 
 
 
 # ---------------------------------------------------------------------------
-# Image to ASCII art conversion
-# ---------------------------------------------------------------------------
-
-ASCII_CHARS = "$@B%8&WM#*oahkbdpqwmZO0QLCJUYXzcvunxrjft/\\|()1{}[]?-_+~<>i!lI;:,\"^`'. "
-
-
-def image_to_ascii(image_bytes: bytes, width: int = 60) -> str:
-    """Convert image bytes to ASCII art string."""
-    from io import BytesIO
-    from PIL import Image
-
-    img = Image.open(BytesIO(image_bytes))
-    aspect = img.height / img.width
-    height = int(width * aspect * 0.55)
-    img = img.resize((width, height))
-    img = img.convert("L")
-    pixels = img.getdata()
-    ascii_str = "".join(ASCII_CHARS[pixel * len(ASCII_CHARS) // 256] for pixel in pixels)
-    return "\n".join(ascii_str[i:i + width] for i in range(0, len(ascii_str), width))
-
-
-# ---------------------------------------------------------------------------
 # Keyword audio delivery
 # ---------------------------------------------------------------------------
 

@@ -57,7 +57,6 @@ from .media import (
     get_gemini_video_file,
     get_replied_video_media,
     send_keyword_audio,
-    image_to_ascii,
 )
 from .minesweeper import MinesweeperGame, save_game, load_game, delete_game
 
@@ -573,14 +572,18 @@ def register_handlers(router: Router, bot: "Bot") -> None:
                 import asyncio
                 await asyncio.sleep(30)
                 try:
-                    from aiogram.types import InputRichMessage, InputRichBlockParagraph
-                    from .memory import rich_text_from_markup
+                    from aiogram.types import (
+                        InputRichMessage, InputRichBlockParagraph,
+                        RichTextBold, RichTextSubscript,
+                    )
                     flags = sum(game.flagged[r][c] for r in range(game.rows) for c in range(game.cols))
                     if game.won:
-                        summary = f"<b>🎉 {name} won!</b> Cleared {game.rows * game.cols - game.mines} cells with {flags} flags."
+                        sub = f"🎉 {name} won! Cleared {game.rows * game.cols - game.mines} cells with {flags} flags."
                     else:
-                        summary = f"<b>💥 {name} hit a mine!</b> {flags} flags placed."
-                    rich = InputRichMessage(blocks=[InputRichBlockParagraph(text=rich_text_from_markup(summary))])
+                        sub = f"💥 {name} hit a mine! {flags} flags placed."
+                    rich = InputRichMessage(blocks=[InputRichBlockParagraph(
+                        text=[RichTextBold(text=[RichTextSubscript(text=sub)])]
+                    )])
                     await callback.message.edit_text(text=None, rich_message=rich)
                 except Exception:
                     pass
@@ -592,6 +595,28 @@ def register_handlers(router: Router, bot: "Bot") -> None:
                 rich_message=game.get_rich_message(flag_mode=flag_mode, creator_uid=uid),
             )
             await callback.answer()
+
+            # Inactivity collapse — resets on each tap
+            async def collapse_inactive():
+                import asyncio
+                await asyncio.sleep(30)
+                try:
+                    current = await load_game(cid, uid)
+                    if current and not current.game_over:
+                        from aiogram.types import (
+                            InputRichMessage, InputRichBlockParagraph,
+                            RichTextBold, RichTextSubscript,
+                        )
+                        name = html.escape(callback.from_user.first_name or "Player")
+                        rich = InputRichMessage(blocks=[InputRichBlockParagraph(
+                            text=[RichTextBold(text=[RichTextSubscript(text=f"⏱️ {name}'s game — inactivity timed out")])]
+                        )])
+                        await callback.message.edit_text(text=None, rich_message=rich)
+                        await delete_game(cid, uid)
+                except Exception:
+                    pass
+
+            asyncio.create_task(collapse_inactive())
 
     @router.message(F.community_chat_added)
     async def handle_community_added(message: Message):
@@ -773,7 +798,7 @@ def register_handlers(router: Router, bot: "Bot") -> None:
                 "Only show source links when the user explicitly asks for sources, citations, links, or URLs. When requested, put them at the very end as a compact rich-text footnote section using <details><summary>Sources</summary>...links...</details>.\n"
                 "For tables: use HTML <table>, <tr>, <td>, <th> tags. Never use Markdown pipe tables.\n"
                 "Use code fences only for actual code. Do not wrap tables or non-code content in code fences.\n"
-                "When the user asks for ASCII art or to convert an image to ASCII, respond with ONLY the marker [CONVERT_IMAGE_TO_ASCII] on its own line. Do not generate the ASCII art yourself."
+                "For lists: ALWAYS use proper list formatting. Use lines starting with - or * for bullets, or 1. 2. 3. for numbered lists. Never write items inline like 'Item 1: text' or 'Step 1: text'."
             )
             if saved:
                 instructions += "\nUser memory directives:\n" + "\n".join(f"- {x}" for x in saved)
@@ -800,11 +825,6 @@ def register_handlers(router: Router, bot: "Bot") -> None:
             response_text = clean_ai_output(response.text, plain_lists=plain_lists)
 
             response_text = re.sub(r"\s*\[ATTACH_SEARCH_IMAGE:\s*https?://[^\]\s]+\]\s*", "\n", response_text, flags=re.I).strip()
-
-            if "[CONVERT_IMAGE_TO_ASCII]" in response_text and media_bytes and media_mime and media_mime.startswith("image/"):
-                from .media import image_to_ascii
-                ascii_art = image_to_ascii(media_bytes)
-                response_text = f"<pre><code>{html.escape(ascii_art)}</code></pre>"
 
             try:
                 await send_ai_response(bot, cid, mid, response_text, is_private)
