@@ -581,6 +581,8 @@ def register_handlers(router: Router, bot: "Bot") -> None:
                         text=[RichTextBold(text=[RichTextSubscript(text=sub)])]
                     )])
                     await callback.message.edit_text(text=None, rich_message=rich)
+                    await delete_game(cid, uid)
+                    await redis_client.delete(f"ms_flag:{cid}:{uid}")
                 except Exception:
                     pass
 
@@ -608,6 +610,7 @@ def register_handlers(router: Router, bot: "Bot") -> None:
                         )])
                         await callback.message.edit_text(text=None, rich_message=rich)
                         await delete_game(cid, uid)
+                        await redis_client.delete(f"ms_flag:{cid}:{uid}")
                 except Exception:
                     pass
 
