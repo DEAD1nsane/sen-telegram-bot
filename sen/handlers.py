@@ -506,8 +506,6 @@ def register_handlers(router: Router, bot: "Bot") -> None:
 
     # --- Minesweeper ---
     MINESWEEPER_APP_URL = "https://minesweeper-game-production.up.railway.app/minesweeper.html"
-    MINI_APP_URL = "https://minesweeper-game-production.up.railway.app/minesweeper.html"
-    MINI_APP_LINK = "https://t.me/SenAnythangBot/mines"
     GAME_SHORT_NAME = "minesweeper"
 
     @router.message(Command("play"))
@@ -549,15 +547,7 @@ def register_handlers(router: Router, bot: "Bot") -> None:
 
     @router.message(Command("mini"))
     async def handle_mini(message: Message):
-        from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
-
-        keyboard = InlineKeyboardMarkup(
-            inline_keyboard=[[InlineKeyboardButton(text="💣 Open Minesweeper", web_app=WebAppInfo(url=MINI_APP_URL))]]
-        )
-        await message.answer(
-            f"Tap below to open the Mini App panel.\nDirect link: {MINI_APP_LINK}",
-            reply_markup=keyboard,
-        )
+        await message.answer("Open the Minesweeper Mini App panel:\nhttps://t.me/SenAnythangBot/mines")
 
     @router.message(Command("mines"))
     async def handle_mines(message: Message):
@@ -627,18 +617,16 @@ def register_handlers(router: Router, bot: "Bot") -> None:
         blocks = list(rich.blocks)
 
         if not m and not mine_m:
-            from aiogram.types import RichTextBold, RichTextMarked, RichTextSubscript
+            from aiogram.types import RichTextMarked, RichTextSubscript
 
             blocks.append(
                 InputRichBlockParagraph(
                     text=[
                         RichTextSubscript(
                             text=[
-                                RichTextMarked(text="💡 Tip: customize with "),
-                                RichTextBold(text=[RichTextMarked(text="/mines 8x8 10 mines")]),
-                                RichTextMarked(text=" | "),
-                                RichTextBold(text=[RichTextMarked(text="/mines reset")]),
-                                RichTextMarked(text=" to clear stuck games"),
+                                RichTextMarked(
+                                    text="💡 Tip: customize with /mines 8x8 10 mines | /mines reset to clear stuck games"
+                                )
                             ]
                         )
                     ]
