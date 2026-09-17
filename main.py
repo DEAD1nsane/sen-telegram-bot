@@ -46,13 +46,11 @@ async def configure_commands() -> None:
     group = [
         BotCommand(command="memories", description="Open your private memory menu", is_ephemeral=True),
         BotCommand(command="del", description="Delete a bot message", is_ephemeral=True),
-        BotCommand(command="mini", description="Open the Minesweeper Mini App"),
         BotCommand(command="play", description="Play the Minesweeper web game"),
     ]
     private = [
         BotCommand(command="memories", description="Manage your instructed memories"),
         BotCommand(command="del", description="Delete a bot message"),
-        BotCommand(command="mini", description="Open the Minesweeper Mini App"),
         BotCommand(command="play", description="Play the Minesweeper web game"),
     ]
     try:
