@@ -477,7 +477,8 @@ def register_handlers(router: Router, bot: "Bot") -> None:
 
         from aiogram.types import InputRichMessage, InputRichBlockParagraph
         from .memory import rich_text_from_markup
-        blocks = [InputRichBlockParagraph(text=rich_text_from_markup(game.get_rich_message(creator_uid=uid).blocks[0].text))]
+        rich = game.get_rich_message(creator_uid=uid)
+        blocks = list(rich.blocks)
 
         if not m and not mine_m:
             blocks.append(InputRichBlockParagraph(text=rich_text_from_markup(
@@ -485,7 +486,7 @@ def register_handlers(router: Router, bot: "Bot") -> None:
             )))
         await bot.send_rich_message(
             chat_id=cid,
-            rich_message=InputRichMessage(blocks=blocks + game.get_rich_message(creator_uid=uid).blocks[1:]),
+            rich_message=InputRichMessage(blocks=blocks),
             reply_parameters=ReplyParameters(message_id=message.message_id) if message.chat.type != "private" else None,
         )
         try:
