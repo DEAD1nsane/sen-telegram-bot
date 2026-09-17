@@ -57,7 +57,9 @@ from .media import (
     get_gemini_video_file,
     get_replied_video_media,
     send_keyword_audio,
+    image_to_ascii,
 )
+from .minesweeper import MinesweeperGame, save_game, load_game, delete_game
 
 if TYPE_CHECKING:
     from aiogram import Bot, Dispatcher
@@ -456,6 +458,87 @@ def register_handlers(router: Router, bot: "Bot") -> None:
                 print(f"/del target deletion error: {type(e).__name__}")
         print("[/del] executed")
 
+    # --- Minesweeper ---
+    @router.message(Command("mines"))
+    async def handle_mines(message: Message):
+        uid, cid = message.from_user.id, message.chat.id
+        text = message.text.lower().strip()
+        rows, cols, mines = 8, 8, 10
+        import re as _re
+        m = _re.search(r"(\d+)\s*[x×]\s*(\d+)", text)
+        if m:
+            rows, cols = int(m.group(1)), int(m.group(2))
+        mine_m = _re.search(r"(\d+)\s*mines?", text)
+        if mine_m:
+            mines = int(mine_m.group(1))
+        mines = min(mines, (rows * cols) - 9)
+        game = MinesweeperGame(rows=rows, cols=cols, mines=mines)
+        await save_game(cid, uid, game)
+        await message.answer(
+            f"💣 Minesweeper {rows}×{cols} ({mines} mines)\nTap cells to reveal. Use Flag Mode to place flags.",
+            reply_markup=game.get_keyboard(),
+        )
+
+    @router.callback_query(F.data.startswith("ms:"))
+    async def handle_mines_callback(callback: CallbackQuery):
+        uid, cid = callback.from_user.id, callback.message.chat.id
+        parts = callback.data.split(":")
+
+        game = await load_game(cid, uid)
+        if not game:
+            await callback.answer("No active game. Send /mines to start.", show_alert=True)
+            return
+
+        if parts[1] == "new":
+            game = MinesweeperGame(rows=game.rows, cols=game.cols, mines=game.mines)
+            await save_game(cid, uid, game)
+            await callback.message.edit_text(
+                f"💣 Minesweeper {game.rows}×{game.cols} ({game.mines} mines)",
+                reply_markup=game.get_keyboard(),
+            )
+            await callback.answer("New game!")
+            return
+
+        if parts[1] == "flag_toggle":
+            flag_key = f"ms_flag:{cid}:{uid}"
+            current = await redis_client.get(flag_key)
+            new_mode = "0" if current else "1"
+            await redis_client.set(flag_key, new_mode, ex=GAME_TTL)
+            await callback.message.edit_reply_markup(reply_markup=game.get_keyboard(flag_mode=bool(int(new_mode))))
+            await callback.answer(f"Flag mode: {'ON' if int(new_mode) else 'OFF'}")
+            return
+
+        row, col = int(parts[1]), int(parts[2])
+        flag_key = f"ms_flag:{cid}:{uid}"
+        flag_mode_raw = await redis_client.get(flag_key)
+        flag_mode = bool(int(flag_mode_raw)) if flag_mode_raw else False
+
+        if flag_mode:
+            game.toggle_flag(row, col)
+            await save_game(cid, uid, game)
+            await callback.message.edit_reply_markup(reply_markup=game.get_keyboard(flag_mode=True))
+            await callback.answer()
+            return
+
+        result = game.reveal(row, col)
+        await save_game(cid, uid, game)
+
+        if result == "mine":
+            await callback.message.edit_text(
+                f"💥 Game Over!\n\n{game.status_text()}",
+                reply_markup=game.get_keyboard(),
+            )
+            await callback.answer("BOOM!", show_alert=True)
+        elif game.won:
+            await callback.message.edit_text(
+                f"🎉 You Win!\n\n{game.status_text()}",
+                reply_markup=game.get_keyboard(),
+            )
+            await callback.answer("You win!", show_alert=True)
+        else:
+            await callback.message.edit_reply_markup(reply_markup=game.get_keyboard())
+            await callback.answer()
+
     @router.message(F.community_chat_added)
     async def handle_community_added(message: Message):
         print(f"Community binding topology registered: {message.chat.id}")
@@ -636,8 +719,7 @@ def register_handlers(router: Router, bot: "Bot") -> None:
                 "Only show source links when the user explicitly asks for sources, citations, links, or URLs. When requested, put them at the very end as a compact rich-text footnote section using <details><summary>Sources</summary>...links...</details>.\n"
                 "For tables: use HTML <table>, <tr>, <td>, <th> tags. Never use Markdown pipe tables.\n"
                 "Use code fences only for actual code. Do not wrap tables or non-code content in code fences.\n"
-                "When the user asks for ASCII art or to convert an image to ASCII, respond with ONLY the marker [CONVERT_IMAGE_TO_ASCII] on its own line. Do not generate the ASCII art yourself.\n"
-                "For Minesweeper games: generate a minesweeper board where EVERY cell is hidden with ||spoiler|| tags. Place 8-12 mines randomly. Every single cell must be wrapped in ||spoiler|| — do NOT reveal any cells at the start. Use 💣 for mines, ⬜ for empty cells, and numbers 1-8 for adjacent mine counts, but ALL wrapped in spoiler tags. Format as an HTML table."
+                "When the user asks for ASCII art or to convert an image to ASCII, respond with ONLY the marker [CONVERT_IMAGE_TO_ASCII] on its own line. Do not generate the ASCII art yourself."
             )
             if saved:
                 instructions += "\nUser memory directives:\n" + "\n".join(f"- {x}" for x in saved)
