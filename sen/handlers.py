@@ -709,25 +709,11 @@ def register_handlers(router: Router, bot: "Bot") -> None:
         action = parts[2]
 
         if action == "howto":
-            from aiogram.types import InputRichMessage, InputRichBlockParagraph
-            from .memory import rich_text_from_markup
-
-            rich = InputRichMessage(
-                blocks=[
-                    InputRichBlockParagraph(
-                        text=rich_text_from_markup(
-                            "<b>💣 How to Play Minesweeper</b>\n\n"
-                            "<b>Start:</b> Select an initial square to reveal the opening layout.\n\n"
-                            "<b>Read Numbers:</b> Revealed numbers indicate how many mines are touching that square.\n\n"
-                            "<b>Mark Mines:</b> Place a flag on squares you think contain a mine.\n\n"
-                            "<b>Clear Safe Areas:</b> Uncover squares adjacent to numbers whose mines are already flagged.\n\n"
-                            "<b>Win:</b> Reveal every safe square without triggering a mine."
-                        )
-                    )
-                ]
+            await callback.answer(
+                "💣 Tap a cell to reveal. Numbers count adjacent mines. "
+                "Use 🚩 Flag mode to mark suspects. Clear every safe cell to win!",
+                show_alert=True,
             )
-            await callback.answer()
-            await bot.send_rich_message(chat_id=cid, rich_message=rich)
             return
 
         if action == "flag_toggle":
