@@ -1,4 +1,4 @@
-"""Minesweeper game engine with inline keyboard support."""
+"""Minesweeper game engine with RichMessage buttons."""
 
 from __future__ import annotations
 
@@ -7,7 +7,11 @@ import random
 from dataclasses import dataclass, field
 from typing import Optional
 
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.types import (
+    InputRichMessage,
+    InputRichBlockButtons,
+    RichMessageButton,
+)
 
 from .config import redis_client
 
@@ -17,14 +21,15 @@ MINE = "💣"
 FLAG = "🚩"
 HIDDEN = "▪️"
 EMPTY = "⬜"
+EXPLODED = "💥"
 NUMBERS = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣"]
 
 
 @dataclass
 class MinesweeperGame:
-    rows: int = 8
-    cols: int = 8
-    mines: int = 10
+    rows: int = 5
+    cols: int = 5
+    mines: int = 5
     board: list[list[int]] = field(default_factory=list)
     revealed: list[list[bool]] = field(default_factory=list)
     flagged: list[list[bool]] = field(default_factory=list)
@@ -39,7 +44,6 @@ class MinesweeperGame:
             self.flagged = [[False] * self.cols for _ in range(self.rows)]
 
     def place_mines(self, safe_row: int, safe_col: int) -> None:
-        """Place mines avoiding the first click position and its neighbors."""
         safe_zone = set()
         for dr in range(-1, 2):
             for dc in range(-1, 2):
@@ -73,7 +77,6 @@ class MinesweeperGame:
         self.first_move = False
 
     def reveal(self, row: int, col: int) -> str:
-        """Reveal a cell. Returns 'mine', 'safe', or 'empty'."""
         if self.game_over or self.revealed[row][col] or self.flagged[row][col]:
             return "safe"
 
@@ -94,7 +97,6 @@ class MinesweeperGame:
         return "empty"
 
     def _flood_reveal(self, row: int, col: int) -> None:
-        """Recursively reveal empty cells."""
         if (
             row < 0 or row >= self.rows
             or col < 0 or col >= self.cols
@@ -109,45 +111,62 @@ class MinesweeperGame:
                     self._flood_reveal(row + dr, col + dc)
 
     def toggle_flag(self, row: int, col: int) -> None:
-        """Toggle flag on a hidden cell."""
         if self.game_over or self.revealed[row][col]:
             return
         self.flagged[row][col] = not self.flagged[row][col]
 
     def _check_win(self) -> bool:
-        """Check if all non-mine cells are revealed."""
         for r in range(self.rows):
             for c in range(self.cols):
                 if self.board[r][c] != -1 and not self.revealed[r][c]:
                     return False
         return True
 
-    def get_keyboard(self, flag_mode: bool = False) -> InlineKeyboardMarkup:
-        """Build inline keyboard for the board."""
-        buttons = []
-        for r in range(self.rows):
-            row = []
-            for c in range(self.cols):
-                if self.revealed[r][c]:
-                    if self.board[r][c] == -1:
-                        text = "💥"
-                    elif self.board[r][c] == 0:
-                        text = EMPTY
-                    else:
-                        text = NUMBERS[self.board[r][c] - 1]
-                    row.append(InlineKeyboardButton(text=text, callback_data=f"ms:{r}:{c}"))
-                elif self.flagged[r][c]:
-                    row.append(InlineKeyboardButton(text=FLAG, callback_data=f"ms:{r}:{c}"))
-                else:
-                    row.append(InlineKeyboardButton(text=HIDDEN, callback_data=f"ms:{r}:{c}"))
-            buttons.append(row)
+    def _cell_text(self, r: int, c: int) -> str:
+        if self.revealed[r][c]:
+            if self.board[r][c] == -1:
+                return EXPLODED
+            elif self.board[r][c] == 0:
+                return EMPTY
+            else:
+                return NUMBERS[self.board[r][c] - 1]
+        elif self.flagged[r][c]:
+            return FLAG
+        else:
+            return HIDDEN
 
+    def get_rich_message(self, flag_mode: bool = False, status: str = "") -> InputRichMessage:
+        blocks = []
+
+        # Header
+        flags = sum(self.flagged[r][c] for r in range(self.rows) for c in range(self.cols))
+        if self.game_over:
+            if self.won:
+                header = f"<b>🎉 YOU WIN!</b>  <code>{self.rows}×{self.cols}</code>"
+            else:
+                header = f"<b>💥 GAME OVER!</b>  <code>{self.rows}×{self.cols}</code>"
+        else:
+            header = f"<b>💣 MINESWEEPER</b>  <code>{self.rows}×{self.cols}</code>  <b>{self.mines} mines</b>  🚩 {flags}"
+
+        from aiogram.types import InputRichBlockParagraph
+        blocks.append(InputRichBlockParagraph(text=header))
+
+        # Board buttons — one row per board row
+        for r in range(self.rows):
+            row_buttons = []
+            for c in range(self.cols):
+                text = self._cell_text(r, c)
+                row_buttons.append(RichMessageButton(text=text, callback_data=f"ms:{r}:{c}"))
+            blocks.append(InputRichBlockButtons(buttons=row_buttons))
+
+        # Control buttons
         flag_text = "🚩 Flag Mode: ON" if flag_mode else "💣 Tap Mode"
-        buttons.append([
-            InlineKeyboardButton(text="🔄 New Game", callback_data="ms:new"),
-            InlineKeyboardButton(text=flag_text, callback_data="ms:flag_toggle"),
-        ])
-        return InlineKeyboardMarkup(inline_keyboard=buttons)
+        blocks.append(InputRichBlockButtons(buttons=[
+            RichMessageButton(text="🔄 New Game", callback_data="ms:new"),
+            RichMessageButton(text=flag_text, callback_data="ms:flag_toggle"),
+        ]))
+
+        return InputRichMessage(blocks=blocks)
 
     def to_dict(self) -> dict:
         return {
@@ -164,7 +183,7 @@ class MinesweeperGame:
 
     @classmethod
     def from_dict(cls, data: dict) -> MinesweeperGame:
-        game = cls(
+        return cls(
             rows=data["rows"],
             cols=data["cols"],
             mines=data["mines"],
@@ -175,15 +194,6 @@ class MinesweeperGame:
             won=data["won"],
             first_move=data["first_move"],
         )
-        return game
-
-    def status_text(self) -> str:
-        flags = sum(self.flagged[r][c] for r in range(self.rows) for c in range(self.cols))
-        if self.game_over:
-            if self.won:
-                return f"🎉 You win! All {self.rows * self.cols - self.mines} cells cleared!"
-            return "💥 Game Over! You hit a mine!"
-        return f"💣 Mines: {self.mines} | 🚩 Flags: {flags}"
 
 
 async def save_game(chat_id: int, user_id: int, game: MinesweeperGame) -> None:

@@ -474,18 +474,10 @@ def register_handlers(router: Router, bot: "Bot") -> None:
         mines = min(mines, (rows * cols) - 9)
         game = MinesweeperGame(rows=rows, cols=cols, mines=mines)
         await save_game(cid, uid, game)
-        from aiogram.types import InputRichMessage
-        rich = InputRichMessage(html=(
-            f"<b>💣 MINESWEEPER</b>  <code>{rows}×{cols}</code>  <b>{mines} mines</b>\n\n"
-            f"Tap cells to reveal. Switch to <b>Flag Mode</b> to mark mines.\n"
-            f"<code>/mines</code> — default 5×5\n"
-            f"<code>/mines 8x8 10 mines</code> — custom"
-        ))
         await bot.send_rich_message(
             chat_id=cid,
-            rich_message=rich,
+            rich_message=game.get_rich_message(),
             reply_parameters=ReplyParameters(message_id=message.message_id) if message.chat.type != "private" else None,
-            reply_markup=game.get_keyboard(),
         )
         try:
             await message.delete()
@@ -506,10 +498,8 @@ def register_handlers(router: Router, bot: "Bot") -> None:
             game = MinesweeperGame(rows=game.rows, cols=game.cols, mines=game.mines)
             await save_game(cid, uid, game)
             await callback.message.edit_text(
-                f"<b>💣 MINESWEEPER</b>  <code>{game.rows}×{game.cols}</code>  <b>{game.mines} mines</b>\n\n"
-                f"Tap cells to reveal. Switch to <b>Flag Mode</b> to mark mines.",
-                reply_markup=game.get_keyboard(),
-                parse_mode="HTML",
+                text=None,
+                rich_message=game.get_rich_message(),
             )
             await callback.answer("New game!")
             return
@@ -519,7 +509,10 @@ def register_handlers(router: Router, bot: "Bot") -> None:
             current = await redis_client.get(flag_key)
             new_mode = "0" if current else "1"
             await redis_client.set(flag_key, new_mode, ex=GAME_TTL)
-            await callback.message.edit_reply_markup(reply_markup=game.get_keyboard(flag_mode=bool(int(new_mode))))
+            await callback.message.edit_text(
+                text=None,
+                rich_message=game.get_rich_message(flag_mode=bool(int(new_mode))),
+            )
             await callback.answer(f"Flag mode: {'ON' if int(new_mode) else 'OFF'}")
             return
 
@@ -531,7 +524,10 @@ def register_handlers(router: Router, bot: "Bot") -> None:
         if flag_mode:
             game.toggle_flag(row, col)
             await save_game(cid, uid, game)
-            await callback.message.edit_reply_markup(reply_markup=game.get_keyboard(flag_mode=True))
+            await callback.message.edit_text(
+                text=None,
+                rich_message=game.get_rich_message(flag_mode=True),
+            )
             await callback.answer()
             return
 
@@ -539,23 +535,22 @@ def register_handlers(router: Router, bot: "Bot") -> None:
         await save_game(cid, uid, game)
 
         if result == "mine":
-            from aiogram.types import InputRichMessage
-            rich = InputRichMessage(html=f"<b>💥 GAME OVER!</b>\n\n{game.status_text()}")
             await callback.message.edit_text(
-                f"<b>💥 GAME OVER!</b>\n\n{game.status_text()}",
-                reply_markup=game.get_keyboard(),
-                parse_mode="HTML",
+                text=None,
+                rich_message=game.get_rich_message(),
             )
             await callback.answer("BOOM!", show_alert=True)
         elif game.won:
             await callback.message.edit_text(
-                f"<b>🎉 YOU WIN!</b>\n\n{game.status_text()}",
-                reply_markup=game.get_keyboard(),
-                parse_mode="HTML",
+                text=None,
+                rich_message=game.get_rich_message(),
             )
             await callback.answer("You win!", show_alert=True)
         else:
-            await callback.message.edit_reply_markup(reply_markup=game.get_keyboard())
+            await callback.message.edit_text(
+                text=None,
+                rich_message=game.get_rich_message(flag_mode=flag_mode),
+            )
             await callback.answer()
 
     @router.message(F.community_chat_added)
