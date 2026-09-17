@@ -634,7 +634,8 @@ def register_handlers(router: Router, bot: "Bot") -> None:
                 "Only search-result images may be sent as outgoing media. Do not generate slideshows, collages, presentations, images, videos, audio, or other media. If asked to create media, respond in text instead.\n"
                 "Only show source links when the user explicitly asks for sources, citations, links, or URLs. When requested, put them at the very end as a compact rich-text footnote section using <details><summary>Sources</summary>...links...</details>.\n"
                 "For tables: use HTML <table>, <tr>, <td>, <th> tags with a border attribute. Never use Markdown pipe tables. Never wrap tables in code fences — output raw HTML tags directly.\n"
-                "Only use code fences for actual executable code or ASCII art. Never wrap tables, charts, or structured text in code fences."
+                "Only use code fences for actual executable code or ASCII art. Never wrap tables, charts, or structured text in code fences.\n"
+                "When the user asks for ASCII art or asks you to convert an image to ASCII, respond with the text [CONVERT_IMAGE_TO_ASCII] on its own line. The system will handle the conversion."
             )
             if saved:
                 instructions += "\nUser memory directives:\n" + "\n".join(f"- {x}" for x in saved)
@@ -661,6 +662,11 @@ def register_handlers(router: Router, bot: "Bot") -> None:
             response_text = clean_ai_output(response.text, plain_lists=plain_lists)
 
             response_text = re.sub(r"\s*\[ATTACH_SEARCH_IMAGE:\s*https?://[^\]\s]+\]\s*", "\n", response_text, flags=re.I).strip()
+
+            if "[CONVERT_IMAGE_TO_ASCII]" in response_text and media_bytes and media_mime and media_mime.startswith("image/"):
+                from .media import image_to_ascii
+                ascii_art = image_to_ascii(media_bytes)
+                response_text = f"<pre><code>{html.escape(ascii_art)}</code></pre>"
 
             try:
                 await send_ai_response(bot, cid, mid, response_text, is_private)
