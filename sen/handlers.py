@@ -635,7 +635,7 @@ def register_handlers(router: Router, bot: "Bot") -> None:
                 "Only show source links when the user explicitly asks for sources, citations, links, or URLs. When requested, put them at the very end as a compact rich-text footnote section using <details><summary>Sources</summary>...links...</details>.\n"
                 "For tables: use HTML <table>, <tr>, <td>, <th> tags with a border attribute. Never use Markdown pipe tables. Never wrap tables in code fences — output raw HTML tags directly.\n"
                 "Only use code fences for actual executable code or ASCII art. Never wrap tables, charts, or structured text in code fences.\n"
-                "When the user asks for ASCII art or asks you to convert an image to ASCII, respond with the text [CONVERT_IMAGE_TO_ASCII] on its own line. The system will handle the conversion."
+                "When the user explicitly asks to convert an attached image to ASCII art, respond with the text [CONVERT_IMAGE_TO_ASCII] on its own line. For all other ASCII art requests, output the art directly in code fences."
             )
             if saved:
                 instructions += "\nUser memory directives:\n" + "\n".join(f"- {x}" for x in saved)
