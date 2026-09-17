@@ -506,6 +506,8 @@ def register_handlers(router: Router, bot: "Bot") -> None:
 
     # --- Minesweeper ---
     MINESWEEPER_APP_URL = "https://minesweeper-game-production.up.railway.app/minesweeper.html"
+    MINI_APP_URL = "https://minesweeper-game-production.up.railway.app/minesweeper.html"
+    MINI_APP_LINK = "https://t.me/SenAnythangBot/mines"
     GAME_SHORT_NAME = "minesweeper"
 
     @router.message(Command("play"))
@@ -544,6 +546,18 @@ def register_handlers(router: Router, bot: "Bot") -> None:
         if owner:
             url += f"&owner={owner}"
         await callback.answer(url=url)
+
+    @router.message(Command("mini"))
+    async def handle_mini(message: Message):
+        from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
+
+        keyboard = InlineKeyboardMarkup(
+            inline_keyboard=[[InlineKeyboardButton(text="💣 Open Minesweeper", web_app=WebAppInfo(url=MINI_APP_URL))]]
+        )
+        await message.answer(
+            f"Tap below to open the Mini App panel.\nDirect link: {MINI_APP_LINK}",
+            reply_markup=keyboard,
+        )
 
     @router.message(Command("mines"))
     async def handle_mines(message: Message):
