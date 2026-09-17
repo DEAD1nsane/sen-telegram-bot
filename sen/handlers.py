@@ -760,8 +760,8 @@ def register_handlers(router: Router, bot: "Bot") -> None:
                     await delete_game(cid, uid)
                     await redis_client.delete(f"ms_flag:{cid}:{uid}")
                     await redis_client.delete(collapse_key)
-                except Exception:
-                    pass
+                except Exception as e:
+                    print(f"[COLLAPSE game_over] failed: {type(e).__name__}: {e}")
 
             asyncio.create_task(collapse_game())
         else:
@@ -812,8 +812,8 @@ def register_handlers(router: Router, bot: "Bot") -> None:
                         await delete_game(cid, uid)
                         await redis_client.delete(f"ms_flag:{cid}:{uid}")
                         await redis_client.delete(collapse_key)
-                except Exception:
-                    pass
+                except Exception as e:
+                    print(f"[COLLAPSE inactive] failed: {type(e).__name__}: {e}")
 
             asyncio.create_task(collapse_inactive())
 
