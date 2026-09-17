@@ -472,11 +472,30 @@ def register_handlers(router: Router, bot: "Bot") -> None:
         if mine_m:
             mines = int(mine_m.group(1))
         mines = min(mines, (rows * cols) - 9)
+
+        existing = await load_game(cid, uid)
+        if existing and not existing.game_over:
+            from aiogram.types import InputRichMessage, InputRichBlockParagraph
+            from .memory import rich_text_from_markup
+            rich = InputRichMessage(blocks=[
+                InputRichBlockParagraph(text=rich_text_from_markup(
+                    f"<b>⚠️ You have an active game.</b>\n"
+                    f"Send <code>/mines new</code> to start a new one, or finish the current game."
+                ))
+            ])
+            await bot.send_rich_message(
+                chat_id=cid,
+                rich_message=rich,
+                reply_parameters=ReplyParameters(message_id=message.message_id) if message.chat.type != "private" else None,
+            )
+            return
+
         game = MinesweeperGame(rows=rows, cols=cols, mines=mines)
         await save_game(cid, uid, game)
+        name = html.escape(get_user_display_name(message.from_user))
         await bot.send_rich_message(
             chat_id=cid,
-            rich_message=game.get_rich_message(),
+            rich_message=game.get_rich_message(creator_uid=uid),
             reply_parameters=ReplyParameters(message_id=message.message_id) if message.chat.type != "private" else None,
         )
         try:
@@ -486,37 +505,44 @@ def register_handlers(router: Router, bot: "Bot") -> None:
 
     @router.callback_query(F.data.startswith("ms:"))
     async def handle_mines_callback(callback: CallbackQuery):
-        uid, cid = callback.from_user.id, callback.message.chat.id
         parts = callback.data.split(":")
+        creator_uid = int(parts[1])
+        uid, cid = callback.from_user.id, callback.message.chat.id
+
+        if uid != creator_uid:
+            await callback.answer("This isn't your game. Send /mines to start your own.", show_alert=True)
+            return
 
         game = await load_game(cid, uid)
         if not game:
             await callback.answer("No active game. Send /mines to start.", show_alert=True)
             return
 
-        if parts[1] == "new":
+        action = parts[2]
+
+        if action == "new":
             game = MinesweeperGame(rows=game.rows, cols=game.cols, mines=game.mines)
             await save_game(cid, uid, game)
             await callback.message.edit_text(
                 text=None,
-                rich_message=game.get_rich_message(),
+                rich_message=game.get_rich_message(creator_uid=uid),
             )
             await callback.answer("New game!")
             return
 
-        if parts[1] == "flag_toggle":
+        if action == "flag_toggle":
             flag_key = f"ms_flag:{cid}:{uid}"
             current = await redis_client.get(flag_key)
             new_mode = "0" if current else "1"
             await redis_client.set(flag_key, new_mode, ex=GAME_TTL)
             await callback.message.edit_text(
                 text=None,
-                rich_message=game.get_rich_message(flag_mode=bool(int(new_mode))),
+                rich_message=game.get_rich_message(flag_mode=bool(int(new_mode)), creator_uid=uid),
             )
             await callback.answer(f"Flag mode: {'ON' if int(new_mode) else 'OFF'}")
             return
 
-        row, col = int(parts[1]), int(parts[2])
+        row, col = int(action), int(parts[3])
         flag_key = f"ms_flag:{cid}:{uid}"
         flag_mode_raw = await redis_client.get(flag_key)
         flag_mode = bool(int(flag_mode_raw)) if flag_mode_raw else False
@@ -526,7 +552,7 @@ def register_handlers(router: Router, bot: "Bot") -> None:
             await save_game(cid, uid, game)
             await callback.message.edit_text(
                 text=None,
-                rich_message=game.get_rich_message(flag_mode=True),
+                rich_message=game.get_rich_message(flag_mode=True, creator_uid=uid),
             )
             await callback.answer()
             return
@@ -534,22 +560,36 @@ def register_handlers(router: Router, bot: "Bot") -> None:
         result = game.reveal(row, col)
         await save_game(cid, uid, game)
 
-        if result == "mine":
+        if result == "mine" or game.won:
+            name = html.escape(callback.from_user.first_name or "Player")
+            status = "🎉 YOU WIN!" if game.won else "💥 GAME OVER!"
             await callback.message.edit_text(
                 text=None,
-                rich_message=game.get_rich_message(),
+                rich_message=game.get_rich_message(creator_uid=uid),
             )
-            await callback.answer("BOOM!", show_alert=True)
-        elif game.won:
-            await callback.message.edit_text(
-                text=None,
-                rich_message=game.get_rich_message(),
-            )
-            await callback.answer("You win!", show_alert=True)
+            await callback.answer(status, show_alert=True)
+
+            async def collapse_game():
+                import asyncio
+                await asyncio.sleep(30)
+                try:
+                    from aiogram.types import InputRichMessage, InputRichBlockParagraph
+                    from .memory import rich_text_from_markup
+                    flags = sum(game.flagged[r][c] for r in range(game.rows) for c in range(game.cols))
+                    if game.won:
+                        summary = f"<b>🎉 {name} won!</b> Cleared {game.rows * game.cols - game.mines} cells with {flags} flags."
+                    else:
+                        summary = f"<b>💥 {name} hit a mine!</b> {flags} flags placed."
+                    rich = InputRichMessage(blocks=[InputRichBlockParagraph(text=rich_text_from_markup(summary))])
+                    await callback.message.edit_text(text=None, rich_message=rich)
+                except Exception:
+                    pass
+
+            asyncio.create_task(collapse_game())
         else:
             await callback.message.edit_text(
                 text=None,
-                rich_message=game.get_rich_message(flag_mode=flag_mode),
+                rich_message=game.get_rich_message(flag_mode=flag_mode, creator_uid=uid),
             )
             await callback.answer()
 

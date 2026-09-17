@@ -135,7 +135,7 @@ class MinesweeperGame:
         else:
             return HIDDEN
 
-    def get_rich_message(self, flag_mode: bool = False, status: str = "") -> InputRichMessage:
+    def get_rich_message(self, flag_mode: bool = False, creator_uid: int = 0) -> InputRichMessage:
         from .memory import rich_text_from_markup
         blocks = []
 
@@ -157,14 +157,14 @@ class MinesweeperGame:
             row_buttons = []
             for c in range(self.cols):
                 text = self._cell_text(r, c)
-                row_buttons.append(RichMessageButton(text=text, callback_data=f"ms:{r}:{c}"))
+                row_buttons.append(RichMessageButton(text=text, callback_data=f"ms:{creator_uid}:{r}:{c}"))
             blocks.append(InputRichBlockButtons(buttons=row_buttons))
 
         # Control buttons
-        flag_text = "🚩 Flag Mode: ON" if flag_mode else "💣 Tap Mode"
+        flag_text = "🚩 Flag Mode: ON — tap to mark mines" if flag_mode else "💣 Tap Mode — tap to reveal cells"
         blocks.append(InputRichBlockButtons(buttons=[
-            RichMessageButton(text="🔄 New Game", callback_data="ms:new"),
-            RichMessageButton(text=flag_text, callback_data="ms:flag_toggle"),
+            RichMessageButton(text="🔄 New Game", callback_data=f"ms:{creator_uid}:new"),
+            RichMessageButton(text=flag_text, callback_data=f"ms:{creator_uid}:flag_toggle"),
         ]))
 
         return InputRichMessage(blocks=blocks)
