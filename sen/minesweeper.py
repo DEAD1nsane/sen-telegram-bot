@@ -151,6 +151,7 @@ class MinesweeperGame:
 
         from aiogram.types import InputRichBlockParagraph
         blocks.append(InputRichBlockParagraph(text=rich_text_from_markup(header)))
+        blocks.append(InputRichBlockParagraph(text=rich_text_from_markup("<i>Tap cells to play. Use the button below to toggle flag mode.</i>")))
 
         # Board buttons — one row per board row
         for r in range(self.rows):
