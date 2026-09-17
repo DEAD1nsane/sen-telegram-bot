@@ -369,4 +369,21 @@ async def process_memory_text(message, action: str, temp_forget: bool = False) -
         await message.delete()
     except Exception:
         pass
+    try:
+        from aiogram.types import InputRichMessage, InputRichBlockParagraph, RichTextBold, RichTextSubscript
+
+        if action == "add":
+            sub = "✅ Memory saved!"
+        elif action == "edit_number":
+            sub = "✅ Memory updated!"
+        elif action == "forget":
+            sub = "✅ Memory removed!"
+        else:
+            sub = "✅ Done!"
+        rich = InputRichMessage(
+            blocks=[InputRichBlockParagraph(text=[RichTextBold(text=[RichTextSubscript(text=sub)])])]
+        )
+        await message.answer(rich_message=rich)
+    except Exception:
+        pass
     return True
