@@ -481,9 +481,10 @@ def register_handlers(router: Router, bot: "Bot") -> None:
         blocks = list(rich.blocks)
 
         if not m and not mine_m:
-            blocks.append(InputRichBlockParagraph(text=rich_text_from_markup(
-                "💡 <i>Tip: customize with</i> <code>/mines 8x8 10 mines</code>"
-            )))
+            from aiogram.types import RichTextBold, RichTextSubscript
+            blocks.append(InputRichBlockParagraph(
+                text=[RichTextBold(text=[RichTextSubscript(text="💡 Tip: customize with /mines 8x8 10 mines")])]
+            ))
         await bot.send_rich_message(
             chat_id=cid,
             rich_message=InputRichMessage(blocks=blocks),
