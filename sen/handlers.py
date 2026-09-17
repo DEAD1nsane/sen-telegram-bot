@@ -474,10 +474,18 @@ def register_handlers(router: Router, bot: "Bot") -> None:
 
         game = MinesweeperGame(rows=rows, cols=cols, mines=mines)
         await save_game(cid, uid, game)
-        name = html.escape(get_user_display_name(message.from_user))
+
+        from aiogram.types import InputRichMessage, InputRichBlockParagraph
+        from .memory import rich_text_from_markup
+        blocks = [InputRichBlockParagraph(text=rich_text_from_markup(game.get_rich_message(creator_uid=uid).blocks[0].text))]
+
+        if not m and not mine_m:
+            blocks.append(InputRichBlockParagraph(text=rich_text_from_markup(
+                "💡 <i>Tip: customize with</i> <code>/mines 8x8 10 mines</code>"
+            )))
         await bot.send_rich_message(
             chat_id=cid,
-            rich_message=game.get_rich_message(creator_uid=uid),
+            rich_message=InputRichMessage(blocks=blocks + game.get_rich_message(creator_uid=uid).blocks[1:]),
             reply_parameters=ReplyParameters(message_id=message.message_id) if message.chat.type != "private" else None,
         )
         try:
