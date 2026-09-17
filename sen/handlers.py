@@ -599,25 +599,15 @@ def register_handlers(router: Router, bot: "Bot") -> None:
         action = parts[2]
 
         if action == "howto":
-            from aiogram.types import InputRichMessage, InputRichBlockParagraph
-            from .memory import rich_text_from_markup
-
-            rich = InputRichMessage(
-                blocks=[
-                    InputRichBlockParagraph(
-                        text=rich_text_from_markup(
-                            "<b>💣 How to Play Minesweeper</b>\n\n"
-                            "<b>Start:</b> Select an initial square to reveal the opening layout.\n\n"
-                            "<b>Read Numbers:</b> Revealed numbers indicate how many mines are touching that square.\n\n"
-                            "<b>Mark Mines:</b> Place a flag on squares you think contain a mine.\n\n"
-                            "<b>Clear Safe Areas:</b> Uncover squares adjacent to numbers whose mines are already flagged.\n\n"
-                            "<b>Win:</b> Reveal every safe square without triggering a mine."
-                        )
-                    )
-                ]
+            await callback.answer(
+                "💣 How to Play Minesweeper\n\n"
+                "Start: Select an initial square to reveal the opening layout.\n\n"
+                "Read Numbers: Revealed numbers indicate how many mines are touching that specific square in the surrounding grid.\n\n"
+                "Mark Mines: Place a flag on any unopened square you deduce contains a mine to prevent opening it by mistake.\n\n"
+                "Clear Safe Areas: Uncover squares adjacent to numbers whose surrounding mines have already been identified and flagged.\n\n"
+                "Win: Reveal every safe square on the entire grid without triggering a mine.",
+                show_alert=True,
             )
-            await callback.answer()
-            await bot.send_rich_message(chat_id=cid, rich_message=rich)
             return
 
         if action == "flag_toggle":
@@ -629,7 +619,7 @@ def register_handlers(router: Router, bot: "Bot") -> None:
                 text=None,
                 rich_message=game.get_rich_message(flag_mode=bool(int(new_mode)), creator_uid=uid),
             )
-            await callback.answer(f"Flag mode: {'ON' if int(new_mode) else 'OFF'}")
+            await callback.answer()
             return
 
         row, col = int(action), int(parts[3])
@@ -659,11 +649,22 @@ def register_handlers(router: Router, bot: "Bot") -> None:
             )
             await callback.answer(status, show_alert=True)
 
+            # Schedule game-over collapse
+            import time
+
+            ts = str(int(time.time()))
+            collapse_key = f"ms_collapse:{cid}:{uid}"
+            await redis_client.set(collapse_key, f"game_over:{ts}", ex=10)
+
             async def collapse_game():
                 import asyncio
 
                 await asyncio.sleep(3)
                 try:
+                    stored = await redis_client.get(collapse_key)
+                    stored_val = stored.decode() if isinstance(stored, bytes) else str(stored) if stored else ""
+                    if stored_val != f"game_over:{ts}":
+                        return
                     from aiogram.types import (
                         InputRichMessage,
                         InputRichBlockParagraph,
@@ -682,6 +683,7 @@ def register_handlers(router: Router, bot: "Bot") -> None:
                     await callback.message.edit_text(text=None, rich_message=rich)
                     await delete_game(cid, uid)
                     await redis_client.delete(f"ms_flag:{cid}:{uid}")
+                    await redis_client.delete(collapse_key)
                 except Exception:
                     pass
 
@@ -693,11 +695,22 @@ def register_handlers(router: Router, bot: "Bot") -> None:
             )
             await callback.answer()
 
+            # Schedule inactivity collapse — each tap resets via timestamp
+            import time
+
+            ts = str(int(time.time()))
+            collapse_key = f"ms_collapse:{cid}:{uid}"
+            await redis_client.set(collapse_key, f"inactive:{ts}", ex=35)
+
             async def collapse_inactive():
                 import asyncio
 
                 await asyncio.sleep(30)
                 try:
+                    stored = await redis_client.get(collapse_key)
+                    stored_val = stored.decode() if isinstance(stored, bytes) else str(stored) if stored else ""
+                    if stored_val != f"inactive:{ts}":
+                        return
                     current = await load_game(cid, uid)
                     if current and not current.game_over:
                         from aiogram.types import (
@@ -722,6 +735,7 @@ def register_handlers(router: Router, bot: "Bot") -> None:
                         await callback.message.edit_text(text=None, rich_message=rich)
                         await delete_game(cid, uid)
                         await redis_client.delete(f"ms_flag:{cid}:{uid}")
+                        await redis_client.delete(collapse_key)
                 except Exception:
                     pass
 
