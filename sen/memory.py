@@ -383,7 +383,11 @@ async def process_memory_text(message, action: str, temp_forget: bool = False) -
         rich = InputRichMessage(
             blocks=[InputRichBlockParagraph(text=[RichTextBold(text=[RichTextSubscript(text=sub)])])]
         )
-        await message.answer(rich_message=rich)
+        import os
+        import aiogram
+
+        _bot = aiogram.Bot(token=os.environ.get("BOT_TOKEN", ""))
+        await _bot.send_rich_message(chat_id=cid, rich_message=rich)
     except Exception:
         pass
     return True
