@@ -619,19 +619,10 @@ def register_handlers(router: Router, bot: "Bot") -> None:
         if not m and not mine_m:
             from aiogram.types import RichTextBold, RichTextSubscript
 
-            blocks.append(
-                InputRichBlockParagraph(
-                    text=[
-                        RichTextBold(
-                            text=[
-                                RichTextSubscript(
-                                    text="💡 Tip: customize with /mines 8x8 10 mines | /mines reset to clear stuck games"
-                                )
-                            ]
-                        )
-                    ]
-                )
-            )
+            # Zero-width spaces after slashes keep Telegram from splitting
+            # the run into bot_command entities (which drop subscript styling).
+            tip = "💡 Tip: customize with /\u200bmines 8x8 10 mines | /\u200bmines reset to clear stuck games"
+            blocks.append(InputRichBlockParagraph(text=[RichTextBold(text=[RichTextSubscript(text=tip)])]))
         await bot.send_rich_message(
             chat_id=cid,
             rich_message=InputRichMessage(blocks=blocks),
