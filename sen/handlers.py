@@ -714,22 +714,39 @@ def register_handlers(router: Router, bot: "Bot") -> None:
         action = parts[2]
 
         if action == "howto":
-            await callback.answer(
-                "💣 Tap cells to reveal. Numbers = adjacent mines. Flag suspected mines. Clear all safe squares to win!\n\n"
-                "Customize: /mines WxH M mines (e.g. /mines 8x8 10 mines)\n"
-                "Reset stuck game: /mines reset",
-                show_alert=True,
+            from aiogram.types import InputRichMessage, InputRichBlockParagraph
+            from .memory import rich_text_from_markup
+
+            rich = InputRichMessage(
+                blocks=[
+                    InputRichBlockParagraph(
+                        text=rich_text_from_markup(
+                            "<b>💣 How to Play Minesweeper</b>\n\n"
+                            "<b>Start:</b> Select an initial square to reveal the opening layout.\n\n"
+                            "<b>Read Numbers:</b> Revealed numbers indicate how many mines are touching that square.\n\n"
+                            "<b>Mark Mines:</b> Place a flag on squares you think contain a mine.\n\n"
+                            "<b>Clear Safe Areas:</b> Uncover squares adjacent to numbers whose mines are already flagged.\n\n"
+                            "<b>Win:</b> Reveal every safe square without triggering a mine."
+                        )
+                    )
+                ]
             )
+            await callback.answer()
+            await bot.send_rich_message(chat_id=cid, rich_message=rich)
             return
 
         if action == "flag_toggle":
             flag_key = f"ms_flag:{cid}:{uid}"
             current = await redis_client.get(flag_key)
-            new_mode = "0" if current else "1"
-            await redis_client.set(flag_key, new_mode, ex=GAME_TTL)
+            cur = current.decode() if isinstance(current, bytes) else str(current) if current else ""
+            new_mode = cur != "1"
+            if new_mode:
+                await redis_client.set(flag_key, "1", ex=GAME_TTL)
+            else:
+                await redis_client.delete(flag_key)
             await callback.message.edit_text(
                 text=None,
-                rich_message=game.get_rich_message(flag_mode=bool(int(new_mode)), creator_uid=uid),
+                rich_message=game.get_rich_message(flag_mode=new_mode, creator_uid=uid),
             )
             await callback.answer()
             return
