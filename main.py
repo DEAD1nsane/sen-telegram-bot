@@ -80,22 +80,26 @@ async def main() -> None:
 
     original_feed_update = getattr(dp, "feed_update", None)
     if original_feed_update is not None:
+
         async def feed_update_with_capture(bot, update, **kwargs):
             token = _RAW_UPDATE.set(update)
             try:
                 return await original_feed_update(bot, update, **kwargs)
             finally:
                 _RAW_UPDATE.reset(token)
+
         dp.feed_update = feed_update_with_capture
 
     original_feed_raw_update = getattr(dp, "feed_raw_update", None)
     if original_feed_raw_update is not None:
+
         async def feed_raw_update_with_capture(bot, update, **kwargs):
             token = _RAW_UPDATE.set(update)
             try:
                 return await original_feed_raw_update(bot, update, **kwargs)
             finally:
                 _RAW_UPDATE.reset(token)
+
         dp.feed_raw_update = feed_raw_update_with_capture
 
     # Install no-media Gemini guard
@@ -110,28 +114,41 @@ async def main() -> None:
         async def generate_content_with_media_guard(*args, **kwargs):
             contents = kwargs.get("contents")
             if isinstance(contents, str):
-                contents = TEMPORARY_MEDIA_LABEL_RE.sub('', contents)
+                contents = TEMPORARY_MEDIA_LABEL_RE.sub("", contents)
                 contents = (
                     "MEDIA AVAILABILITY RULE: No actual media attachment was recovered for this request. "
                     "Do not claim to have seen, heard, watched, or inspected media. "
                     "Do not infer that the user supplied media from Telegram reply-preview labels or wording. "
-                    "Answer only from the text and other context actually supplied.\n\n"
-                    + contents
+                    "Answer only from the text and other context actually supplied.\n\n" + contents
                 )
                 kwargs["contents"] = contents
             return await original_generate_content(*args, **kwargs)
+
         gemini_models.generate_content = generate_content_with_media_guard
         print("Installed no-media Gemini guard")
 
     # Register handlers
     from sen.handlers import register_handlers
+
     register_handlers(dp, bot)
 
     from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
 
     webhook_url = os.environ.get("WEBHOOK_URL", "https://sen-telegram-bot-production.up.railway.app/webhook")
     try:
-        await bot.set_webhook(url=webhook_url, drop_pending_updates=True)
+        await bot.set_webhook(
+            url=webhook_url,
+            drop_pending_updates=True,
+            allowed_updates=[
+                "message",
+                "edited_message",
+                "channel_post",
+                "edited_channel_post",
+                "callback_query",
+                "inline_query",
+                "chosen_inline_result",
+            ],
+        )
         print(f"Webhook set to {webhook_url}")
     except Exception as e:
         print(f"Webhook setup error: {e}")
