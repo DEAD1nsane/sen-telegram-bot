@@ -553,7 +553,7 @@ def register_handlers(router: Router, bot: "Bot") -> None:
 
             async def collapse_game():
                 import asyncio
-                await asyncio.sleep(30)
+                await asyncio.sleep(3)
                 try:
                     from aiogram.types import (
                         InputRichMessage, InputRichBlockParagraph,

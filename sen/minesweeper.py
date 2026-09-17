@@ -149,11 +149,8 @@ class MinesweeperGame:
         else:
             header = f"<b>💣 MINESWEEPER</b>  <code>{self.rows}×{self.cols}</code>  <b>{self.mines} mines</b>  🚩 {flags}"
 
-        from aiogram.types import InputRichBlockParagraph, RichTextBold, RichTextSubscript
+        from aiogram.types import InputRichBlockParagraph
         blocks.append(InputRichBlockParagraph(text=rich_text_from_markup(header)))
-        blocks.append(InputRichBlockParagraph(
-            text=[RichTextBold(text=[RichTextSubscript(text="Tap cells to play. Use the button below to toggle flag mode.")])]
-        ))
 
         # Board buttons — one row per board row
         for r in range(self.rows):
