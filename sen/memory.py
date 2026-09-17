@@ -92,9 +92,7 @@ def rich_text_from_markup(text: str):
     return parts[0] if len(parts) == 1 else parts
 
 
-def get_memory_rich_message(
-    text: str, menu_type: str = "main", memories: list[str] | None = None
-) -> InputRichMessage:
+def get_memory_rich_message(text: str, menu_type: str = "main", memories: list[str] | None = None) -> InputRichMessage:
     """Build a RichMessage for the memory menu."""
     import re
 
@@ -122,24 +120,72 @@ def get_memory_rich_message(
         )
     if menu_type == "main":
         blocks += [
-            InputRichBlockButtons(buttons=[RichMessageButton(text="🧠 View Memories", callback_data="memory_view", style="primary")], align="center"),
-            InputRichBlockButtons(buttons=[RichMessageButton(text="➕ New Memory", callback_data="memory_add", style="success")], align="center"),
-            InputRichBlockButtons(buttons=[RichMessageButton(text="❌ Close", callback_data="memory_close", style="danger")], align="center"),
+            InputRichBlockButtons(
+                buttons=[RichMessageButton(text="🧠 View Memories", callback_data="memory_view", style="primary")],
+                align="center",
+            ),
+            InputRichBlockButtons(
+                buttons=[RichMessageButton(text="➕ New Memory", callback_data="memory_add", style="success")],
+                align="center",
+            ),
+            InputRichBlockButtons(
+                buttons=[RichMessageButton(text="❌ Close", callback_data="memory_close", style="danger")],
+                align="center",
+            ),
         ]
     elif menu_type == "view":
         blocks += [
-            InputRichBlockButtons(buttons=[RichMessageButton(text="📝 Edit", callback_data="memory_edit", style="primary"), RichMessageButton(text="🗑️ Remove", callback_data="memory_forget", style="danger")], align="center"),
-            InputRichBlockButtons(buttons=[RichMessageButton(text="🫯 Clear All", callback_data="memory_forget_all", style="danger")], align="center"),
-            InputRichBlockButtons(buttons=[RichMessageButton(text="📢 Share to Group", callback_data="memory_share", style="success")], align="center"),
-            InputRichBlockButtons(buttons=[RichMessageButton(text="↩️ Back", callback_data="memory_back"), RichMessageButton(text="❌ Close", callback_data="memory_close", style="danger")], align="center"),
+            InputRichBlockButtons(
+                buttons=[
+                    RichMessageButton(text="📝 Edit", callback_data="memory_edit", style="primary"),
+                    RichMessageButton(text="🗑️ Remove", callback_data="memory_forget", style="danger"),
+                ],
+                align="center",
+            ),
+            InputRichBlockButtons(
+                buttons=[RichMessageButton(text="🫯 Clear All", callback_data="memory_forget_all", style="danger")],
+                align="center",
+            ),
+            InputRichBlockButtons(
+                buttons=[RichMessageButton(text="📢 Share to Group", callback_data="memory_share", style="success")],
+                align="center",
+            ),
+            InputRichBlockButtons(
+                buttons=[
+                    RichMessageButton(text="↩️ Back", callback_data="memory_back"),
+                    RichMessageButton(text="❌ Close", callback_data="memory_close", style="danger"),
+                ],
+                align="center",
+            ),
         ]
     elif menu_type == "confirm_forget_all":
         blocks += [
-            InputRichBlockButtons(buttons=[RichMessageButton(text="⚠️ Yes, Clear Everything", callback_data="memory_confirm_forget_all", style="danger")], align="center"),
-            InputRichBlockButtons(buttons=[RichMessageButton(text="✖️ Cancel", callback_data="memory_back"), RichMessageButton(text="❌ Close", callback_data="memory_close", style="danger")], align="center"),
+            InputRichBlockButtons(
+                buttons=[
+                    RichMessageButton(
+                        text="⚠️ Yes, Clear Everything", callback_data="memory_confirm_forget_all", style="danger"
+                    )
+                ],
+                align="center",
+            ),
+            InputRichBlockButtons(
+                buttons=[
+                    RichMessageButton(text="✖️ Cancel", callback_data="memory_back"),
+                    RichMessageButton(text="❌ Close", callback_data="memory_close", style="danger"),
+                ],
+                align="center",
+            ),
         ]
     else:
-        blocks.append(InputRichBlockButtons(buttons=[RichMessageButton(text="↩️ Back", callback_data="memory_back"), RichMessageButton(text="❌ Close", callback_data="memory_close", style="danger")], align="center"))
+        blocks.append(
+            InputRichBlockButtons(
+                buttons=[
+                    RichMessageButton(text="↩️ Back", callback_data="memory_back"),
+                    RichMessageButton(text="❌ Close", callback_data="memory_close", style="danger"),
+                ],
+                align="center",
+            )
+        )
     return InputRichMessage(blocks=blocks)
 
 
@@ -242,9 +288,7 @@ async def close_menu(bot: "Bot", callback: CallbackQuery) -> None:
         if message.chat.type in {"group", "supergroup"}:
             mid = getattr(message, "ephemeral_message_id", None)
             if mid:
-                await bot.delete_ephemeral_message(
-                    chat_id=chat_id, receiver_user_id=user_id, ephemeral_message_id=mid
-                )
+                await bot.delete_ephemeral_message(chat_id=chat_id, receiver_user_id=user_id, ephemeral_message_id=mid)
         else:
             await bot.delete_message(chat_id=chat_id, message_id=message.message_id)
     except Exception as e:
@@ -253,9 +297,7 @@ async def close_menu(bot: "Bot", callback: CallbackQuery) -> None:
         await clear_menu_identity(chat_id, user_id)
 
 
-async def expire_memory_menu(
-    bot: "Bot", chat_id: int, user_id: int, menu_id: int
-) -> None:
+async def expire_memory_menu(bot: "Bot", chat_id: int, user_id: int, menu_id: int) -> None:
     """Auto-delete a memory menu after TTL."""
     try:
         await asyncio.sleep(MENU_TTL)
@@ -274,7 +316,6 @@ async def expire_memory_menu(
             print(f"Automatic memory menu expiry error: {e}")
         finally:
             await clear_menu_identity(chat_id, user_id)
-            await clear_interaction(chat_id, user_id)
     except asyncio.CancelledError:
         pass
     except Exception as e:
