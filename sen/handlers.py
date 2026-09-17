@@ -506,15 +506,20 @@ def register_handlers(router: Router, bot: "Bot") -> None:
 
     # --- Minesweeper ---
     MINESWEEPER_APP_URL = "https://minesweeper-game-production.up.railway.app"
+    GAME_SHORT_NAME = "minesweeper"
 
     @router.message(Command("play"))
     async def handle_play(message: Message):
         from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
         keyboard = InlineKeyboardMarkup(
-            inline_keyboard=[[InlineKeyboardButton(text="💣 Play Minesweeper", web_app={"url": MINESWEEPER_APP_URL})]]
+            inline_keyboard=[[InlineKeyboardButton(text="💣 Play Minesweeper", callback_game={})]]
         )
-        await message.answer("Tap to play HTML5 Minesweeper:", reply_markup=keyboard)
+        await message.answer_game(game_short_name=GAME_SHORT_NAME, reply_markup=keyboard)
+
+    @router.callback_query(F.data == "game:minesweeper")
+    async def handle_game_callback(callback: CallbackQuery):
+        await callback.answer(url=MINESWEEPER_APP_URL)
 
     @router.message(Command("mines"))
     async def handle_mines(message: Message):
