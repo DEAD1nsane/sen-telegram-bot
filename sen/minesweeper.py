@@ -163,7 +163,6 @@ class MinesweeperGame:
         # Control buttons
         flag_text = "🚩 Flag Mode: ON — tap to mark mines" if flag_mode else "💣 Tap Mode — tap to reveal cells"
         blocks.append(InputRichBlockButtons(buttons=[
-            RichMessageButton(text="🔄 New Game", callback_data=f"ms:{creator_uid}:new"),
             RichMessageButton(text=flag_text, callback_data=f"ms:{creator_uid}:flag_toggle"),
         ]))
 

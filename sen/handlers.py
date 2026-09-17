@@ -472,23 +472,6 @@ def register_handlers(router: Router, bot: "Bot") -> None:
             mines = int(mine_m.group(1))
         mines = min(mines, (rows * cols) - 9)
 
-        existing = await load_game(cid, uid)
-        if existing and not existing.game_over:
-            from aiogram.types import InputRichMessage, InputRichBlockParagraph
-            from .memory import rich_text_from_markup
-            rich = InputRichMessage(blocks=[
-                InputRichBlockParagraph(text=rich_text_from_markup(
-                    f"<b>⚠️ You have an active game.</b>\n"
-                    f"Send <code>/mines new</code> to start a new one, or finish the current game."
-                ))
-            ])
-            await bot.send_rich_message(
-                chat_id=cid,
-                rich_message=rich,
-                reply_parameters=ReplyParameters(message_id=message.message_id) if message.chat.type != "private" else None,
-            )
-            return
-
         game = MinesweeperGame(rows=rows, cols=cols, mines=mines)
         await save_game(cid, uid, game)
         name = html.escape(get_user_display_name(message.from_user))
@@ -518,16 +501,6 @@ def register_handlers(router: Router, bot: "Bot") -> None:
             return
 
         action = parts[2]
-
-        if action == "new":
-            game = MinesweeperGame(rows=game.rows, cols=game.cols, mines=game.mines)
-            await save_game(cid, uid, game)
-            await callback.message.edit_text(
-                text=None,
-                rich_message=game.get_rich_message(creator_uid=uid),
-            )
-            await callback.answer("New game!")
-            return
 
         if action == "flag_toggle":
             flag_key = f"ms_flag:{cid}:{uid}"
