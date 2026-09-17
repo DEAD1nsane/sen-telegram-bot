@@ -637,7 +637,7 @@ def register_handlers(router: Router, bot: "Bot") -> None:
                 "For tables: use HTML <table>, <tr>, <td>, <th> tags. Never use Markdown pipe tables.\n"
                 "Use code fences only for actual code. Do not wrap tables or non-code content in code fences.\n"
                 "When the user asks for ASCII art or to convert an image to ASCII, respond with ONLY the marker [CONVERT_IMAGE_TO_ASCII] on its own line. Do not generate the ASCII art yourself.\n"
-                "For Minesweeper games: generate a minesweeper board where MOST cells are hidden with spoiler tags. Place 8-12 mines randomly. Every hidden cell must use ||spoiler|| wrapping. Only reveal a few safe cells (numbers 1-8 or empty) at the start. Use 💣 for mines, ⬜ for empty revealed cells, and numbers for adjacent mine counts. Format as an HTML table. Example of a 3x3 section: <table><tr><td>||💣||</td><td>||1||</td><td>||⬜||</td></tr></table>"
+                "For Minesweeper games: generate a minesweeper board where EVERY cell is hidden with ||spoiler|| tags. Place 8-12 mines randomly. Every single cell must be wrapped in ||spoiler|| — do NOT reveal any cells at the start. Use 💣 for mines, ⬜ for empty cells, and numbers 1-8 for adjacent mine counts, but ALL wrapped in spoiler tags. Format as an HTML table."
             )
             if saved:
                 instructions += "\nUser memory directives:\n" + "\n".join(f"- {x}" for x in saved)
