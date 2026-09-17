@@ -528,7 +528,12 @@ def register_handlers(router: Router, bot: "Bot") -> None:
         import time
 
         existing = await load_game(cid, uid)
-        if existing and not existing.game_over and (time.time() - existing.created_at) < 300:
+        if (
+            existing
+            and not existing.game_over
+            and not existing.first_move
+            and (time.time() - existing.created_at) < 300
+        ):
             from aiogram.types import InputRichMessage, InputRichBlockParagraph, RichTextBold, RichTextSubscript
 
             rich = InputRichMessage(
