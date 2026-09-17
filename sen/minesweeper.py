@@ -149,9 +149,11 @@ class MinesweeperGame:
         else:
             header = f"<b>💣 MINESWEEPER</b>  <code>{self.rows}×{self.cols}</code>  <b>{self.mines} mines</b>  🚩 {flags}"
 
-        from aiogram.types import InputRichBlockParagraph
+        from aiogram.types import InputRichBlockParagraph, RichTextBold, RichTextSubscript
         blocks.append(InputRichBlockParagraph(text=rich_text_from_markup(header)))
-        blocks.append(InputRichBlockParagraph(text=rich_text_from_markup("<i>Tap cells to play. Use the button below to toggle flag mode.</i>")))
+        blocks.append(InputRichBlockParagraph(
+            text=[RichTextBold(text=[RichTextSubscript(text="Tap cells to play. Use the button below to toggle flag mode.")])]
+        ))
 
         # Board buttons — one row per board row
         for r in range(self.rows):
@@ -162,7 +164,7 @@ class MinesweeperGame:
             blocks.append(InputRichBlockButtons(buttons=row_buttons))
 
         # Control buttons
-        flag_text = "🚩 Flag Mode: ON" if flag_mode else "💣 Flag Mode: OFF"
+        flag_text = "💣 Tap to return to game" if flag_mode else "🚩 Tap to place flags"
         blocks.append(InputRichBlockButtons(buttons=[
             RichMessageButton(text=flag_text, callback_data=f"ms:{creator_uid}:flag_toggle"),
         ]))
