@@ -544,6 +544,14 @@ def register_handlers(router: Router, bot: "Bot") -> None:
         url = f"{url}{sep}uid={uid}"
         if owner:
             url += f"&owner={owner}"
+        if callback.message is not None:
+            import hmac as _hmac
+            import hashlib as _hashlib
+
+            cid = callback.message.chat.id
+            mid = callback.message.message_id
+            sig = _hmac.new(_cfg.API_TOKEN.encode(), f"{uid}:{cid}:{mid}".encode(), _hashlib.sha256).hexdigest()
+            url += f"&chat={cid}&mid={mid}&sig={sig}"
         await callback.answer(url=url)
 
     @router.message(Command("scores"))

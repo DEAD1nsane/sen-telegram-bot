@@ -168,9 +168,37 @@ async def main() -> None:
         await bot.session.close()
         await redis_client.aclose()
 
+    async def handle_score(request: web.Request) -> web.Response:
+        """Accept a finished-game score from the web game and record it."""
+        import hashlib
+        import hmac as hmac_mod
+
+        try:
+            data = await request.json()
+        except Exception:
+            return web.json_response({"ok": False, "error": "bad json"}, status=400)
+        try:
+            uid, cid, mid, score = int(data["uid"]), int(data["chat"]), int(data["mid"]), int(data["score"])
+            sig = str(data["sig"])
+        except Exception:
+            return web.json_response({"ok": False, "error": "bad fields"}, status=400)
+        if not (0 <= score <= 10000):
+            return web.json_response({"ok": False, "error": "score out of range"}, status=400)
+        expect = hmac_mod.new(API_TOKEN.encode(), f"{uid}:{cid}:{mid}".encode(), hashlib.sha256).hexdigest()
+        if not hmac_mod.compare_digest(expect, sig):
+            return web.json_response({"ok": False, "error": "bad signature"}, status=403)
+        try:
+            await bot.set_game_score(user_id=uid, score=score, chat_id=cid, message_id=mid)
+        except Exception as e:
+            print(f"[SCORE] set failed: {type(e).__name__}: {e}")
+            return web.json_response({"ok": False, "error": "telegram rejected"}, status=502)
+        print(f"[SCORE] recorded {score} for {uid} in {cid}:{mid}")
+        return web.json_response({"ok": True})
+
     app = web.Application()
     app.router.add_get("/", health_check)
     app.router.add_get("/health", health_check)
+    app.router.add_post("/score", handle_score)
     SimpleRequestHandler(dispatcher=dp, bot=bot).register(app, path="/webhook")
     setup_application(app, dp, bot=bot)
     app.on_cleanup.append(on_shutdown)
