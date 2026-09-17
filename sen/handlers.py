@@ -554,8 +554,13 @@ def register_handlers(router: Router, bot: "Bot") -> None:
 
     @router.inline_query()
     async def handle_inline_game(inline: InlineQuery):
-        result = InlineQueryResultGame(id=f"minesweeper-{inline.from_user.id}", game_short_name=GAME_SHORT_NAME)
-        await inline.answer([result], cache_time=0, is_personal=True)
+        print(f"[INLINE] query from {inline.from_user.id} q={inline.query!r}")
+        try:
+            result = InlineQueryResultGame(id=f"minesweeper-{inline.from_user.id}", game_short_name=GAME_SHORT_NAME)
+            await inline.answer([result], cache_time=0, is_personal=True)
+            print("[INLINE] answered with game")
+        except Exception as e:
+            print(f"[INLINE] answer failed: {type(e).__name__}: {e}")
 
     @router.chosen_inline_result()
     async def handle_chosen_inline_game(chosen: ChosenInlineResult):
