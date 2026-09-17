@@ -114,10 +114,22 @@ def render_math_markup(text: str) -> str:
 
     text = re.sub(
         r"<tg-math>.*?</tg-math>|<tg-math-block>.*?</tg-math-block>|<pre>.*?</pre>|<code>.*?</code>",
-        protect, text, flags=re.I | re.S,
+        protect,
+        text,
+        flags=re.I | re.S,
     )
-    text = re.sub(r"\$\$(.+?)\$\$", lambda m: f"<tg-math-block>{html.escape(m.group(1).strip())}</tg-math-block>", text, flags=re.S)
-    text = re.sub(r"\\\[(.+?)\\\]", lambda m: f"<tg-math-block>{html.escape(m.group(1).strip())}</tg-math-block>", text, flags=re.S)
+    text = re.sub(
+        r"\$\$(.+?)\$\$",
+        lambda m: f"<tg-math-block>{html.escape(m.group(1).strip())}</tg-math-block>",
+        text,
+        flags=re.S,
+    )
+    text = re.sub(
+        r"\\\[(.+?)\\\]",
+        lambda m: f"<tg-math-block>{html.escape(m.group(1).strip())}</tg-math-block>",
+        text,
+        flags=re.S,
+    )
     text = re.sub(r"\\\((.+?)\\\)", lambda m: f"<tg-math>{html.escape(m.group(1).strip())}</tg-math>", text, flags=re.S)
     for i, value in enumerate(protected):
         text = text.replace(f"\x00MATH{i}\x00", value)
@@ -139,13 +151,13 @@ def _ensure_list_breaks(text: str) -> str:
     if not text:
         return text
     text = re.sub(
-        r'(?<=[.;:!?])\s+(\d+)\.\s+',
-        r'\n\n\1. ',
+        r"(?<=[.;:!?])\s+(\d+)\.\s+",
+        r"\n\n\1. ",
         text,
     )
     text = re.sub(
-        r'(?<=[.;:!?])\s+([-•*])\s+',
-        r'\n\n\1 ',
+        r"(?<=[.;:!?])\s+([-•*])\s+",
+        r"\n\n\1 ",
         text,
     )
     return text
@@ -177,8 +189,9 @@ def clean_ai_output(text: str, plain_lists: bool = False) -> str:
     text = _ensure_list_breaks(text)
     text = re.sub(
         r"```(\w+)\n(.*?)```",
-        lambda m: f"<pre><code class=\"language-{m.group(1)}\">{m.group(2).strip()}</code></pre>",
-        text, flags=re.S,
+        lambda m: f'<pre><code class="language-{m.group(1)}">{m.group(2).strip()}</code></pre>',
+        text,
+        flags=re.S,
     )
     text = re.sub(r"```\n?(.*?)```", lambda m: f"<pre><code>{m.group(1).strip()}</code></pre>", text, flags=re.S)
     text = _markdown_to_rich_html(text)
@@ -203,7 +216,7 @@ def clean_ai_output(text: str, plain_lists: bool = False) -> str:
                 i += 1
             while code_lines and code_lines[-1].strip() == "":
                 code_lines.pop()
-            result.append(f"<pre><code class=\"language-{lang}\">{chr(10).join(code_lines).strip()}</code></pre>")
+            result.append(f'<pre><code class="language-{lang}">{chr(10).join(code_lines).strip()}</code></pre>')
         else:
             result.append(lines[i])
             i += 1
@@ -286,7 +299,9 @@ async def generate_gemini_response(contents, config, max_attempts: int = 4):
     for attempt in range(max_attempts):
         try:
             return await gemini_client.aio.models.generate_content(
-                model="gemini-3.5-flash-lite", contents=contents, config=config,
+                model="gemini-3.5-flash-lite",
+                contents=contents,
+                config=config,
             )
         except Exception as e:
             s = str(e).upper()
@@ -356,13 +371,22 @@ def register_handlers(router: Router, bot: "Bot") -> None:
             InputRichMessage,
         )
         from .memory import rich_text_from_markup
+
         share_blocks = [InputRichBlockSectionHeading(text=f"What TGB Remembers for {safe_first_name}", size=3)]
-        share_blocks.append(InputRichBlockList(items=[
-            InputRichBlockListItem(blocks=[InputRichBlockParagraph(text=rich_text_from_markup(memory))], value=i, type="1")
-            for i, memory in enumerate(memories, 1)
-        ]))
+        share_blocks.append(
+            InputRichBlockList(
+                items=[
+                    InputRichBlockListItem(
+                        blocks=[InputRichBlockParagraph(text=rich_text_from_markup(memory))], value=i, type="1"
+                    )
+                    for i, memory in enumerate(memories, 1)
+                ]
+            )
+        )
         try:
-            await callback.bot.send_rich_message(chat_id=callback.message.chat.id, rich_message=InputRichMessage(blocks=share_blocks))
+            await callback.bot.send_rich_message(
+                chat_id=callback.message.chat.id, rich_message=InputRichMessage(blocks=share_blocks)
+            )
             await callback.answer("Memories shared with the group!", show_alert=True)
         except Exception as e:
             print(f"Memory share error: {type(e).__name__}")
@@ -374,7 +398,12 @@ def register_handlers(router: Router, bot: "Bot") -> None:
             return
         await set_interaction(callback.message.chat.id, callback.from_user.id, "add")
         await callback.answer()
-        await edit_memory_menu(bot, callback, "<b>Add a Memory</b>\n\nTell TGB what you'd like to keep in mind for future conversations.\n\nYou can add several items at once by separating them with <code>,,</code>.", "back_close")
+        await edit_memory_menu(
+            bot,
+            callback,
+            "<b>Add a Memory</b>\n\nTell TGB what you'd like to keep in mind for future conversations.\n\nYou can add several items at once by separating them with <code>,,</code>.",
+            "back_close",
+        )
 
     @router.callback_query(F.data == "memory_edit")
     async def handle_memory_edit(callback: CallbackQuery):
@@ -414,7 +443,12 @@ def register_handlers(router: Router, bot: "Bot") -> None:
             return
         await clear_interaction(callback.message.chat.id, callback.from_user.id)
         await callback.answer()
-        await edit_memory_menu(bot, callback, "<b>Clear All Memories?</b>\n\nThis will remove every saved memory for your account and clear the conversation context associated with this chat.\n\n<b>This cannot be undone.</b>", "confirm_forget_all")
+        await edit_memory_menu(
+            bot,
+            callback,
+            "<b>Clear All Memories?</b>\n\nThis will remove every saved memory for your account and clear the conversation context associated with this chat.\n\n<b>This cannot be undone.</b>",
+            "confirm_forget_all",
+        )
 
     @router.callback_query(F.data == "memory_confirm_forget_all")
     async def handle_confirm_forget_all(callback: CallbackQuery):
@@ -423,7 +457,12 @@ def register_handlers(router: Router, bot: "Bot") -> None:
         uid, cid = callback.from_user.id, callback.message.chat.id
         await redis_client.delete(f"memory_list:{uid}", f"chat_history:{cid}:{uid}", interaction_key(cid, uid))
         await callback.answer("All saved memory has been cleared.", show_alert=True)
-        await edit_memory_menu(bot, callback, "<b>Memory Cleared</b>\n\nYour saved memories and local conversation context have been removed.", "back_close")
+        await edit_memory_menu(
+            bot,
+            callback,
+            "<b>Memory Cleared</b>\n\nYour saved memories and local conversation context have been removed.",
+            "back_close",
+        )
 
     @router.callback_query(F.data == "memory_back")
     async def handle_memory_back(callback: CallbackQuery):
@@ -432,7 +471,12 @@ def register_handlers(router: Router, bot: "Bot") -> None:
         await clear_interaction(callback.message.chat.id, callback.from_user.id)
         await callback.answer()
         name = html.escape(get_user_display_name(callback.from_user))
-        await edit_memory_menu(bot, callback, f"<b>Memory Center</b>\n\nWelcome, {name}.\n\nKeep track of the details and instructions you've asked TGB to remember. Changes here affect how TGB responds to you.", "main")
+        await edit_memory_menu(
+            bot,
+            callback,
+            f"<b>Memory Center</b>\n\nWelcome, {name}.\n\nKeep track of the details and instructions you've asked TGB to remember. Changes here affect how TGB responds to you.",
+            "main",
+        )
 
     @router.callback_query(F.data == "memory_close")
     async def handle_memory_close(callback: CallbackQuery):
@@ -471,6 +515,7 @@ def register_handlers(router: Router, bot: "Bot") -> None:
 
         rows, cols, mines = 5, 5, 5
         import re as _re
+
         m = _re.search(r"(\d+)\s*[x×]\s*(\d+)", text)
         if m:
             rows, cols = int(m.group(1)), int(m.group(2))
@@ -480,16 +525,32 @@ def register_handlers(router: Router, bot: "Bot") -> None:
         mines = min(mines, (rows * cols) - 9)
 
         import time
+
         existing = await load_game(cid, uid)
         if existing and not existing.game_over and (time.time() - existing.created_at) < 300:
             from aiogram.types import InputRichMessage, InputRichBlockParagraph, RichTextBold, RichTextSubscript
-            rich = InputRichMessage(blocks=[InputRichBlockParagraph(
-                text=[RichTextBold(text=[RichTextSubscript(text="⚠️ You have an active game. Finish it or wait for it to expire.")])]
-            )])
+
+            rich = InputRichMessage(
+                blocks=[
+                    InputRichBlockParagraph(
+                        text=[
+                            RichTextBold(
+                                text=[
+                                    RichTextSubscript(
+                                        text="⚠️ You have an active game. Finish it or wait for it to expire."
+                                    )
+                                ]
+                            )
+                        ]
+                    )
+                ]
+            )
             await bot.send_rich_message(
                 chat_id=cid,
                 rich_message=rich,
-                reply_parameters=ReplyParameters(message_id=message.message_id) if message.chat.type != "private" else None,
+                reply_parameters=ReplyParameters(message_id=message.message_id)
+                if message.chat.type != "private"
+                else None,
             )
             return
 
@@ -498,14 +559,18 @@ def register_handlers(router: Router, bot: "Bot") -> None:
 
         from aiogram.types import InputRichMessage, InputRichBlockParagraph
         from .memory import rich_text_from_markup
+
         rich = game.get_rich_message(creator_uid=uid)
         blocks = list(rich.blocks)
 
         if not m and not mine_m:
             from aiogram.types import RichTextBold, RichTextSubscript
-            blocks.append(InputRichBlockParagraph(
-                text=[RichTextBold(text=[RichTextSubscript(text="💡 Tip: customize with /mines 8x8 10 mines")])]
-            ))
+
+            blocks.append(
+                InputRichBlockParagraph(
+                    text=[RichTextBold(text=[RichTextSubscript(text="💡 Tip: customize with /mines 8x8 10 mines")])]
+                )
+            )
         await bot.send_rich_message(
             chat_id=cid,
             rich_message=InputRichMessage(blocks=blocks),
@@ -532,6 +597,28 @@ def register_handlers(router: Router, bot: "Bot") -> None:
             return
 
         action = parts[2]
+
+        if action == "howto":
+            from aiogram.types import InputRichMessage, InputRichBlockParagraph
+            from .memory import rich_text_from_markup
+
+            rich = InputRichMessage(
+                blocks=[
+                    InputRichBlockParagraph(
+                        text=rich_text_from_markup(
+                            "<b>💣 How to Play Minesweeper</b>\n\n"
+                            "<b>Start:</b> Select an initial square to reveal the opening layout.\n\n"
+                            "<b>Read Numbers:</b> Revealed numbers indicate how many mines are touching that square.\n\n"
+                            "<b>Mark Mines:</b> Place a flag on squares you think contain a mine.\n\n"
+                            "<b>Clear Safe Areas:</b> Uncover squares adjacent to numbers whose mines are already flagged.\n\n"
+                            "<b>Win:</b> Reveal every safe square without triggering a mine."
+                        )
+                    )
+                ]
+            )
+            await callback.answer()
+            await bot.send_rich_message(chat_id=cid, rich_message=rich)
+            return
 
         if action == "flag_toggle":
             flag_key = f"ms_flag:{cid}:{uid}"
@@ -574,20 +661,24 @@ def register_handlers(router: Router, bot: "Bot") -> None:
 
             async def collapse_game():
                 import asyncio
+
                 await asyncio.sleep(3)
                 try:
                     from aiogram.types import (
-                        InputRichMessage, InputRichBlockParagraph,
-                        RichTextBold, RichTextSubscript,
+                        InputRichMessage,
+                        InputRichBlockParagraph,
+                        RichTextBold,
+                        RichTextSubscript,
                     )
+
                     flags = sum(game.flagged[r][c] for r in range(game.rows) for c in range(game.cols))
                     if game.won:
                         sub = f"🎉 {name} won! Cleared {game.rows * game.cols - game.mines} cells with {flags} flags."
                     else:
                         sub = f"💥 {name} hit a mine! {flags} flags placed."
-                    rich = InputRichMessage(blocks=[InputRichBlockParagraph(
-                        text=[RichTextBold(text=[RichTextSubscript(text=sub)])]
-                    )])
+                    rich = InputRichMessage(
+                        blocks=[InputRichBlockParagraph(text=[RichTextBold(text=[RichTextSubscript(text=sub)])])]
+                    )
                     await callback.message.edit_text(text=None, rich_message=rich)
                     await delete_game(cid, uid)
                     await redis_client.delete(f"ms_flag:{cid}:{uid}")
@@ -604,18 +695,30 @@ def register_handlers(router: Router, bot: "Bot") -> None:
 
             async def collapse_inactive():
                 import asyncio
+
                 await asyncio.sleep(30)
                 try:
                     current = await load_game(cid, uid)
                     if current and not current.game_over:
                         from aiogram.types import (
-                            InputRichMessage, InputRichBlockParagraph,
-                            RichTextBold, RichTextSubscript,
+                            InputRichMessage,
+                            InputRichBlockParagraph,
+                            RichTextBold,
+                            RichTextSubscript,
                         )
+
                         name = html.escape(callback.from_user.first_name or "Player")
-                        rich = InputRichMessage(blocks=[InputRichBlockParagraph(
-                            text=[RichTextBold(text=[RichTextSubscript(text=f"⏱️ {name}'s game — inactivity timed out")])]
-                        )])
+                        rich = InputRichMessage(
+                            blocks=[
+                                InputRichBlockParagraph(
+                                    text=[
+                                        RichTextBold(
+                                            text=[RichTextSubscript(text=f"⏱️ {name}'s game — inactivity timed out")]
+                                        )
+                                    ]
+                                )
+                            ]
+                        )
                         await callback.message.edit_text(text=None, rich_message=rich)
                         await delete_game(cid, uid)
                         await redis_client.delete(f"ms_flag:{cid}:{uid}")
@@ -644,9 +747,7 @@ def register_handlers(router: Router, bot: "Bot") -> None:
             else getattr(message, "caption_entities", None)
         )
         if _cfg.BOT_INFO and _cfg.BOT_INFO.username:
-            mention_re = re.compile(
-                r"(?<![A-Za-z0-9_])@" + re.escape(_cfg.BOT_INFO.username) + r"\b", re.I
-            )
+            mention_re = re.compile(r"(?<![A-Za-z0-9_])@" + re.escape(_cfg.BOT_INFO.username) + r"\b", re.I)
             code_stripped = _strip_code_spans(text, entities)
             if mention_re.search(text) and not mention_re.search(code_stripped):
                 return
@@ -723,7 +824,9 @@ def register_handlers(router: Router, bot: "Bot") -> None:
         if message.reply_to_message:
             replied_context = message.reply_to_message.text or message.reply_to_message.caption or ""
             if message.reply_to_message.sticker:
-                replied_context += f"\n[Replied-to message contains a sticker: {message.reply_to_message.sticker.emoji or 'sticker'}]"
+                replied_context += (
+                    f"\n[Replied-to message contains a sticker: {message.reply_to_message.sticker.emoji or 'sticker'}]"
+                )
             if replied_video:
                 replied_context += f"\n[Replied-to message contains {replied_video_media[3]}]"
 
@@ -739,20 +842,29 @@ def register_handlers(router: Router, bot: "Bot") -> None:
 
         if message.reply_to_message and message.reply_to_message.sticker and not media_bytes:
             from .media import _get_sticker_input
+
             media_bytes, media_mime, media_description = await _get_sticker_input(bot, message.reply_to_message)
 
         if replied_video_media and not media_bytes:
             file_id, video_mime, video_size, video_description = replied_video_media
             if video_size and video_size > 20 * 1024 * 1024:
-                await message.answer("That video is over Telegram's 20 MB bot download limit, so I can't inspect it.", reply_to_message_id=None if is_private else mid)
+                await message.answer(
+                    "That video is over Telegram's 20 MB bot download limit, so I can't inspect it.",
+                    reply_to_message_id=None if is_private else mid,
+                )
                 return
             media_bytes = await download_telegram_media(bot, file_id)
             media_mime = video_mime
             media_description = video_description
             if not media_bytes:
-                await message.answer("I couldn't download that video to inspect it. Try sending the video again and reply to it.", reply_to_message_id=None if is_private else mid)
+                await message.answer(
+                    "I couldn't download that video to inspect it. Try sending the video again and reply to it.",
+                    reply_to_message_id=None if is_private else mid,
+                )
                 return
-            print(f"Replied video downloaded: message_id={getattr(message.reply_to_message, 'message_id', None)} size={len(media_bytes)} mime={media_mime}")
+            print(
+                f"Replied video downloaded: message_id={getattr(message.reply_to_message, 'message_id', None)} size={len(media_bytes)} mime={media_mime}"
+            )
 
         if not prompt and replied_context and not media_bytes:
             prompt = "What are your thoughts on this?"
@@ -781,10 +893,18 @@ def register_handlers(router: Router, bot: "Bot") -> None:
             if search_context:
                 context_parts.append("Web Search Context:\n" + search_context)
             elif use_search:
-                context_parts.append("Web Search Context:\nA web search was requested, but no usable results were returned. Do not pretend that a search result supports a claim.")
+                context_parts.append(
+                    "Web Search Context:\nA web search was requested, but no usable results were returned. Do not pretend that a search result supports a claim."
+                )
             if media_bytes:
-                context_parts.append("Media handling rule: The attached media is the primary evidence for the user's request. Answer what can actually be seen or heard in it. Do not substitute web results, conversation history, or guesses for details that should come from the media. If the media cannot be inspected reliably, say so instead of inventing what happened.")
-            final_prompt = "\n\n".join(context_parts) + ("\n\n" if context_parts else "") + (prompt or "Process and answer this media input.")
+                context_parts.append(
+                    "Media handling rule: The attached media is the primary evidence for the user's request. Answer what can actually be seen or heard in it. Do not substitute web results, conversation history, or guesses for details that should come from the media. If the media cannot be inspected reliably, say so instead of inventing what happened."
+                )
+            final_prompt = (
+                "\n\n".join(context_parts)
+                + ("\n\n" if context_parts else "")
+                + (prompt or "Process and answer this media input.")
+            )
 
             today = datetime.now(timezone.utc).strftime("%A, %B %d, %Y")
             instructions = (
@@ -797,7 +917,7 @@ def register_handlers(router: Router, bot: "Bot") -> None:
                 "Do not assume personal details unless explicitly present in the memory list.\n"
                 "When media is attached, treat that media as primary evidence. Never fabricate visual or audio details. If you cannot reliably inspect it, say so.\n"
                 "Return Telegram Rich HTML for sendRichMessage. Use whichever tags best fit the content naturally.\n"
-                "For code snippets: ALWAYS use <pre><code class=\"language-xxx\">code</code></pre> where xxx is the language (python, javascript, html, css, bash, json, etc). The class attribute is required for syntax highlighting. Example: <pre><code class=\"language-python\">print(\"hello\")</code></pre>\n"
+                'For code snippets: ALWAYS use <pre><code class="language-xxx">code</code></pre> where xxx is the language (python, javascript, html, css, bash, json, etc). The class attribute is required for syntax highlighting. Example: <pre><code class="language-python">print("hello")</code></pre>\n'
                 "For mathematical answers: wrap standalone equations in $$...$$ and inline math in \\(...\\). Never output raw LaTeX without delimiters.\n"
                 "When Web Search Context contains Image: URLs, put exactly one marker [ATTACH_SEARCH_IMAGE: URL] in your response if the image is genuinely useful. Never use this marker for non-search media.\n"
                 "Only search-result images may be sent as outgoing media. Do not generate slideshows, collages, presentations, images, videos, audio, or other media. If asked to create media, respond in text instead.\n"
@@ -809,14 +929,25 @@ def register_handlers(router: Router, bot: "Bot") -> None:
             if saved:
                 instructions += "\nUser memory directives:\n" + "\n".join(f"- {x}" for x in saved)
             if search_context:
-                instructions += "\nUse Web Search Context for current facts. Prefer retrieved sources over stale model knowledge."
+                instructions += (
+                    "\nUse Web Search Context for current facts. Prefer retrieved sources over stale model knowledge."
+                )
             if use_search and not search_context:
                 instructions += "\nA search was attempted but returned no usable results. Be explicit about that instead of fabricating sources or pretending to have searched."
             if history:
                 instructions += "\nUse Recent Conversation Context for continuity without repeating it."
 
             from google.genai import types
-            safety = [types.SafetySetting(category=c, threshold="BLOCK_NONE") for c in ("HARM_CATEGORY_HATE_SPEECH", "HARM_CATEGORY_HARASSMENT", "HARM_CATEGORY_SEXUALLY_EXPLICIT", "HARM_CATEGORY_DANGEROUS_CONTENT")]
+
+            safety = [
+                types.SafetySetting(category=c, threshold="BLOCK_NONE")
+                for c in (
+                    "HARM_CATEGORY_HATE_SPEECH",
+                    "HARM_CATEGORY_HARASSMENT",
+                    "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+                    "HARM_CATEGORY_DANGEROUS_CONTENT",
+                )
+            ]
             if media_bytes and media_mime and media_mime.startswith("video/"):
                 uploaded_gemini_video = await get_gemini_video_file(media_bytes, media_mime, media_description)
                 contents = [uploaded_gemini_video, final_prompt]
@@ -826,21 +957,35 @@ def register_handlers(router: Router, bot: "Bot") -> None:
             else:
                 contents = final_prompt
 
-            response = await generate_gemini_response(contents, types.GenerateContentConfig(system_instruction=instructions, safety_settings=safety))
-            plain_lists = bool(re.search(r"\b(?:plain|non[- ]?rich|without formatting|no formatting|no rich text|as text|just text|raw text)\b", prompt or "", re.I))
+            response = await generate_gemini_response(
+                contents, types.GenerateContentConfig(system_instruction=instructions, safety_settings=safety)
+            )
+            plain_lists = bool(
+                re.search(
+                    r"\b(?:plain|non[- ]?rich|without formatting|no formatting|no rich text|as text|just text|raw text)\b",
+                    prompt or "",
+                    re.I,
+                )
+            )
             response_text = clean_ai_output(response.text, plain_lists=plain_lists)
 
-            response_text = re.sub(r"\s*\[ATTACH_SEARCH_IMAGE:\s*https?://[^\]\s]+\]\s*", "\n", response_text, flags=re.I).strip()
+            response_text = re.sub(
+                r"\s*\[ATTACH_SEARCH_IMAGE:\s*https?://[^\]\s]+\]\s*", "\n", response_text, flags=re.I
+            ).strip()
 
             try:
                 await send_ai_response(bot, cid, mid, response_text, is_private)
             except Exception as rich_error:
                 print(f"Rich response delivery error: {rich_error}")
-                fallback = html.unescape(re.sub(r"<[^>]+>", "", response_text)).strip() or "I didn't receive a response."
+                fallback = (
+                    html.unescape(re.sub(r"<[^>]+>", "", response_text)).strip() or "I didn't receive a response."
+                )
                 await message.answer(fallback, reply_to_message_id=None if is_private else mid)
 
             clean_history = html.unescape(re.sub(r"<[^>]+>", "", response_text)).strip()
-            await redis_client.rpush(history_key, f"User: {prompt or media_description or 'Media'}", f"Bot: {clean_history}")
+            await redis_client.rpush(
+                history_key, f"User: {prompt or media_description or 'Media'}", f"Bot: {clean_history}"
+            )
             await redis_client.ltrim(history_key, -10, -1)
         except Exception as e:
             print(f"Gemini AI processing error: {type(e).__name__}: {str(e)[:120]}")
