@@ -463,7 +463,7 @@ def register_handlers(router: Router, bot: "Bot") -> None:
     async def handle_mines(message: Message):
         uid, cid = message.from_user.id, message.chat.id
         text = message.text.lower().strip()
-        rows, cols, mines = 8, 8, 10
+        rows, cols, mines = 5, 5, 5
         import re as _re
         m = _re.search(r"(\d+)\s*[x×]\s*(\d+)", text)
         if m:
@@ -475,8 +475,12 @@ def register_handlers(router: Router, bot: "Bot") -> None:
         game = MinesweeperGame(rows=rows, cols=cols, mines=mines)
         await save_game(cid, uid, game)
         await message.answer(
-            f"💣 Minesweeper {rows}×{cols} ({mines} mines)\nTap cells to reveal. Use Flag Mode to place flags.",
+            f"💣 Minesweeper {rows}×{cols} ({mines} mines)\n\n"
+            f"Tap cells to reveal. Use Flag Mode to place flags.\n"
+            f"<code>/mines</code> — 5×5, 5 mines\n"
+            f"<code>/mines 8x8 10 mines</code> — custom size",
             reply_markup=game.get_keyboard(),
+            parse_mode="HTML",
         )
 
     @router.callback_query(F.data.startswith("ms:"))
