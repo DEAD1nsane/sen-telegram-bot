@@ -601,16 +601,26 @@ def register_handlers(router: Router, bot: "Bot") -> None:
 
     @router.message(Command("mini"))
     async def handle_mini(message: Message):
-        from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+        from aiogram.types import InputRichMessage, InputRichBlockParagraph, InputRichBlockButtons, RichMessageButton
+        from .memory import rich_text_from_markup
 
-        keyboard = InlineKeyboardMarkup(
-            inline_keyboard=[
-                [InlineKeyboardButton(text="💣 Play Minesweeper", url="https://t.me/SenAnythangBot/mines")]
+        rich = InputRichMessage(
+            blocks=[
+                InputRichBlockParagraph(
+                    text=rich_text_from_markup(
+                        "<b>💣 Minesweeper Mini App</b>\n"
+                        "Play in Telegram! Tap cells to reveal, flag mines, and clear the board without exploding."
+                    )
+                ),
+                InputRichBlockButtons(
+                    buttons=[RichMessageButton(text="💣 Play Minesweeper", url="https://t.me/SenAnythangBot/mines")]
+                ),
             ]
         )
-        await message.answer(
-            "Play Minesweeper in Telegram! Tap cells to reveal, flag mines, and clear the board without exploding.",
-            reply_markup=keyboard,
+        await bot.send_rich_message(
+            chat_id=message.chat.id,
+            rich_message=rich,
+            reply_parameters=ReplyParameters(message_id=message.message_id) if message.chat.type != "private" else None,
         )
 
     @router.message(Command("mines"))
