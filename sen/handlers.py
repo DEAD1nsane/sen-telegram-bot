@@ -606,12 +606,7 @@ def register_handlers(router: Router, bot: "Bot") -> None:
 
         if action == "howto":
             await callback.answer(
-                "💣 How to Play Minesweeper\n\n"
-                "Start: Select an initial square to reveal the opening layout.\n\n"
-                "Read Numbers: Revealed numbers indicate how many mines are touching that specific square in the surrounding grid.\n\n"
-                "Mark Mines: Place a flag on any unopened square you deduce contains a mine to prevent opening it by mistake.\n\n"
-                "Clear Safe Areas: Uncover squares adjacent to numbers whose surrounding mines have already been identified and flagged.\n\n"
-                "Win: Reveal every safe square on the entire grid without triggering a mine.",
+                "💣 Tap to reveal. Numbers show adjacent mines. Flag suspected mines. Clear all safe squares to win!",
                 show_alert=True,
             )
             return
