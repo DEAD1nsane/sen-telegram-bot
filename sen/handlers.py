@@ -854,6 +854,9 @@ def register_handlers(router: Router, bot: "Bot") -> None:
             if not (replied_video and (tagged or reply_to_bot)):
                 return
         elif not (tagged or reply_to_bot or is_private):
+            print(
+                f"[DEBUG] skipped non-directed message: tagged={tagged}, reply_to_bot={reply_to_bot}, is_private={is_private}, text={text[:50]}"
+            )
             return
 
         prompt = text
@@ -977,6 +980,8 @@ def register_handlers(router: Router, bot: "Bot") -> None:
                 "Use code fences only for actual code. Do not wrap tables or non-code content in code fences.\n"
                 "For lists: ALWAYS use proper list formatting. Use lines starting with - or * for bullets, or 1. 2. 3. for numbered lists. Never write items inline like 'Item 1: text' or 'Step 1: text'."
             )
+            if replied_context:
+                instructions += "\nYou are being pulled into an existing conversation via a reply. Understand the context of the replied-to message and respond appropriately to continue that conversation."
             if saved:
                 instructions += "\nUser memory directives:\n" + "\n".join(f"- {x}" for x in saved)
             if search_context:
