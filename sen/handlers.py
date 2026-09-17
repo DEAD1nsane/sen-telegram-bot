@@ -502,6 +502,17 @@ def register_handlers(router: Router, bot: "Bot") -> None:
         print("[/del] executed")
 
     # --- Minesweeper ---
+    MINESWEEPER_APP_URL = "https://minesweeper-game-production.up.railway.app"
+
+    @router.message(Command("play"))
+    async def handle_play(message: Message):
+        from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+
+        keyboard = InlineKeyboardMarkup(
+            inline_keyboard=[[InlineKeyboardButton(text="💣 Play Minesweeper", web_app={"url": MINESWEEPER_APP_URL})]]
+        )
+        await message.answer("Tap to play HTML5 Minesweeper:", reply_markup=keyboard)
+
     @router.message(Command("mines"))
     async def handle_mines(message: Message):
         uid, cid = message.from_user.id, message.chat.id
@@ -574,7 +585,15 @@ def register_handlers(router: Router, bot: "Bot") -> None:
 
             blocks.append(
                 InputRichBlockParagraph(
-                    text=[RichTextBold(text=[RichTextSubscript(text="💡 Tip: customize with /mines 8x8 10 mines")])]
+                    text=[
+                        RichTextBold(
+                            text=[
+                                RichTextSubscript(
+                                    text="💡 Tip: customize with /mines 8x8 10 mines | /mines reset to clear stuck games"
+                                )
+                            ]
+                        )
+                    ]
                 )
             )
         await bot.send_rich_message(
@@ -606,7 +625,9 @@ def register_handlers(router: Router, bot: "Bot") -> None:
 
         if action == "howto":
             await callback.answer(
-                "💣 Tap to reveal. Numbers show adjacent mines. Flag suspected mines. Clear all safe squares to win!",
+                "💣 Tap cells to reveal. Numbers = adjacent mines. Flag suspected mines. Clear all safe squares to win!\n\n"
+                "Customize: /mines WxH M mines (e.g. /mines 8x8 10 mines)\n"
+                "Reset stuck game: /mines reset",
                 show_alert=True,
             )
             return

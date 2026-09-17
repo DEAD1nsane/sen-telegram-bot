@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Minesweeper</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  background: #1a1a2e;
+  color: #eee;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-height: 100vh;
+  padding: 12px;
+  overflow-x: hidden;
+}
+h1 { font-size: 1.3em; margin-bottom: 8px; }
+.header {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  margin-bottom: 10px;
+  font-size: 0.95em;
+}
+.header span { opacity: 0.8; }
+.controls {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 10px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+.controls button {
+  padding: 6px 14px;
+  border: none;
+  border-radius: 6px;
+  background: #16213e;
+  color: #eee;
+  font-size: 0.85em;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+.controls button:hover { background: #1a1a4e; }
+.controls button.active { background: #e94560; color: #fff; }
+.grid {
+  display: grid;
+  gap: 2px;
+  margin-bottom: 12px;
+}
+.cell {
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1em;
+  font-weight: 700;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: transform 0.1s;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.cell:active { transform: scale(0.92); }
+.cell.hidden { background: #2a2a4a; }
+.cell.hidden:hover { background: #3a3a5a; }
+.cell.revealed { background: #0f3460; }
+.cell.mine { background: #e94560; }
+.cell.flagged { background: #2a2a4a; }
+.c1 { color: #4fc3f7; } .c2 { color: #81c784; } .c3 { color: #e57373; }
+.c4 { color: #ba68c8; } .c5 { color: #ffb74d; } .c6 { color: #4dd0e1; }
+.c7 { color: #f06292; } .c8 { color: #aed581; }
+.footer {
+  font-size: 0.8em;
+  opacity: 0.5;
+  margin-top: auto;
+}
+</style>
+</head>
+<body>
+<h1>💣 Minesweeper</h1>
+<div class="header">
+  <span>💣 <span id="mine-count">10</span></span>
+  <span>🚩 <span id="flag-count">0</span></span>
+  <span>⏱️ <span id="timer">0</span>s</span>
+</div>
+<div class="controls">
+  <button onclick="newGame(5,5,5)">5×5</button>
+  <button onclick="newGame(8,8,10)">8×8</button>
+  <button onclick="newGame(10,10,15)">10×10</button>
+  <button id="flag-btn" onclick="toggleFlagMode()">🚩 Flag</button>
+  <button onclick="newGame(lastRows,lastCols,lastMines)">🔄</button>
+</div>
+<div class="grid" id="grid"></div>
+<div id="status" style="font-size:1.1em;margin-bottom:8px;min-height:1.4em;"></div>
+<div class="footer">Telegram Mini App</div>
+
+<script>
+let rows=5,cols=5,totalMines=10;
+let board=[],revealed=[],flagged=[],gameOver=false,won=false,firstMove=true;
+let flagMode=false,timerInterval=null,seconds=0;
+let lastRows=5,lastCols=5,lastMines=5;
+
+function newGame(r,c,m){
+  rows=r;cols=c;totalMines=m;lastRows=r;lastCols=c;lastMines=m;
+  board=Array.from({length:rows},()=>Array(cols).fill(0));
+  revealed=Array.from({length:rows},()=>Array(cols).fill(false));
+  flagged=Array.from({length:rows},()=>Array(cols).fill(false));
+  gameOver=false;won=false;firstMove=true;flagMode=false;seconds=0;
+  document.getElementById('flag-btn').classList.remove('active');
+  document.getElementById('status').textContent='';
+  clearInterval(timerInterval);timerInterval=null;
+  document.getElementById('timer').textContent='0';
+  updateCounts();render();
+}
+
+function placeMines(safeR,safeC){
+  const safe=new Set();
+  for(let dr=-1;dr<=1;dr++)for(let dc=-1;dc<=1;dc++){
+    const nr=safeR+dr,nc=safeC+dc;
+    if(nr>=0&&nr<rows&&nc>=0&&nc<cols)safe.add(nr+','+nc);
+  }
+  const candidates=[];
+  for(let r=0;r<rows;r++)for(let c=0;c<cols;c++)if(!safe.has(r+','+c))candidates.push([r,c]);
+  const shuffled=candidates.sort(()=>Math.random()-0.5);
+  for(let i=0;i<Math.min(totalMines,shuffled.length);i++)board[shuffled[i][0]][shuffled[i][1]]=-1;
+  for(let r=0;r<rows;r++)for(let c=0;c<cols;c++){
+    if(board[r][c]===-1)continue;
+    let count=0;
+    for(let dr=-1;dr<=1;dr++)for(let dc=-1;dc<=1;dc++){
+      const nr=r+dr,nc=c+dc;
+      if(nr>=0&&nr<rows&&nc>=0&&nc<cols&&board[nr][nc]===-1)count++;
+    }
+    board[r][c]=count;
+  }
+  firstMove=false;
+}
+
+function reveal(r,c){
+  if(gameOver||revealed[r][c]||flagged[r][c])return;
+  if(firstMove)placeMines(r,c);
+  if(!timerInterval){timerInterval=setInterval(()=>{seconds++;document.getElementById('timer').textContent=seconds;},1000);}
+  if(board[r][c]===-1){gameOver=true;revealed[r][c]=true;render();endGame(false);return;}
+  floodReveal(r,c);
+  if(checkWin()){gameOver=true;won=true;render();endGame(true);}
+}
+
+function floodReveal(r,c){
+  if(r<0||r>=rows||c<0||c>=cols||revealed[r][c]||flagged[r][c])return;
+  revealed[r][c]=true;
+  if(board[r][c]===0)for(let dr=-1;dr<=1;dr++)for(let dc=-1;dc<=1;dc++)floodReveal(r+dr,c+dc);
+}
+
+function toggleFlag(r,c){
+  if(gameOver||revealed[r][c])return;
+  flagged[r][c]=!flagged[r][c];updateCounts();render();
+}
+
+function checkWin(){
+  for(let r=0;r<rows;r++)for(let c=0;c<cols;c++)if(board[r][c]!==-1&&!revealed[r][c])return false;
+  return true;
+}
+
+function updateCounts(){
+  let flags=0;for(let r=0;r<rows;r++)for(let c=0;c<cols;c++)if(flagged[r][c])flags++;
+  document.getElementById('mine-count').textContent=totalMines;
+  document.getElementById('flag-count').textContent=flags;
+}
+
+function toggleFlagMode(){
+  flagMode=!flagMode;
+  document.getElementById('flag-btn').classList.toggle('active',flagMode);
+}
+
+function endGame(win){
+  clearInterval(timerInterval);
+  if(!win)for(let r=0;r<rows;r++)for(let c=0;c<cols;c++)if(board[r][c]===-1)revealed[r][c]=true;
+  render();
+  const cleared= revealed.flat().filter((v,i)=>v&&board[Math.floor(i/cols)][i%cols]!==-1).length;
+  document.getElementById('status').textContent=win?`🎉 You won! Cleared ${rows*cols-totalMines} cells in ${seconds}s!`:`💥 Game over! Cleared ${cleared} tiles.`;
+}
+
+function render(){
+  const grid=document.getElementById('grid');
+  grid.style.gridTemplateColumns=`repeat(${cols},36px)`;
+  grid.innerHTML='';
+  const emojis=['','1️⃣','2️⃣','3️⃣','4️⃣','5️⃣','6️⃣','7️⃣','8️⃣'];
+  for(let r=0;r<rows;r++)for(let c=0;c<cols;c++){
+    const cell=document.createElement('div');
+    cell.className='cell';
+    if(revealed[r][c]){
+      cell.classList.add('revealed');
+      if(board[r][c]===-1){cell.classList.add('mine');cell.textContent='💥';}
+      else if(board[r][c]===0){cell.textContent='';}
+      else{cell.textContent=emojis[board[r][c]];cell.classList.add('c'+board[r][c]);}
+    }else if(flagged[r][c]){
+      cell.classList.add('hidden','flagged');cell.textContent='🚩';
+    }else{
+      cell.classList.add('hidden');
+    }
+    cell.addEventListener('click',()=>{if(flagMode&&!revealed[r][c])toggleFlag(r,c);else reveal(r,c);});
+    cell.addEventListener('contextmenu',(e)=>{e.preventDefault();toggleFlag(r,c);});
+    grid.appendChild(cell);
+  }
+}
+
+// Telegram WebApp integration
+if(window.Telegram&&Telegram.WebApp){
+  Telegram.WebApp.ready();
+  Telegram.WebApp.expand();
+  const params=new URLSearchParams(Telegram.WebApp.initDataUnsafe?.startapp||'');
+  const w=parseInt(params.get('w'))||5;
+  const h=parseInt(params.get('h'))||5;
+  const m=parseInt(params.get('m'))||5;
+  newGame(w,h,m);
+}else{
+  newGame(5,5,5);
+}
+</script>
+</body>
+</html>
