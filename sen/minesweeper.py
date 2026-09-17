@@ -36,8 +36,12 @@ class MinesweeperGame:
     game_over: bool = False
     won: bool = False
     first_move: bool = True
+    created_at: float = 0
 
     def __post_init__(self):
+        import time
+        if not self.created_at:
+            self.created_at = time.time()
         if not self.board:
             self.board = [[0] * self.cols for _ in range(self.rows)]
             self.revealed = [[False] * self.cols for _ in range(self.rows)]
@@ -164,6 +168,7 @@ class MinesweeperGame:
         flag_text = "💣 Tap to return to game" if flag_mode else "🚩 Tap to place flags"
         blocks.append(InputRichBlockButtons(buttons=[
             RichMessageButton(text=flag_text, callback_data=f"ms:{creator_uid}:flag_toggle"),
+            RichMessageButton(text="❓ How to play", callback_data=f"ms:{creator_uid}:howto"),
         ]))
 
         return InputRichMessage(blocks=blocks)

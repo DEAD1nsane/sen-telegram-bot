@@ -462,6 +462,13 @@ def register_handlers(router: Router, bot: "Bot") -> None:
     async def handle_mines(message: Message):
         uid, cid = message.from_user.id, message.chat.id
         text = message.text.lower().strip()
+
+        if "reset" in text:
+            await delete_game(cid, uid)
+            await redis_client.delete(f"ms_flag:{cid}:{uid}")
+            await message.answer("✅ Game reset. Send /mines to start fresh.")
+            return
+
         rows, cols, mines = 5, 5, 5
         import re as _re
         m = _re.search(r"(\d+)\s*[x×]\s*(\d+)", text)
@@ -472,8 +479,9 @@ def register_handlers(router: Router, bot: "Bot") -> None:
             mines = int(mine_m.group(1))
         mines = min(mines, (rows * cols) - 9)
 
+        import time
         existing = await load_game(cid, uid)
-        if existing and not existing.game_over:
+        if existing and not existing.game_over and (time.time() - existing.created_at) < 300:
             from aiogram.types import InputRichMessage, InputRichBlockParagraph, RichTextBold, RichTextSubscript
             rich = InputRichMessage(blocks=[InputRichBlockParagraph(
                 text=[RichTextBold(text=[RichTextSubscript(text="⚠️ You have an active game. Finish it or wait for it to expire.")])]
