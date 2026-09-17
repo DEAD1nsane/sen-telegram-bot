@@ -627,16 +627,18 @@ def register_handlers(router: Router, bot: "Bot") -> None:
         blocks = list(rich.blocks)
 
         if not m and not mine_m:
-            from aiogram.types import RichTextBold, RichTextSubscript
+            from aiogram.types import RichTextBold, RichTextMarked, RichTextSubscript
 
             blocks.append(
                 InputRichBlockParagraph(
                     text=[
-                        RichTextBold(
+                        RichTextSubscript(
                             text=[
-                                RichTextSubscript(
-                                    text="💡 Tip: customize with /mines 8x8 10 mines | /mines reset to clear stuck games"
-                                )
+                                RichTextMarked(text="💡 Tip: customize with "),
+                                RichTextBold(text=[RichTextMarked(text="/mines 8x8 10 mines")]),
+                                RichTextMarked(text=" | "),
+                                RichTextBold(text=[RichTextMarked(text="/mines reset")]),
+                                RichTextMarked(text=" to clear stuck games"),
                             ]
                         )
                     ]
