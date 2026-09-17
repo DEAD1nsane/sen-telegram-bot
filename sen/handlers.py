@@ -633,7 +633,8 @@ def register_handlers(router: Router, bot: "Bot") -> None:
                 "When Web Search Context contains Image: URLs, put exactly one marker [ATTACH_SEARCH_IMAGE: URL] in your response if the image is genuinely useful. Never use this marker for non-search media.\n"
                 "Only search-result images may be sent as outgoing media. Do not generate slideshows, collages, presentations, images, videos, audio, or other media. If asked to create media, respond in text instead.\n"
                 "Only show source links when the user explicitly asks for sources, citations, links, or URLs. When requested, put them at the very end as a compact rich-text footnote section using <details><summary>Sources</summary>...links...</details>.\n"
-                "For tables: use HTML <table>, <tr>, <td>, <th> tags with a border attribute. Never use Markdown pipe tables. Never wrap tables in code fences — output raw HTML tags directly."
+                "For tables: use HTML <table>, <tr>, <td>, <th> tags with a border attribute. Never use Markdown pipe tables. Never wrap tables in code fences — output raw HTML tags directly.\n"
+                "Only use code fences for actual executable code or ASCII art. Never wrap tables, charts, or structured text in code fences."
             )
             if saved:
                 instructions += "\nUser memory directives:\n" + "\n".join(f"- {x}" for x in saved)
