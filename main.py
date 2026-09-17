@@ -47,16 +47,24 @@ async def configure_commands() -> None:
         BotCommand(command="memories", description="Open your private memory menu", is_ephemeral=True),
         BotCommand(command="del", description="Delete a bot message", is_ephemeral=True),
         BotCommand(command="play", description="Play the Minesweeper web game"),
+        BotCommand(command="mines", description="Play Minesweeper in chat"),
     ]
     private = [
         BotCommand(command="memories", description="Manage your instructed memories"),
         BotCommand(command="del", description="Delete a bot message"),
         BotCommand(command="play", description="Play the Minesweeper web game"),
+        BotCommand(command="mines", description="Play Minesweeper in chat"),
+    ]
+    admin = [
+        BotCommand(command="memories", description="Open your private memory menu", is_ephemeral=True),
+        BotCommand(command="del", description="Delete a bot message", is_ephemeral=True),
+        BotCommand(command="play", description="Play the Minesweeper web game"),
+        BotCommand(command="mines", description="Play Minesweeper in chat"),
     ]
     try:
-        await bot.delete_my_commands(scope=BotCommandScopeAllChatAdministrators())
+        await bot.set_my_commands(admin, scope=BotCommandScopeAllChatAdministrators())
     except Exception as e:
-        print(f"Could not clear administrator command scope: {e}")
+        print(f"Could not set administrator command scope: {e}")
     await bot.set_my_commands(group, scope=BotCommandScopeAllGroupChats())
     await bot.set_my_commands(private, scope=BotCommandScopeAllPrivateChats())
     print("Configured group commands: /memories=ephemeral /del=ephemeral")
