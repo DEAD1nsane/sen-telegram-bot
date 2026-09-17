@@ -506,7 +506,7 @@ def register_handlers(router: Router, bot: "Bot") -> None:
 
     # --- Minesweeper ---
     MINESWEEPER_APP_URL = "https://minesweeper-game-production.up.railway.app/minesweeper.html"
-    GAME_SHORT_NAME = "mines"
+    GAME_SHORT_NAME = "minesweeper"
 
     @router.message(Command("play"))
     async def handle_play(message: Message):
@@ -517,7 +517,7 @@ def register_handlers(router: Router, bot: "Bot") -> None:
         )
         await message.answer_game(game_short_name=GAME_SHORT_NAME, reply_markup=keyboard)
 
-    @router.callback_query(F.game_short_name == "mines")
+    @router.callback_query(F.game_short_name == "minesweeper")
     async def handle_game_callback(callback: CallbackQuery):
         await callback.answer(url=MINESWEEPER_APP_URL)
 
