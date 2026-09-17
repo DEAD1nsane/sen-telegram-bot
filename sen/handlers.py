@@ -674,10 +674,16 @@ def register_handlers(router: Router, bot: "Bot") -> None:
                     )
 
                     flags = sum(game.flagged[r][c] for r in range(game.rows) for c in range(game.cols))
+                    cleared = sum(
+                        1
+                        for r in range(game.rows)
+                        for c in range(game.cols)
+                        if game.revealed[r][c] and game.board[r][c] != -1
+                    )
                     if game.won:
                         sub = f"🎉 {name} won! Cleared {game.rows * game.cols - game.mines} cells with {flags} flags."
                     else:
-                        sub = f"💥 {name} hit a mine! {flags} flags placed."
+                        sub = f"💥 {name} hit a mine! Cleared {cleared} tiles, {flags} flags placed."
                     rich = InputRichMessage(
                         blocks=[InputRichBlockParagraph(text=[RichTextBold(text=[RichTextSubscript(text=sub)])])]
                     )
