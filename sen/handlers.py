@@ -579,7 +579,6 @@ def register_handlers(router: Router, bot: "Bot") -> None:
             )
             await callback.answer()
 
-            # Inactivity collapse — resets on each tap
             async def collapse_inactive():
                 import asyncio
                 await asyncio.sleep(30)
