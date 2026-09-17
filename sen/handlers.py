@@ -16,6 +16,8 @@ from aiogram.types import (
     BotCommandScopeAllChatAdministrators,
     BotCommandScopeAllGroupChats,
     BotCommandScopeAllPrivateChats,
+    InlineQuery,
+    InlineQueryResultGame,
     InputRichMessage,
     Message,
     ReplyParameters,
@@ -520,6 +522,11 @@ def register_handlers(router: Router, bot: "Bot") -> None:
     @router.callback_query(F.game_short_name == "minesweeper")
     async def handle_game_callback(callback: CallbackQuery):
         await callback.answer(url=MINESWEEPER_APP_URL)
+
+    @router.inline_query()
+    async def handle_inline_game(inline: InlineQuery):
+        result = InlineQueryResultGame(id="minesweeper", game_short_name=GAME_SHORT_NAME)
+        await inline.answer([result], cache_time=0, is_personal=True)
 
     @router.message(Command("mines"))
     async def handle_mines(message: Message):
