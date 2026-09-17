@@ -16,9 +16,6 @@ from aiogram.types import (
     BotCommandScopeAllChatAdministrators,
     BotCommandScopeAllGroupChats,
     BotCommandScopeAllPrivateChats,
-    ChosenInlineResult,
-    InlineQuery,
-    InlineQueryResultGame,
     InputRichMessage,
     Message,
     ReplyParameters,
@@ -533,15 +530,11 @@ def register_handlers(router: Router, bot: "Bot") -> None:
                 raw = await redis_client.get(f"game_owner:{callback.message.chat.id}:{callback.message.message_id}")
                 if raw:
                     owner = int(raw.decode() if isinstance(raw, bytes) else str(raw))
-            elif callback.inline_message_id:
-                raw = await redis_client.get(f"game_owner_inline:{callback.inline_message_id}")
-                if raw:
-                    owner = int(raw.decode() if isinstance(raw, bytes) else str(raw))
         except Exception:
             owner = None
         if owner and uid != owner:
             await callback.answer(
-                "Only the summoner can play this one. Summon your own with /play or inline.",
+                "Only the summoner can play this one. Summon your own with /play.",
                 show_alert=True,
             )
             return
@@ -551,28 +544,6 @@ def register_handlers(router: Router, bot: "Bot") -> None:
         if owner:
             url += f"&owner={owner}"
         await callback.answer(url=url)
-
-    @router.inline_query()
-    async def handle_inline_game(inline: InlineQuery):
-        print(f"[INLINE] query from {inline.from_user.id} q={inline.query!r}")
-        try:
-            result = InlineQueryResultGame(id=f"minesweeper-{inline.from_user.id}", game_short_name=GAME_SHORT_NAME)
-            await inline.answer([result], cache_time=0, is_personal=True)
-            print("[INLINE] answered with game")
-        except Exception as e:
-            print(f"[INLINE] answer failed: {type(e).__name__}: {e}")
-
-    @router.chosen_inline_result()
-    async def handle_chosen_inline_game(chosen: ChosenInlineResult):
-        try:
-            if chosen.result_id.startswith("minesweeper") and chosen.inline_message_id:
-                await redis_client.set(
-                    f"game_owner_inline:{chosen.inline_message_id}",
-                    str(chosen.from_user.id),
-                    ex=86400,
-                )
-        except Exception:
-            pass
 
     @router.message(Command("mines"))
     async def handle_mines(message: Message):

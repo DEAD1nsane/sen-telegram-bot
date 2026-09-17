@@ -145,8 +145,6 @@ async def main() -> None:
                 "channel_post",
                 "edited_channel_post",
                 "callback_query",
-                "inline_query",
-                "chosen_inline_result",
             ],
         )
         print(f"Webhook set to {webhook_url}")
