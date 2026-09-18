@@ -964,6 +964,15 @@ def register_handlers(router: Router, bot: "Bot") -> None:
 
             media_bytes, media_mime, media_description = await _get_sticker_input(bot, message.reply_to_message)
 
+        if not media_bytes:
+            from .media import _get_custom_emoji_input
+
+            media_bytes, media_mime, media_description = await _get_custom_emoji_input(bot, message)
+            if not media_bytes and message.reply_to_message:
+                media_bytes, media_mime, media_description = await _get_custom_emoji_input(
+                    bot, message.reply_to_message
+                )
+
         if replied_video_media and not media_bytes:
             file_id, video_mime, video_size, video_description = replied_video_media
             if video_size and video_size > 20 * 1024 * 1024:

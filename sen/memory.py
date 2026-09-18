@@ -345,7 +345,13 @@ async def process_memory_text(message, action: str, temp_forget: bool = False) -
     elif action == "edit_number":
         parts = message.text.strip().split(" ", 1)
         if len(parts) != 2 or not parts[0].isdigit():
-            return True
+            await clear_interaction(cid, uid)
+            await message.answer(
+                "That wasn't a memory edit, so I treated it as a normal message. "
+                "To edit, reply with <number> <new text> — e.g. `3 love is a battlefield`.",
+                reply_to_message_id=None if message.chat.type == "private" else message.message_id,
+            )
+            return False
         idx = int(parts[0]) - 1
         raw = await redis_client.lrange(key, 0, -1)
         if 0 <= idx < len(raw):

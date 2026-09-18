@@ -44,9 +44,7 @@ def _find_rich_video(obj: Any, seen: set[int] | None = None) -> Any | None:
         block_type = str(obj.get("type", "")).lower()
         if block_type in {"video", "animation"}:
             media = obj.get("video") if block_type == "video" else obj.get("animation")
-            if media and (
-                media.get("file_id") if isinstance(media, dict) else getattr(media, "file_id", None)
-            ):
+            if media and (media.get("file_id") if isinstance(media, dict) else getattr(media, "file_id", None)):
                 return media
         for key in ("blocks", "items", "cells"):
             value = obj.get(key)
@@ -220,8 +218,12 @@ def _find_message_by_id(obj: Any, message_id: int, seen: set[int] | None = None)
             pass
     else:
         for attr in (
-            "message", "edited_message", "channel_post", "edited_channel_post",
-            "business_message", "edited_business_message",
+            "message",
+            "edited_message",
+            "channel_post",
+            "edited_channel_post",
+            "business_message",
+            "edited_business_message",
         ):
             try:
                 value = getattr(obj, attr, None)
@@ -270,7 +272,12 @@ def get_replied_video_media(message: Message) -> tuple | None:
         return None
     video = getattr(replied, "video", None)
     if video:
-        return video.file_id, getattr(video, "mime_type", None) or "video/mp4", getattr(video, "file_size", None), "Replied-to video"
+        return (
+            video.file_id,
+            getattr(video, "mime_type", None) or "video/mp4",
+            getattr(video, "file_size", None),
+            "Replied-to video",
+        )
     video_note = getattr(replied, "video_note", None)
     if video_note:
         return video_note.file_id, "video/mp4", getattr(video_note, "file_size", None), "Replied-to video note"
@@ -278,7 +285,9 @@ def get_replied_video_media(message: Message) -> tuple | None:
     if document:
         mime = (getattr(document, "mime_type", None) or "").lower()
         name = (getattr(document, "file_name", None) or "").lower()
-        if mime.startswith("video/") or name.endswith((".mp4", ".mov", ".webm", ".avi", ".mkv", ".mpeg", ".mpg", ".wmv", ".3gp")):
+        if mime.startswith("video/") or name.endswith(
+            (".mp4", ".mov", ".webm", ".avi", ".mkv", ".mpeg", ".mpg", ".wmv", ".3gp")
+        ):
             return document.file_id, mime or "video/mp4", getattr(document, "file_size", None), "Replied-to video file"
     photo = getattr(replied, "photo", None)
     if photo:
@@ -298,13 +307,17 @@ def get_replied_video_media(message: Message) -> tuple | None:
         raw = getattr(replied, attr, None)
         found = _walk_rich_media(raw)
         if found:
-            print(f"Advanced editor reply media found: message_id={getattr(replied, 'message_id', None)} description={found[3]} mime={found[1]}")
+            print(
+                f"Advanced editor reply media found: message_id={getattr(replied, 'message_id', None)} description={found[3]} mime={found[1]}"
+            )
             return found
     try:
         dumped = replied.model_dump(mode="python", exclude_none=True)
         found = _walk_rich_media(dumped)
         if found:
-            print(f"Advanced editor reply media found in dump: message_id={getattr(replied, 'message_id', None)} description={found[3]}")
+            print(
+                f"Advanced editor reply media found in dump: message_id={getattr(replied, 'message_id', None)} description={found[3]}"
+            )
             return found
     except Exception:
         pass
@@ -314,7 +327,9 @@ def get_replied_video_media(message: Message) -> tuple | None:
         if raw_replied is not None:
             found = _walk_rich_media(raw_replied)
             if found:
-                print(f"Advanced editor reply media found in raw update: message_id={getattr(replied, 'message_id', None)} description={found[3]}")
+                print(
+                    f"Advanced editor reply media found in raw update: message_id={getattr(replied, 'message_id', None)} description={found[3]}"
+                )
                 return found
     return None
 
@@ -332,14 +347,19 @@ async def get_gemini_video_file(media_bytes: bytes, media_mime: str, media_descr
         with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
             tmp.write(media_bytes)
             temp_path = tmp.name
-        print(f"Gemini video upload starting: {len(media_bytes)} bytes, mime={media_mime}, description={media_description}")
+        print(
+            f"Gemini video upload starting: {len(media_bytes)} bytes, mime={media_mime}, description={media_description}"
+        )
         uploaded = await asyncio.to_thread(
             gemini_client.files.upload,
             file=temp_path,
             config=types.UploadFileConfig(mime_type=media_mime),
         )
-        print(f"Gemini video uploaded: name={getattr(uploaded, 'name', None)} state={getattr(getattr(uploaded, 'state', None), 'name', getattr(uploaded, 'state', None))}")
+        print(
+            f"Gemini video uploaded: name={getattr(uploaded, 'name', None)} state={getattr(getattr(uploaded, 'state', None), 'name', getattr(uploaded, 'state', None))}"
+        )
         import asyncio
+
         for attempt in range(60):
             state = getattr(uploaded, "state", None)
             state_name = str(getattr(state, "name", state) or "").upper()
@@ -367,6 +387,42 @@ async def delete_gemini_file(uploaded) -> None:
         await asyncio.to_thread(gemini_client.files.delete, name=uploaded.name)
     except Exception as e:
         print(f"Gemini temporary video cleanup error: {type(e).__name__}")
+
+
+async def _get_custom_emoji_input(bot, message: Message) -> tuple[bytes, str, str] | tuple[None, None, None]:
+    """Resolve the first premium custom emoji in a message to downloadable bytes.
+
+    Telegram only sends the fallback character in text; the artwork must be
+    fetched via getCustomEmojiStickers with the entity's custom_emoji_id.
+    """
+    entities = list(getattr(message, "entities", None) or []) + list(getattr(message, "caption_entities", None) or [])
+    ids: list[str] = []
+    for e in entities:
+        cid = getattr(e, "custom_emoji_id", None)
+        if getattr(e, "type", "") == "custom_emoji" and cid and cid not in ids:
+            ids.append(cid)
+    if not ids:
+        return None, None, None
+    try:
+        stickers = await bot.get_custom_emoji_stickers(ids[:1])
+    except Exception as e:
+        print(f"Custom emoji resolve error: {type(e).__name__}")
+        return None, None, None
+    if not stickers:
+        return None, None, None
+    sticker = stickers[0]
+    file_id = sticker.file_id
+    mime = "image/webp"
+    if getattr(sticker, "is_video", False):
+        mime = "video/mp4"
+    elif getattr(sticker, "is_animated", False):
+        mime = "application/x-tgsticker"
+    emoji = getattr(sticker, "emoji", "") or ""
+    description = f"Custom emoji{': ' + emoji if emoji else ''}"
+    data = await download_telegram_media(bot, file_id)
+    if not data:
+        return None, None, None
+    return data, mime, description
 
 
 async def _get_sticker_input(bot, message: Message) -> tuple[bytes, str, str] | tuple[None, None, None]:
@@ -401,11 +457,7 @@ async def send_keyword_audio(message: Message, filename: str) -> bool:
     metadata = AUDIO_METADATA.get(filename, (None, None))
     title, performer = metadata
     try:
-        reply_params = (
-            None
-            if message.chat.type == "private"
-            else ReplyParameters(message_id=message.message_id)
-        )
+        reply_params = None if message.chat.type == "private" else ReplyParameters(message_id=message.message_id)
         path = os.path.join(_AUDIO_DIR, filename)
         if not os.path.isfile(path):
             print(f"Keyword audio file missing: {path}")

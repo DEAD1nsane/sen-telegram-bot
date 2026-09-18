@@ -15,11 +15,7 @@ if not redis_url:
     host = os.environ.get("REDISHOST", "localhost")
     port = os.environ.get("REDISPORT", "6379")
     password = os.environ.get("REDISPASSWORD", "")
-    redis_url = (
-        f"redis://default:{password}@{host}:{port}"
-        if password
-        else f"redis://{host}:{port}"
-    )
+    redis_url = f"redis://default:{password}@{host}:{port}" if password else f"redis://{host}:{port}"
 if "upstash" in redis_url.lower() and redis_url.startswith("redis://"):
     redis_url = redis_url.replace("redis://", "rediss://", 1)
 redis_client = redis.from_url(redis_url)
@@ -30,13 +26,8 @@ redis_client = redis.from_url(redis_url)
 
 API_TOKEN = os.getenv("BOT_TOKEN") or os.getenv("TELEGRAM_BOT_TOKEN") or ""
 if not API_TOKEN:
-    raise ValueError(
-        "CRITICAL CONFIGURATION ERROR: 'BOT_TOKEN' missing. "
-        "Set BOT_TOKEN in Railway Variables."
-    )
-SEARXNG_URL = os.getenv(
-    "SEARXNG_URL", "http://searxng.railway.internal:8080/search"
-).rstrip("/")
+    raise ValueError("CRITICAL CONFIGURATION ERROR: 'BOT_TOKEN' missing. Set BOT_TOKEN in Railway Variables.")
+SEARXNG_URL = os.getenv("SEARXNG_URL", "http://searxng.railway.internal:8080/search").rstrip("/")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 if not GEMINI_API_KEY:
     raise ValueError("CRITICAL CONFIGURATION ERROR: 'GEMINI_API_KEY' missing.")
@@ -50,7 +41,7 @@ BOT_INFO = None
 # ---------------------------------------------------------------------------
 
 INTERACTION_TTL = 300
-MENU_TTL = 30
+MENU_TTL = 300
 SEARCH_CACHE_TTL = 300
 AUDIO_CACHE_TTL = 60 * 60 * 24 * 30
 
