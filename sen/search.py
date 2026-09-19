@@ -64,15 +64,50 @@ def normalize_search_query(query: str) -> str:
 
 
 _EXPLICIT_SEARCH_MARKERS = (
-    "search", "google", "look up", "lookup", "find out", "search the web",
-    "browse", "web search", "internet", "online", "news", "headlines",
-    "latest", "newest", "recent", "tonight", "this week",
-    "right now", "currently", "what happened", "who won", "score", "price",
-    "release date", "schedule", "status", "update", "source", "sources",
+    "search",
+    "google",
+    "look up",
+    "lookup",
+    "find out",
+    "search the web",
+    "browse",
+    "web search",
+    "internet",
+    "online",
+    "news",
+    "headlines",
+    "latest",
+    "newest",
+    "recent",
+    "tonight",
+    "this week",
+    "right now",
+    "currently",
+    "what happened",
+    "who won",
+    "score",
+    "price",
+    "release date",
+    "schedule",
+    "status",
+    "update",
+    "source",
+    "sources",
+    "song",
+    "songs",
+    "youtube",
+    "youtu.be",
+    "video",
+    "link",
 )
 
 _IMPLICIT_QUESTION_WORDS = (
-    "who", "what", "when", "where", "why", "how",
+    "who",
+    "what",
+    "when",
+    "where",
+    "why",
+    "how",
 )
 
 
@@ -116,7 +151,10 @@ async def searx_request(
     }
     if time_range:
         params["time_range"] = time_range
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36", "Accept": "application/json"}
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+        "Accept": "application/json",
+    }
     async with httpx.AsyncClient(follow_redirects=True, timeout=12.0) as client:
         r = await client.get(SEARXNG_URL, params=params, headers=headers)
         if r.status_code != 200:
@@ -251,7 +289,11 @@ def replace_model_source_blocks(text: str) -> str:
     in_source_block = False
     for line in lines:
         stripped = line.strip()
-        if re.match(r"^[-•]\s+\S.+(?:blog|comparison|guide|vs\.?|difference|202\d|full|key|what|which|should|10\+|underrated|battle|head.to.head)", stripped, re.I):
+        if re.match(
+            r"^[-•]\s+\S.+(?:blog|comparison|guide|vs\.?|difference|202\d|full|key|what|which|should|10\+|underrated|battle|head.to.head)",
+            stripped,
+            re.I,
+        ):
             in_source_block = True
             continue
         if in_source_block and re.match(r"^[-•]\s+\S", stripped):
