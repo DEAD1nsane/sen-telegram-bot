@@ -1020,6 +1020,14 @@ def register_handlers(router: Router, bot: "Bot") -> None:
                 context_parts.append(f"Incoming Media: {media_description}")
             if search_context:
                 context_parts.append("Web Search Context:\n" + search_context)
+                if re.search(r"song|youtube|youtu\.be|\bvideo\b|\blink\b", prompt, re.I):
+                    _yt = re.search(r"URL: (https?://(?:www\.)?(?:youtube\.com|youtu\.be)\S+)", search_context)
+                    _any = _yt or re.search(r"URL: (https?://\S+)", search_context)
+                    if _any:
+                        context_parts.append(
+                            "Verified media link — send exactly this URL unmodified, nothing else invented:\n"
+                            + _any.group(1)
+                        )
             elif use_search:
                 context_parts.append(
                     "Web Search Context:\nA web search was requested, but no usable results were returned. Do not pretend that a search result supports a claim."

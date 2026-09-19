@@ -43,7 +43,7 @@ def normalize_search_query(query: str) -> str:
         flags=re.I,
     )
     query = re.sub(
-        r"^\s*(?:please\s+)?(?:send|give|show|fetch|get)\s+me\s+(?:some\s+|the\s+)?",
+        r"^\s*(?:please\s+)?(?:send|give|show|fetch|get)\s+(?:me\s+)?(?:some\s+|the\s+)?",
         "",
         query,
         flags=re.I,
