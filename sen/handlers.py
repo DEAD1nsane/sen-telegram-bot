@@ -875,7 +875,7 @@ def register_handlers(router: Router, bot: "Bot") -> None:
         action = await get_interaction(message.chat.id, message.from_user.id)
         print(f"[DEBUG] interaction check: action={action}, text={message.text[:30] if message.text else None}")
         if action and message.text and not message.text.startswith("/"):
-            if await process_memory_text(message, action, temp_forget):
+            if await process_memory_text(message, action, temp_forget, bot):
                 return
 
         text = message.text or message.caption or ""

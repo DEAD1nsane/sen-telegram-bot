@@ -327,7 +327,45 @@ def schedule_menu_expiry(bot: "Bot", chat_id: int, user_id: int, menu_id: int) -
     asyncio.create_task(expire_memory_menu(bot, chat_id, user_id, menu_id))
 
 
-async def process_memory_text(message, action: str, temp_forget: bool = False) -> bool:
+async def refresh_memory_menu(bot, chat_id: int, user_id: int, status_line: str) -> bool:
+    """Re-render the active memory menu in place after add/edit/remove."""
+    from .storage import get_memories
+
+    mid = await get_menu_identity(chat_id, user_id)
+    if mid is None:
+        return False
+    try:
+        memories = await get_memories(str(user_id))
+        body = (
+            "<b>What TGB Remembers</b>\n\n"
+            f"{status_line}\n\n"
+            "These are the saved instructions and details currently available to TGB."
+        )
+        if not memories:
+            body += "\n\nNothing has been saved yet."
+        rich = get_memory_rich_message(body, "view", memories)
+        if chat_id != user_id:
+            await bot.edit_ephemeral_message_text(
+                chat_id=chat_id,
+                receiver_user_id=user_id,
+                ephemeral_message_id=mid,
+                rich_message=rich,
+            )
+        else:
+            await bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=mid,
+                rich_message=rich,
+            )
+        await register_menu_identity(chat_id, user_id, mid)
+        schedule_menu_expiry(bot, chat_id, user_id, mid)
+        return True
+    except Exception as e:
+        print(f"Memory menu refresh error: {type(e).__name__}: {e}")
+        return False
+
+
+async def process_memory_text(message, action: str, temp_forget: bool = False, bot=None) -> bool:
     """Handle text input for memory add/edit/forget. Returns True if consumed."""
     import re
 
@@ -335,9 +373,17 @@ async def process_memory_text(message, action: str, temp_forget: bool = False) -
         return False
     uid = message.from_user.id
     cid = message.chat.id
+    if bot is None:
+        bot = getattr(message, "bot", None)
     key = f"memory_list:{uid}"
+    name = html.escape(get_user_display_name(message.from_user))
+    added_count = 0
+    edited_num = 0
+    removed_nums: list[int] = []
     if action == "add":
-        for part in [re.sub(r"<[^>]+>", "", p.strip())[:200] for p in message.text.split(",,") if p.strip()][:10]:
+        parts = [re.sub(r"<[^>]+>", "", p.strip())[:200] for p in message.text.split(",,") if p.strip()][:10]
+        added_count = len(parts)
+        for part in parts:
             if await redis_client.lpos(key, part) is None:
                 await redis_client.rpush(key, part)
         await redis_client.ltrim(key, -25, -1)
@@ -353,16 +399,15 @@ async def process_memory_text(message, action: str, temp_forget: bool = False) -
             )
             return False
         idx = int(parts[0]) - 1
+        edited_num = int(parts[0])
         raw = await redis_client.lrange(key, 0, -1)
         if 0 <= idx < len(raw):
             await redis_client.lset(key, idx, re.sub(r"<[^>]+>", "", parts[1].strip())[:200])
         await clear_interaction(cid, uid)
     elif action == "forget":
         memories = await get_memories(str(uid), temp_forget)
-        for idx in sorted(
-            {int(n.strip()) - 1 for n in message.text.split(",,") if n.strip().isdigit()},
-            reverse=True,
-        ):
+        removed_nums = sorted({int(n.strip()) for n in message.text.split(",,") if n.strip().isdigit()})
+        for idx in sorted({n - 1 for n in removed_nums}, reverse=True):
             if 0 <= idx < len(memories):
                 memories.pop(idx)
         await redis_client.delete(key)
@@ -375,25 +420,33 @@ async def process_memory_text(message, action: str, temp_forget: bool = False) -
         await message.delete()
     except Exception:
         pass
-    try:
-        from aiogram.types import InputRichMessage, InputRichBlockParagraph, RichTextBold, RichTextSubscript
-
-        if action == "add":
-            sub = "✅ Memory saved!"
-        elif action == "edit_number":
-            sub = "✅ Memory updated!"
-        elif action == "forget":
-            sub = "✅ Memory removed!"
+    if action == "add":
+        sub = f"➕ {name} added {added_count} new memories!" if added_count != 1 else f"➕ {name} added a new memory!"
+    elif action == "edit_number":
+        sub = f"📝 {name} edited memory #{edited_num}!"
+    elif action == "forget":
+        if len(removed_nums) == 1:
+            sub = f"🗑️ {name} removed memory #{removed_nums[0]}!"
+        elif len(removed_nums) > 1:
+            sub = f"🗑️ {name} removed {len(removed_nums)} memories!"
         else:
-            sub = "✅ Done!"
-        rich = InputRichMessage(
-            blocks=[InputRichBlockParagraph(text=[RichTextBold(text=[RichTextSubscript(text=sub)])])]
-        )
-        import os
-        import aiogram
+            sub = f"🗑️ {name} removed a memory!"
+    else:
+        sub = f"✅ {name} updated memories!"
+    # Refresh the menu in place so the user sees the updated list immediately.
+    # Falls back to a tiny confirmation if the menu already expired.
+    refreshed = False
+    if bot is not None:
+        refreshed = await refresh_memory_menu(bot, cid, uid, sub)
+    if not refreshed:
+        try:
+            from aiogram.types import InputRichMessage, InputRichBlockParagraph, RichTextBold, RichTextSubscript
 
-        _bot = aiogram.Bot(token=os.environ.get("BOT_TOKEN", ""))
-        await _bot.send_rich_message(chat_id=cid, rich_message=rich)
-    except Exception:
-        pass
+            rich = InputRichMessage(
+                blocks=[InputRichBlockParagraph(text=[RichTextBold(text=[RichTextSubscript(text=sub)])])]
+            )
+            if bot is not None:
+                await bot.send_rich_message(chat_id=cid, rich_message=rich)
+        except Exception:
+            pass
     return True
