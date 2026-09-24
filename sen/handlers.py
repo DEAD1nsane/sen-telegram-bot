@@ -517,8 +517,15 @@ def register_handlers(router: Router, bot: "Bot") -> None:
         )
         sent = await message.answer_game(game_short_name=GAME_SHORT_NAME, reply_markup=keyboard)
         try:
-            await redis_client.set(f"game_owner:{sent.chat.id}:{sent.message_id}", str(message.from_user.id), ex=86400)
-            await redis_client.set(f"game_last:{sent.chat.id}", str(sent.message_id), ex=86400)
+            # 90 days — game messages + Telegram scores outlive the old 24h TTL.
+            # game_last alone decides what /scores reads, so it must not expire daily.
+            await redis_client.set(
+                f"game_owner:{sent.chat.id}:{sent.message_id}", str(message.from_user.id), ex=7776000
+            )
+            await redis_client.set(f"game_last:{sent.chat.id}", str(sent.message_id), ex=7776000)
+            await redis_client.rpush(f"game_history:{sent.chat.id}", str(sent.message_id))
+            await redis_client.ltrim(f"game_history:{sent.chat.id}", -20, -1)
+            await redis_client.expire(f"game_history:{sent.chat.id}", 7776000)
         except Exception:
             pass
 
@@ -559,7 +566,16 @@ def register_handlers(router: Router, bot: "Bot") -> None:
         uid, cid = message.from_user.id, message.chat.id
         raw = await redis_client.get(f"game_last:{cid}")
         if not raw:
-            await message.answer("No /play game posted here yet.")
+            # Fallback for chats whose game_last expired under the old 24h TTL.
+            try:
+                hist = await redis_client.lrange(f"game_history:{cid}", -1, -1)
+                raw = hist[0] if hist else None
+            except Exception:
+                raw = None
+        if not raw:
+            await message.answer(
+                "No /play game posted here yet — post a fresh /play to start a new board. Old boards still keep their scores on their own game messages."
+            )
             return
         mid = int(raw.decode() if isinstance(raw, bytes) else str(raw))
         try:
