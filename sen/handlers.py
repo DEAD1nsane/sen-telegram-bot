@@ -592,6 +592,40 @@ def register_handlers(router: Router, bot: "Bot") -> None:
             lines.append(f"{s.position}. {name} — {s.score}")
         await message.answer("🏆 <b>Minesweeper high scores</b>\n" + "\n".join(lines))
 
+    @router.message(Command("onion"))
+    async def handle_onion(message: Message):
+        import os as _os
+        from urllib.parse import quote as _quote
+
+        from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
+
+        from sen.onion import normalize_onion_url, should_refuse
+
+        parts = (message.text or "").split(maxsplit=1)
+        arg = parts[1].strip() if len(parts) > 1 else ""
+        if arg and should_refuse(arg):
+            await message.answer("That request is blocked.")
+            return
+        base = (
+            _os.environ.get("WEBHOOK_URL", "https://sen-telegram-bot-production.up.railway.app/webhook") or ""
+        ).rsplit("/webhook", 1)[0]
+        if arg and normalize_onion_url(arg):
+            browser_url = f"{base}/browser?url={_quote(normalize_onion_url(arg))}"
+            label = "🧅 Open onion page"
+        elif arg:
+            browser_url = f"{base}/browser?q={_quote(arg)}"
+            label = "🧅 Open onion browser"
+        else:
+            browser_url = f"{base}/browser"
+            label = "🧅 Open onion browser"
+        keyboard = InlineKeyboardMarkup(
+            inline_keyboard=[[InlineKeyboardButton(text=label, web_app=WebAppInfo(url=browser_url))]]
+        )
+        await message.answer(
+            "🧅 <b>Onion browser</b> (research only — no logins, no purchases).\nTor runs server-side; the viewer shows sanitized text.",
+            reply_markup=keyboard,
+        )
+
     async def _schedule_inactivity_collapse(chat_id: int, user_id: int, name: str, msg) -> None:
         """Arm (or re-arm) the 30s no-tap collapse for a mines game.
 
