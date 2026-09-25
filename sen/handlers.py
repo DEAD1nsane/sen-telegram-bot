@@ -607,8 +607,12 @@ def register_handlers(router: Router, bot: "Bot") -> None:
             await message.answer("That request is blocked.")
             return
         base = (
-            _os.environ.get("WEBHOOK_URL", "https://sen-telegram-bot-production.up.railway.app/webhook") or ""
-        ).rsplit("/webhook", 1)[0]
+            (_os.environ.get("WEBHOOK_URL", "https://sen-telegram-bot-production.up.railway.app/webhook") or "")
+            .rsplit("/webhook", 1)[0]
+            .rstrip("/")
+        )
+        if not base.startswith("https://"):
+            base = "https://sen-telegram-bot-production.up.railway.app"
         if arg and normalize_onion_url(arg):
             browser_url = f"{base}/browser?url={_quote(normalize_onion_url(arg))}"
             label = "🧅 Open onion page"
@@ -618,13 +622,19 @@ def register_handlers(router: Router, bot: "Bot") -> None:
         else:
             browser_url = f"{base}/browser"
             label = "🧅 Open onion browser"
-        keyboard = InlineKeyboardMarkup(
-            inline_keyboard=[[InlineKeyboardButton(text=label, web_app=WebAppInfo(url=browser_url))]]
-        )
-        await message.answer(
-            "🧅 <b>Onion browser</b> (research only — no logins, no purchases).\nTor runs server-side; the viewer shows sanitized text.",
-            reply_markup=keyboard,
-        )
+        print(f"[ONION] browser_url={browser_url}")
+        body = "🧅 <b>Onion browser</b> (research only — no logins, no purchases).\nTor runs server-side; the viewer shows sanitized text."
+        try:
+            keyboard = InlineKeyboardMarkup(
+                inline_keyboard=[[InlineKeyboardButton(text=label, web_app=WebAppInfo(url=browser_url))]]
+            )
+            await message.answer(body, reply_markup=keyboard)
+        except Exception as e:
+            # Web App buttons are rejected in some chats/clients — fall back
+            # to a plain URL button opening the same viewer in the in-app browser.
+            print(f"[ONION] web_app button failed ({type(e).__name__}: {e}), using url button")
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=label, url=browser_url)]])
+            await message.answer(body, reply_markup=keyboard)
 
     async def _schedule_inactivity_collapse(chat_id: int, user_id: int, name: str, msg) -> None:
         """Arm (or re-arm) the 30s no-tap collapse for a mines game.
