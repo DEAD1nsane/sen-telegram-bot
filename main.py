@@ -283,6 +283,28 @@ async def main() -> None:
     app.router.add_get("/api/onion/directory", handle_onion_directory)
     app.router.add_post("/api/onion/fetch", handle_onion_fetch)
     app.router.add_get("/api/onion/search", handle_onion_search)
+
+    async def handle_onion_img(request: web.Request) -> web.Response:
+        """Proxy an .onion image through Tor so the client can render it."""
+        from sen import onion as _on
+
+        url = (request.query.get("u", "") or "").strip()
+        if _on.should_refuse(url):
+            return web.Response(status=403, text="blocked")
+        if not _on.is_onion_url(url):
+            return web.Response(status=400, text="not an onion image")
+        try:
+            ctype, data = await _on.tor_get_bytes(url)
+        except ValueError as e:
+            return web.Response(status=400, text=str(e))
+        except Exception as e:
+            print(f"[ONION] img failed: {type(e).__name__}: {e}")
+            return web.Response(status=502, text="Tor fetch failed")
+        if not ctype.startswith("image/"):
+            return web.Response(status=415, text="not an image")
+        return web.Response(body=data, content_type=ctype)
+
+    app.router.add_get("/api/onion/img", handle_onion_img)
     SimpleRequestHandler(dispatcher=dp, bot=bot).register(app, path="/webhook")
     setup_application(app, dp, bot=bot)
     app.on_cleanup.append(on_shutdown)

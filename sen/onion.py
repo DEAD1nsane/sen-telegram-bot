@@ -42,6 +42,7 @@ REFUSAL_RE = re.compile(
 
 _FETCH_TIMEOUT = 25.0
 _MAX_BYTES = 1_500_000
+_MAX_IMG_BYTES = 2_000_000
 
 
 def normalize_onion_url(raw: str) -> str | None:
@@ -90,8 +91,37 @@ async def tor_get(url: str) -> tuple[int, str, str]:
         return r.status_code, body, final
 
 
+async def tor_get_bytes(url: str) -> tuple[str, bytes]:
+    """Fetch raw bytes (for images) through Tor SOCKS, capped in size."""
+    norm = normalize_onion_url(url)
+    if not norm:
+        raise ValueError("not an .onion URL")
+    chunks: list[bytes] = []
+    total = 0
+    async with httpx.AsyncClient(
+        proxy=TOR_SOCKS,
+        timeout=_FETCH_TIMEOUT,
+        follow_redirects=True,
+        max_redirects=3,
+        headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) SenOnionBrowser/1.0"},
+    ) as client:
+        async with client.stream("GET", norm) as r:
+            final = str(r.url)
+            if not ONION_HOST_RE.search(final):
+                raise ValueError("redirect left Tor network — blocked")
+            ctype = (r.headers.get("content-type", "") or "").split(";")[0].strip().lower()
+            async for chunk in r.aiter_bytes(65536):
+                total += len(chunk)
+                if total > _MAX_IMG_BYTES:
+                    raise ValueError("file too large")
+                chunks.append(chunk)
+    return ctype, b"".join(chunks)
+
+
 def sanitize_for_viewer(raw_html: str, base_url: str) -> str:
     """Strip dangerous markup; rewrite .onion links to browser deep-links."""
+    from urllib.parse import quote as _quote
+
     text = raw_html or ""
     text = re.sub(r"(?is)<script.*?</script>", "", text)
     text = re.sub(r"(?is)<style.*?</style>", "", text)
@@ -108,7 +138,23 @@ def sanitize_for_viewer(raw_html: str, base_url: str) -> str:
         return label
 
     text = re.sub(r'(?is)<a\s[^>]*href=["\']([^"\']+)["\'][^>]*>(.*?)</a>', _link, text)
-    text = re.sub(r"(?is)<img[^>]*>", "[image — not loaded over Tor in viewer]", text)
+
+    def _img(m: re.Match) -> str:
+        tag = m.group(0)
+        src_m = re.search(r"""(?is)\bsrc\s*=\s*["']([^"']+)["']""", tag)
+        alt_m = re.search(r"""(?is)\balt\s*=\s*["']([^"']*)["']""", tag)
+        alt = _html.escape(alt_m.group(1) if alt_m else "", quote=True)
+        if not src_m:
+            return ""
+        abs_url = urljoin(base_url, src_m.group(1).strip())
+        if ONION_HOST_RE.search(abs_url):
+            # Onion images can't load on the client — proxy bytes via Tor.
+            return f'<img src="/api/onion/img?u={_quote(abs_url, safe="")}" alt="{alt}" loading="lazy">'
+        if abs_url.lower().startswith("https://"):
+            return f'<img src="{_html.escape(abs_url, quote=True)}" alt="{alt}" loading="lazy">'
+        return f"[image — not loaded: {alt}]" if alt else "[image — not loaded]"
+
+    text = re.sub(r"(?is)<img[^>]*>", _img, text)
     return text[:200_000]
 
 
