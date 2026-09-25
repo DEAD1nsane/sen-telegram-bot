@@ -23,12 +23,13 @@ GAME_SHORT_NAME = os.environ.get("ONION_GAME_SHORT_NAME", "onion")
 ONION_RE = re.compile(r"^(?:http://|https://)?[a-z2-7]{16,56}\.onion(?:/[^\s]*)?$", re.I)
 ONION_HOST_RE = re.compile(r"[a-z2-7]{16,56}\.onion", re.I)
 
-# Curated legit starting points — addresses verified against the
-# operators' own published pages (DuckDuckGo CSP headers / Wikipedia,
-# ProPublica's own Tor announcement + Wikipedia).
+# Curated legit starting points. ProPublica's onion is currently offline
+# (0/2 mirrors reachable), so it was dropped. Tor Project address verified
+# ONLINE via TorWatch; Amnesty address via the official Tor Project blog.
 DIRECTORY = [
     ("DuckDuckGo (onion)", "http://duckduckgogg42xjoc72x3sjasowoarfbgcmvfimaftt6twagswzczad.onion"),
-    ("ProPublica (onion)", "http://p53lf57qovyuvwsc6xnrppyply3vtqm7l6pcobkmyqsiofyeznfu5uqd.onion"),
+    ("Tor Project (onion)", "http://2gzyxa5ihm7nsggfxnu52rck2vv4rvmdlkiu3zzui5du4xyclen53wid.onion"),
+    ("Amnesty (onion)", "http://amnestyl337aduwuvpf57irfl54ggtnuera45ygcxzuftwxjvvmpuzqd.onion"),
 ]
 
 # Refuse to facilitate these — handler checks before fetching.
