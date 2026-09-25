@@ -4,7 +4,6 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Sen Onion Browser</title>
-<script src="https://telegram.org/js/telegram-web-app.js"></script>
 <style>
 body{font-family:system-ui,sans-serif;margin:0;padding:12px;background:var(--tg-theme-bg-color,#fff);color:var(--tg-theme-text-color,#000)}
 .bar{display:flex;gap:6px;margin-bottom:8px}
@@ -24,7 +23,6 @@ button{padding:8px 12px;border-radius:8px;border:0;background:#3390ec;color:#fff
 <div id="view">Enter a .onion address above, or pick from the directory.</div>
 <p class="warn">Research/OSINT only. No logins, no purchases, no illegal activity. Pages load server-side over Tor; images and forms are stripped. For anything sensitive use Tor Browser directly.</p>
 <script>
-Telegram.WebApp.ready();Telegram.WebApp.expand();
 const params=new URLSearchParams(location.search);
 if(params.get('url')){document.getElementById('url').value=params.get('url');go();}
 if(params.get('q')){document.getElementById('q').value=params.get('q');search();}
