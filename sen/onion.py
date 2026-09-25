@@ -19,10 +19,12 @@ TOR_SOCKS = os.environ.get("TOR_PROXY", "socks5h://tor-proxy.railway.internal:90
 ONION_RE = re.compile(r"^(?:http://|https://)?[a-z2-7]{16,56}\.onion(?:/[^\s]*)?$", re.I)
 ONION_HOST_RE = re.compile(r"[a-z2-7]{16,56}\.onion", re.I)
 
-# Curated legit starting points — only addresses verified in widespread use.
+# Curated legit starting points — addresses verified against the
+# operators' own published pages (DuckDuckGo CSP headers / Wikipedia,
+# ProPublica's own Tor announcement + Wikipedia).
 DIRECTORY = [
-    ("DuckDuckGo (onion)", "http://duckduckgogg42xjoc72x3sjasowoarfbgcmvfimaftt6twagvbroqkxad.onion"),
-    ("ProPublica (onion)", "http://p53lf57qovyuvwsc6xnrppyply3vtqm7l6pcobkmyqsiofyeznfu5uqad.onion"),
+    ("DuckDuckGo (onion)", "http://duckduckgogg42xjoc72x3sjasowoarfbgcmvfimaftt6twagswzczad.onion"),
+    ("ProPublica (onion)", "http://p53lf57qovyuvwsc6xnrppyply3vtqm7l6pcobkmyqsiofyeznfu5uqd.onion"),
 ]
 
 # Refuse to facilitate these — handler checks before fetching.
@@ -50,6 +52,15 @@ def normalize_onion_url(raw: str) -> str | None:
 
 def should_refuse(text: str) -> bool:
     return bool(REFUSAL_RE.search(text or ""))
+
+
+def is_onion_url(url: str) -> bool:
+    """True only if the URL's host is actually a .onion address."""
+    try:
+        host = (urlsplit(url).hostname or "").lower()
+        return host.endswith(".onion") and bool(ONION_HOST_RE.fullmatch(host))
+    except Exception:
+        return False
 
 
 async def tor_get(url: str) -> tuple[int, str, str]:

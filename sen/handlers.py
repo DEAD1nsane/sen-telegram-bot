@@ -640,7 +640,7 @@ def register_handlers(router: Router, bot: "Bot") -> None:
         hits = [
             {"title": r.get("title") or r.get("url", ""), "url": str(r.get("url", ""))}
             for r in raw_results
-            if ".onion" in str(r.get("url", "")).lower()
+            if _on.is_onion_url(str(r.get("url", "")))
         ][:6]
         if not hits:
             await sent.edit_text(

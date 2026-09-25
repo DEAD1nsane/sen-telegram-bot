@@ -272,7 +272,7 @@ async def main() -> None:
         out = []
         for r in results:
             url = str(r.get("url", ""))
-            if ".onion" not in url.lower():
+            if not _on.is_onion_url(url):
                 continue
             out.append({"title": r.get("title") or url, "url": url, "snippet": (r.get("content") or "")[:300]})
             if len(out) >= 8:
