@@ -14,7 +14,7 @@ from urllib.parse import urljoin, urlsplit
 
 import httpx
 
-TOR_SOCKS = os.environ.get("TOR_PROXY", "socks5h://tor-proxy.railway.internal:9050")
+TOR_SOCKS = os.environ.get("TOR_PROXY", "socks5h://tor-proxy.railway.internal:9150")
 
 # BotFather game short_name for the fullscreen browser launch (same UX as /play).
 # Register with /newgame in BotFather, then set ONION_GAME_SHORT_NAME if different.
