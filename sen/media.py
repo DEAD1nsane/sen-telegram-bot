@@ -358,8 +358,6 @@ async def get_gemini_video_file(media_bytes: bytes, media_mime: str, media_descr
         print(
             f"Gemini video uploaded: name={getattr(uploaded, 'name', None)} state={getattr(getattr(uploaded, 'state', None), 'name', getattr(uploaded, 'state', None))}"
         )
-        import asyncio
-
         for attempt in range(60):
             state = getattr(uploaded, "state", None)
             state_name = str(getattr(state, "name", state) or "").upper()
