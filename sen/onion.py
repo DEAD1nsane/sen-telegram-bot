@@ -108,12 +108,51 @@ def sanitize_for_viewer(raw_html: str, base_url: str) -> str:
 
 
 def extract_text(raw_html: str, limit: int = 4000) -> str:
-    text = re.sub(r"(?is)<script.*?</script>", " ", raw_html or "")
-    text = re.sub(r"(?is)<style.*?</style>", " ", text)
-    text = re.sub(r"(?is)<[^>]+>", " ", text)
-    text = _html.unescape(text)
-    text = re.sub(r"\s+", " ", text).strip()
-    return text[:limit]
+    """Strip markup with a real parser (regex leaves tag soup behind)."""
+    from html.parser import HTMLParser
+
+    class _Extractor(HTMLParser):
+        def __init__(self) -> None:
+            super().__init__(convert_charrefs=True)
+            self.parts: list[str] = []
+            self._skip = 0
+
+        def handle_starttag(self, tag: str, attrs: list) -> None:
+            if tag in ("script", "style", "noscript", "template", "svg"):
+                self._skip += 1
+            elif tag in ("br", "p", "div", "tr", "li", "h1", "h2", "h3", "h4", "hr", "section", "article"):
+                self.parts.append(" ")
+
+        def handle_endtag(self, tag: str) -> None:
+            if tag in ("script", "style", "noscript", "template", "svg"):
+                self._skip = max(0, self._skip - 1)
+            elif tag in ("p", "div", "tr", "li", "h1", "h2", "h3", "h4", "section", "article"):
+                self.parts.append(" ")
+
+        def handle_data(self, data: str) -> None:
+            if self._skip == 0:
+                self.parts.append(data)
+
+    ext = _Extractor()
+    try:
+        ext.feed(raw_html or "")
+    except Exception:
+        pass
+    return re.sub(r"\s+", " ", "".join(ext.parts)).strip()[:limit]
+
+
+def extract_title(raw_html: str) -> str:
+    m = re.search(r"(?is)<title[^>]*>(.*?)</title>", raw_html or "")
+    if not m:
+        return ""
+    return re.sub(r"\s+", " ", _html.unescape(re.sub(r"(?is)<[^>]+>", " ", m.group(1)))).strip()[:120]
+
+
+def extract_body_html(raw_html: str, base_url: str) -> str:
+    """Inner <body> HTML only — head/title/meta leaking into innerHTML shows as raw text."""
+    m = re.search(r"(?is)<body[^>]*>(.*)</body\s*>", raw_html or "")
+    body = m.group(1) if m else (raw_html or "")
+    return sanitize_for_viewer(body, base_url)[:200_000]
 
 
 # ---------------------------------------------------------------------------
@@ -163,11 +202,11 @@ def loading_card(label: str):
 
 def page_card(title: str, url: str, text: str, browser_url: str):
     """Fetched-page card: text excerpt + Back + full-browser buttons."""
-    from aiogram.types import InputRichBlockButtons, InputRichMessage, RichMessageButton
+    from aiogram.types import InputRichBlockButtons, InputRichBlockParagraph, InputRichMessage, RichMessageButton
+    from aiogram.types import RichTextBold
 
-    safe_title = _html.escape((title or url)[:120])
-    safe_text = _html.escape((text or "Empty page.")[:900])
-    blocks: list = [_para(f"<b>🧅 {safe_title}</b>  <code>{_html.escape(url[:80])}</code>\n{safe_text}")]
+    header = [RichTextBold(text=f"🧅 {(title or url)[:120]}"), f"  {url[:80]}\n{(text or 'Empty page.')[:900]}"]
+    blocks: list = [InputRichBlockParagraph(text=header)]
     blocks.append(
         InputRichBlockButtons(
             buttons=[

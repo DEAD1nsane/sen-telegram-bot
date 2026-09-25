@@ -615,7 +615,7 @@ def register_handlers(router: Router, bot: "Bot") -> None:
             sent = await bot.send_rich_message(chat_id=cid, rich_message=_on.loading_card(f"Loading {url} over Tor…"))
             try:
                 _status, raw, final = await _on.tor_get(url)
-                title = re.sub(r"(?is)<title[^>]*>(.*?)</title>", lambda m: m.group(1).strip(), raw or "")
+                title = _on.extract_title(raw)
                 await sent.edit_text(
                     text=None,
                     rich_message=_on.page_card(title or final, final, _on.extract_text(raw), f"{base}/browser"),
@@ -677,7 +677,7 @@ def register_handlers(router: Router, bot: "Bot") -> None:
                 return
             try:
                 _status, raw, final = await _on.tor_get(url)
-                title = re.sub(r"(?is)<title[^>]*>(.*?)</title>", lambda m: m.group(1).strip(), raw or "")
+                title = _on.extract_title(raw)
                 await callback.message.edit_text(
                     text=None,
                     rich_message=_on.page_card(title or final, final, _on.extract_text(raw), f"{base}/browser"),

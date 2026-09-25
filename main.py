@@ -244,7 +244,7 @@ async def main() -> None:
                     "ok": True,
                     "status": status,
                     "final_url": final,
-                    "html": _on.sanitize_for_viewer(raw, final),
+                    "html": _on.extract_body_html(raw, final),
                     "text": _on.extract_text(raw),
                 },
                 headers=_CORS,
