@@ -103,3 +103,102 @@ def extract_text(raw_html: str, limit: int = 4000) -> str:
     text = _html.unescape(text)
     text = re.sub(r"\s+", " ", text).strip()
     return text[:limit]
+
+
+# ---------------------------------------------------------------------------
+# Mines-style rich cards (everything stays inside Telegram)
+# ---------------------------------------------------------------------------
+
+
+def browser_base() -> str:
+    base = (
+        (os.environ.get("WEBHOOK_URL", "https://sen-telegram-bot-production.up.railway.app/webhook") or "")
+        .rsplit("/webhook", 1)[0]
+        .rstrip("/")
+    )
+    if not base.startswith("https://"):
+        base = "https://sen-telegram-bot-production.up.railway.app"
+    return base
+
+
+def _para(header: str):
+    from aiogram.types import InputRichBlockParagraph
+
+    from .memory import rich_text_from_markup
+
+    return InputRichBlockParagraph(text=rich_text_from_markup(header))
+
+
+def directory_card(browser_url: str):
+    """Start card: directory buttons + full-browser link. Taps stay in chat."""
+    from aiogram.types import InputRichBlockButtons, InputRichMessage, RichMessageButton
+
+    blocks: list = [_para("<b>🧅 ONION BROWSER</b>  <code>research only</code>")]
+    for i, (name, _url) in enumerate(DIRECTORY):
+        blocks.append(
+            InputRichBlockButtons(buttons=[RichMessageButton(text=f"🧅 {name}", callback_data=f"onion:site:{i}")])
+        )
+    blocks.append(
+        InputRichBlockButtons(buttons=[RichMessageButton(text="🌐 Full browser (web view)", url=browser_url)])
+    )
+    return InputRichMessage(blocks=blocks)
+
+
+def loading_card(label: str):
+    from aiogram.types import InputRichMessage
+
+    return InputRichMessage(blocks=[_para(f"<b>🧅 ONION BROWSER</b>\n{_html.escape(label)}")])
+
+
+def page_card(title: str, url: str, text: str, browser_url: str):
+    """Fetched-page card: text excerpt + Back + full-browser buttons."""
+    from aiogram.types import InputRichBlockButtons, InputRichMessage, RichMessageButton
+
+    safe_title = _html.escape((title or url)[:120])
+    safe_text = _html.escape((text or "Empty page.")[:900])
+    blocks: list = [_para(f"<b>🧅 {safe_title}</b>  <code>{_html.escape(url[:80])}</code>\n{safe_text}")]
+    blocks.append(
+        InputRichBlockButtons(
+            buttons=[
+                RichMessageButton(text="⬅️ Directory", callback_data="onion:dir"),
+                RichMessageButton(text="🌐 Full view", url=browser_url),
+            ]
+        )
+    )
+    return InputRichMessage(blocks=blocks)
+
+
+def results_card(query: str, results: list[dict], browser_url: str):
+    """Search-result card: one tap-button per .onion hit."""
+    from aiogram.types import InputRichBlockButtons, InputRichMessage, RichMessageButton
+
+    blocks: list = [_para(f"<b>🧅 ONION RESULTS</b>  <code>{_html.escape(query[:60])}</code>")]
+    for i, r in enumerate(results[:6]):
+        label = str(r.get("title") or r.get("url") or "link")[:40]
+        blocks.append(
+            InputRichBlockButtons(buttons=[RichMessageButton(text=f"🧅 {label}", callback_data=f"onion:res:{i}")])
+        )
+    blocks.append(
+        InputRichBlockButtons(
+            buttons=[
+                RichMessageButton(text="⬅️ Directory", callback_data="onion:dir"),
+                RichMessageButton(text="🌐 Full view", url=browser_url),
+            ]
+        )
+    )
+    return InputRichMessage(blocks=blocks)
+
+
+def error_card(message: str, browser_url: str):
+    from aiogram.types import InputRichBlockButtons, InputRichMessage, RichMessageButton
+
+    blocks: list = [_para(f"<b>🧅 ONION BROWSER</b>\n{_html.escape(message)}")]
+    blocks.append(
+        InputRichBlockButtons(
+            buttons=[
+                RichMessageButton(text="⬅️ Directory", callback_data="onion:dir"),
+                RichMessageButton(text="🌐 Full view", url=browser_url),
+            ]
+        )
+    )
+    return InputRichMessage(blocks=blocks)

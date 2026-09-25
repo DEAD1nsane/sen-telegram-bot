@@ -594,47 +594,116 @@ def register_handlers(router: Router, bot: "Bot") -> None:
 
     @router.message(Command("onion"))
     async def handle_onion(message: Message):
-        import os as _os
-        from urllib.parse import quote as _quote
+        import json as _json
 
-        from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
-
-        from sen.onion import normalize_onion_url, should_refuse
+        from sen import onion as _on
 
         parts = (message.text or "").split(maxsplit=1)
         arg = parts[1].strip() if len(parts) > 1 else ""
-        if arg and should_refuse(arg):
+        if arg and _on.should_refuse(arg):
             await message.answer("That request is blocked.")
             return
-        base = (
-            (_os.environ.get("WEBHOOK_URL", "https://sen-telegram-bot-production.up.railway.app/webhook") or "")
-            .rsplit("/webhook", 1)[0]
-            .rstrip("/")
-        )
-        if not base.startswith("https://"):
-            base = "https://sen-telegram-bot-production.up.railway.app"
-        if arg and normalize_onion_url(arg):
-            browser_url = f"{base}/browser?url={_quote(normalize_onion_url(arg))}"
-            label = "🧅 Open onion page"
-        elif arg:
-            browser_url = f"{base}/browser?q={_quote(arg)}"
-            label = "🧅 Open onion browser"
-        else:
-            browser_url = f"{base}/browser"
-            label = "🧅 Open onion browser"
-        print(f"[ONION] browser_url={browser_url}")
-        body = "🧅 <b>Onion browser</b> (research only — no logins, no purchases).\nTor runs server-side; the viewer shows sanitized text."
+        base = _on.browser_base()
+        uid, cid = message.from_user.id, message.chat.id
+
+        if not arg:
+            await bot.send_rich_message(chat_id=cid, rich_message=_on.directory_card(f"{base}/browser"))
+            return
+
+        if _on.normalize_onion_url(arg):
+            url = _on.normalize_onion_url(arg)
+            sent = await bot.send_rich_message(chat_id=cid, rich_message=_on.loading_card(f"Loading {url} over Tor…"))
+            try:
+                _status, raw, final = await _on.tor_get(url)
+                title = re.sub(r"(?is)<title[^>]*>(.*?)</title>", lambda m: m.group(1).strip(), raw or "")
+                await sent.edit_text(
+                    text=None,
+                    rich_message=_on.page_card(title or final, final, _on.extract_text(raw), f"{base}/browser"),
+                )
+            except Exception as e:
+                print(f"[ONION] fetch failed: {type(e).__name__}: {e}")
+                await sent.edit_text(
+                    text=None,
+                    rich_message=_on.error_card("Tor fetch failed — the site may be offline.", f"{base}/browser"),
+                )
+            return
+
+        # Query → clearnet search filtered to .onion links, cached for tap-buttons.
+        sent = await bot.send_rich_message(chat_id=cid, rich_message=_on.loading_card(f"Searching for {arg}…"))
         try:
-            keyboard = InlineKeyboardMarkup(
-                inline_keyboard=[[InlineKeyboardButton(text=label, web_app=WebAppInfo(url=browser_url))]]
-            )
-            await message.answer(body, reply_markup=keyboard)
+            from sen.search import searx_request
+
+            raw_results = await searx_request(arg, "general", None, 1, 10)
         except Exception as e:
-            # Web App buttons are rejected in some chats/clients — fall back
-            # to a plain URL button opening the same viewer in the in-app browser.
-            print(f"[ONION] web_app button failed ({type(e).__name__}: {e}), using url button")
-            keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=label, url=browser_url)]])
-            await message.answer(body, reply_markup=keyboard)
+            print(f"[ONION] search failed: {type(e).__name__}: {e}")
+            raw_results = []
+        hits = [
+            {"title": r.get("title") or r.get("url", ""), "url": str(r.get("url", ""))}
+            for r in raw_results
+            if ".onion" in str(r.get("url", "")).lower()
+        ][:6]
+        if not hits:
+            await sent.edit_text(
+                text=None,
+                rich_message=_on.error_card("No .onion links found — try the directory.", f"{base}/browser"),
+            )
+            return
+        try:
+            await redis_client.set(f"onion_res:{cid}:{uid}", _json.dumps(hits), ex=600)
+        except Exception:
+            pass
+        await sent.edit_text(text=None, rich_message=_on.results_card(arg, hits, f"{base}/browser"))
+
+    @router.callback_query(F.data.startswith("onion:"))
+    async def handle_onion_callback(callback: CallbackQuery):
+        import json as _json
+
+        from sen import onion as _on
+
+        uid, cid = callback.from_user.id, callback.message.chat.id
+        base = _on.browser_base()
+        parts = (callback.data or "").split(":")
+        kind = parts[1] if len(parts) > 1 else ""
+
+        async def _fetch_and_show(url: str) -> None:
+            await callback.answer("Loading over Tor…")
+            try:
+                _status, raw, final = await _on.tor_get(url)
+                title = re.sub(r"(?is)<title[^>]*>(.*?)</title>", lambda m: m.group(1).strip(), raw or "")
+                await callback.message.edit_text(
+                    text=None,
+                    rich_message=_on.page_card(title or final, final, _on.extract_text(raw), f"{base}/browser"),
+                )
+            except Exception as e:
+                print(f"[ONION] fetch failed: {type(e).__name__}: {e}")
+                await callback.message.edit_text(
+                    text=None,
+                    rich_message=_on.error_card("Tor fetch failed — the site may be offline.", f"{base}/browser"),
+                )
+                await callback.answer("Fetch failed", show_alert=True)
+
+        if kind == "dir":
+            await callback.message.edit_text(text=None, rich_message=_on.directory_card(f"{base}/browser"))
+            await callback.answer()
+        elif kind == "site" and len(parts) > 2 and parts[2].isdigit():
+            idx = int(parts[2])
+            if 0 <= idx < len(_on.DIRECTORY):
+                await _fetch_and_show(_on.DIRECTORY[idx][1])
+            else:
+                await callback.answer("Unknown site", show_alert=True)
+        elif kind == "res" and len(parts) > 2 and parts[2].isdigit():
+            try:
+                raw = await redis_client.get(f"onion_res:{cid}:{uid}")
+                hits = _json.loads(raw) if raw else []
+            except Exception:
+                hits = []
+            idx = int(parts[2])
+            if hits and 0 <= idx < len(hits):
+                await _fetch_and_show(hits[idx]["url"])
+            else:
+                await callback.answer("Results expired — search again with /onion.", show_alert=True)
+        else:
+            await callback.answer()
 
     async def _schedule_inactivity_collapse(chat_id: int, user_id: int, name: str, msg) -> None:
         """Arm (or re-arm) the 30s no-tap collapse for a mines game.
