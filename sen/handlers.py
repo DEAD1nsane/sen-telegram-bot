@@ -667,6 +667,14 @@ def register_handlers(router: Router, bot: "Bot") -> None:
 
         async def _fetch_and_show(url: str) -> None:
             await callback.answer("Loading over Tor…")
+            if not _on.normalize_onion_url(url):
+                print(f"[ONION] invalid address tapped: {url[:120]}")
+                await callback.message.edit_text(
+                    text=None,
+                    rich_message=_on.error_card(f"Not a valid onion address: {url[:80]}", f"{base}/browser"),
+                )
+                await callback.answer("Invalid onion address", show_alert=True)
+                return
             try:
                 _status, raw, final = await _on.tor_get(url)
                 title = re.sub(r"(?is)<title[^>]*>(.*?)</title>", lambda m: m.group(1).strip(), raw or "")
@@ -675,10 +683,12 @@ def register_handlers(router: Router, bot: "Bot") -> None:
                     rich_message=_on.page_card(title or final, final, _on.extract_text(raw), f"{base}/browser"),
                 )
             except Exception as e:
-                print(f"[ONION] fetch failed: {type(e).__name__}: {e}")
+                print(f"[ONION] fetch failed for {url[:120]}: {type(e).__name__}: {e}")
                 await callback.message.edit_text(
                     text=None,
-                    rich_message=_on.error_card("Tor fetch failed — the site may be offline.", f"{base}/browser"),
+                    rich_message=_on.error_card(
+                        f"Tor fetch failed ({type(e).__name__}) — the site may be offline.", f"{base}/browser"
+                    ),
                 )
                 await callback.answer("Fetch failed", show_alert=True)
 
