@@ -16,6 +16,10 @@ import httpx
 
 TOR_SOCKS = os.environ.get("TOR_PROXY", "socks5h://tor-proxy.railway.internal:9050")
 
+# BotFather game short_name for the fullscreen browser launch (same UX as /play).
+# Register with /newgame in BotFather, then set ONION_GAME_SHORT_NAME if different.
+GAME_SHORT_NAME = os.environ.get("ONION_GAME_SHORT_NAME", "onion")
+
 ONION_RE = re.compile(r"^(?:http://|https://)?[a-z2-7]{16,56}\.onion(?:/[^\s]*)?$", re.I)
 ONION_HOST_RE = re.compile(r"[a-z2-7]{16,56}\.onion", re.I)
 
