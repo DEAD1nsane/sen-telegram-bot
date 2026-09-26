@@ -99,6 +99,24 @@ _EXPLICIT_SEARCH_MARKERS = (
     "youtu.be",
     "video",
     "link",
+    # Recency / office-holder signals. Short questions like "is Biden still
+    # president" carry no other trigger, so without these the model answers
+    # from stale training data instead of searching.
+    "still",
+    "as of",
+    "up to date",
+    "so far",
+    "nowadays",
+    "these days",
+    "this year",
+    "who is the",
+    "who's the",
+    "president",
+    "prime minister",
+    "who won",
+    "who won the",
+    "still in office",
+    "current officeholder",
 )
 
 _IMPLICIT_QUESTION_WORDS = (

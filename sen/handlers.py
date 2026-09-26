@@ -146,21 +146,47 @@ def sanitize_rich_html(text: str) -> str:
     return text.strip()
 
 
+def _split_inline_numbered(text: str) -> str:
+    """Split run-on numbered lists ("1. a 2. b 3. c") onto separate lines.
+
+    Only fires on a strictly sequential run starting at 1, so ordinary prose
+    like "Version 2. 3 items" or decimals are left alone.
+    """
+    pattern = re.compile(r"(?<![\d.])(\d{1,2})[.)](?=\s)")
+    matches = list(pattern.finditer(text))
+    if len(matches) < 2 or int(matches[0].group(1)) != 1:
+        return text
+    for prev, cur in zip(matches, matches[1:]):
+        if int(cur.group(1)) != int(prev.group(1)) + 1:
+            return text
+    for i, match in enumerate(matches):
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
+        if not text[match.end() : end].strip():
+            return text  # bare numbers with no item text — leave as prose
+    out = [text[: matches[0].start()]]
+    for i, match in enumerate(matches):
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
+        out.append(text[match.start() : end].strip())
+    return "\n".join(out)
+
+
 def _ensure_list_breaks(text: str) -> str:
     """Ensure numbered and bullet list items are on separate lines for markdown rendering."""
     if not text:
         return text
+    # The lookbehind keeps a preceding list marker ("1. 2.") from being read
+    # as sentence punctuation, which used to split run-on lists apart.
     text = re.sub(
-        r"(?<=[.;:!?])\s+(\d+)\.\s+",
+        r"(?<![0-9]\.)(?<=[.;:!?])\s+(\d+)\.\s+",
         r"\n\n\1. ",
         text,
     )
     text = re.sub(
-        r"(?<=[.;:!?])\s+([-•*])\s+",
+        r"(?<![0-9]\.)(?<=[.;:!?])\s+([-•*])\s+",
         r"\n\n\1 ",
         text,
     )
-    return text
+    return _split_inline_numbered(text)
 
 
 def _markdown_to_rich_html(text: str) -> str:
@@ -225,49 +251,63 @@ def clean_ai_output(text: str, plain_lists: bool = False) -> str:
     if not plain_lists:
         lines = text.split("\n")
         result = []
-        list_stack = []
+        list_stack: list[tuple[str, int]] = []
+        in_list = False
         for line in lines:
             stripped = line.strip()
             indent = len(line) - len(line.lstrip())
             bullet_match = re.match(r"^[•\-\*·‣∙➤►▸▹◦○●▪▫–—]\s*(.+)", stripped)
-            numbered_match = re.match(r"^(\d+)\.\s+(.+)", stripped)
+            numbered_match = re.match(r"^(\d+)[.)]\s+(.+)", stripped)
             if bullet_match:
-                while list_stack and list_stack[-1][0] in ("ul", "ol"):
-                    tag = list_stack[-1][0]
-                    result.append(f"</{tag}>")
-                    list_stack.pop()
-                if not list_stack or list_stack[-1] != ("ul", indent):
-                    result.append("<ul>")
-                    list_stack.append(("ul", indent))
-                result.append(f"<li>{bullet_match.group(1)}</li>")
+                kind, body = "ul", bullet_match.group(1)
             elif numbered_match:
-                while list_stack and list_stack[-1][0] in ("ul", "ol"):
-                    tag = list_stack[-1][0]
+                kind, body = "ol", numbered_match.group(2)
+            else:
+                kind = body = None
+            if kind:
+                # Close open lists only when the type or indent actually changes,
+                # so consecutive items stay inside ONE list (Telegram renumbers
+                # each <ol> from 1, which is what broke numbering before).
+                while list_stack and list_stack[-1] != (kind, indent):
+                    tag = list_stack.pop()[0]
                     result.append(f"</{tag}>")
-                    list_stack.pop()
-                if not list_stack or list_stack[-1] != ("ol", indent):
-                    result.append("<ol>")
-                    list_stack.append(("ol", indent))
-                result.append(f"<li>{numbered_match.group(2)}</li>")
+                if not list_stack:
+                    result.append(f"<{kind}>")
+                    list_stack.append((kind, indent))
+                result.append(f"<li>{body}</li>")
+                in_list = True
+            elif stripped and in_list:
+                # Continuation line of the previous list item.
+                result[-1] = result[-1][:-5] + " " + stripped + "</li>"
             else:
                 while list_stack:
-                    tag = list_stack[-1][0]
+                    tag = list_stack.pop()[0]
                     result.append(f"</{tag}>")
-                    list_stack.pop()
+                in_list = False
                 result.append(line)
         while list_stack:
-            tag = list_stack[-1][0]
+            tag = list_stack.pop()[0]
             result.append(f"</{tag}>")
-            list_stack.pop()
         text = "\n".join(result)
 
     return sanitize_rich_html(render_math_markup(text)).strip()
 
 
-async def send_ai_response(bot: "Bot", chat_id: int, msg_id: int, response_text: str, is_private: bool):
-    """Send a response."""
+async def send_ai_response(
+    bot: "Bot",
+    chat_id: int,
+    msg_id: int,
+    response_text: str,
+    is_private: bool,
+    thread_id: int | None = None,
+):
+    """Send a response, keeping it in the originating forum topic."""
     rich = InputRichMessage(html=sanitize_rich_html(render_math_markup(response_text)))
     kwargs: dict = {"chat_id": chat_id, "rich_message": rich}
+    # Without this the reply lands in General instead of the topic it was
+    # asked in, which reads as the bot "forgetting" the conversation.
+    if thread_id:
+        kwargs["message_thread_id"] = thread_id
     if not is_private:
         kwargs["reply_parameters"] = ReplyParameters(message_id=msg_id)
     return await bot.send_rich_message(**kwargs)
@@ -1061,6 +1101,9 @@ def register_handlers(router: Router, bot: "Bot") -> None:
             today = datetime.now(timezone.utc).strftime("%A, %B %d, %Y")
             instructions = (
                 f"Today's date is {today}.\n"
+                "Your training data has a cutoff and is likely well out of date. The date above is authoritative — use it to judge what is current.\n"
+                "For anything time-sensitive (who holds office now, who won, prices, laws, standings, recent events) Web Search Context is your ONLY reliable source. Never answer those from memory, and never assume a past state is still true.\n"
+                "If a time-sensitive question arrives with no Web Search Context, say plainly that your information may be out of date instead of asserting a possibly stale fact.\n"
                 "Never use standard AI pleasantries.\n"
                 "Keep casual replies brief, but expand when asked for detail.\n"
                 "If the user changes subject, immediately follow the new subject.\n"
@@ -1132,7 +1175,9 @@ def register_handlers(router: Router, bot: "Bot") -> None:
             ).strip()
 
             try:
-                await send_ai_response(bot, cid, mid, response_text, is_private)
+                await send_ai_response(
+                    bot, cid, mid, response_text, is_private, getattr(message, "message_thread_id", None)
+                )
             except Exception as rich_error:
                 print(f"Rich response delivery error: {rich_error}")
                 fallback = (
