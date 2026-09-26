@@ -592,63 +592,6 @@ def register_handlers(router: Router, bot: "Bot") -> None:
             lines.append(f"{s.position}. {name} — {s.score}")
         await message.answer("🏆 <b>Minesweeper high scores</b>\n" + "\n".join(lines))
 
-    from sen.onion import GAME_SHORT_NAME as _ONION_GAME
-
-    @router.message(Command("onion"))
-    async def handle_onion(message: Message):
-        """Launch the onion browser fullscreen, exactly like /play launches mines."""
-        from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
-
-        from sen import onion as _on
-
-        parts = (message.text or "").split(maxsplit=1)
-        arg = parts[1].strip() if len(parts) > 1 else ""
-        if arg and _on.should_refuse(arg):
-            await message.answer("That request is blocked.")
-            return
-        keyboard = InlineKeyboardMarkup(
-            inline_keyboard=[[InlineKeyboardButton(text="🧅 Open onion browser", callback_game={})]]
-        )
-        try:
-            sent = await message.answer_game(game_short_name=_ONION_GAME, reply_markup=keyboard)
-        except Exception as e:
-            print(f"[ONION] game not registered ({type(e).__name__})")
-            await message.answer("The onion game isn't registered in BotFather yet — use the Menu button mini app for now.")
-            return
-        if arg:
-            try:
-                await redis_client.set(f"onion_target:{sent.chat.id}:{sent.message_id}", arg, ex=3600)
-            except Exception:
-                pass
-
-    @router.callback_query(F.game_short_name == _ONION_GAME)
-    async def handle_onion_game_callback(callback: CallbackQuery):
-        from urllib.parse import quote as _quote
-
-        from sen import onion as _on
-
-        base = _on.browser_base()
-        target = ""
-        try:
-            if callback.message is not None:
-                raw = await redis_client.get(
-                    f"onion_target:{callback.message.chat.id}:{callback.message.message_id}"
-                )
-                if raw:
-                    target = raw.decode() if isinstance(raw, bytes) else str(raw)
-        except Exception:
-            target = ""
-        if target and _on.should_refuse(target):
-            await callback.answer("That request is blocked.", show_alert=True)
-            return
-        if target and _on.normalize_onion_url(target):
-            url = f"{base}/browser?url={_quote(_on.normalize_onion_url(target))}"
-        elif target:
-            url = f"{base}/browser?q={_quote(target)}"
-        else:
-            url = f"{base}/browser"
-        await callback.answer(url=url)
-
     async def _schedule_inactivity_collapse(chat_id: int, user_id: int, name: str, msg) -> None:
         """Arm (or re-arm) the 30s no-tap collapse for a mines game.
 

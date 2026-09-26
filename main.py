@@ -49,7 +49,6 @@ async def configure_commands() -> None:
         BotCommand(command="play", description="Play the Minesweeper web game"),
         BotCommand(command="scores", description="Show Minesweeper high scores"),
         BotCommand(command="mines", description="Play Minesweeper in chat using Python"),
-        BotCommand(command="onion", description="Open the Tor onion browser"),
     ]
     private = [
         BotCommand(command="memories", description="Manage your instructed memories"),
@@ -57,7 +56,6 @@ async def configure_commands() -> None:
         BotCommand(command="play", description="Play the Minesweeper web game"),
         BotCommand(command="scores", description="Show Minesweeper high scores"),
         BotCommand(command="mines", description="Play Minesweeper in chat using Python"),
-        BotCommand(command="onion", description="Open the Tor onion browser"),
     ]
     admin = [
         BotCommand(command="memories", description="Open your private memory menu", is_ephemeral=True),
@@ -65,7 +63,6 @@ async def configure_commands() -> None:
         BotCommand(command="play", description="Play the Minesweeper web game"),
         BotCommand(command="scores", description="Show Minesweeper high scores"),
         BotCommand(command="mines", description="Play Minesweeper in chat using Python"),
-        BotCommand(command="onion", description="Open the Tor onion browser"),
     ]
     try:
         await bot.set_my_commands(admin, scope=BotCommandScopeAllChatAdministrators())
@@ -213,127 +210,6 @@ async def main() -> None:
     app.router.add_route("OPTIONS", "/score", handle_score_options)
     app.router.add_post("/score", handle_score)
 
-    # --- Onion browser (Telegram Web App, Tor stays server-side) ---
-    import pathlib as _pl
-
-    async def handle_browser(_request: web.Request) -> web.Response:
-        page = (_pl.Path(__file__).parent / "web" / "onion.html").read_text()
-        return web.Response(text=page, content_type="text/html")
-
-    async def handle_onion_directory(_request: web.Request) -> web.Response:
-        from sen.onion import DIRECTORY
-
-        return web.json_response({"ok": True, "sites": [{"name": n, "url": u} for n, u in DIRECTORY]}, headers=_CORS)
-
-    async def handle_onion_fetch(request: web.Request) -> web.Response:
-        from sen import onion as _on
-
-        try:
-            data = await request.json()
-        except Exception:
-            return web.json_response({"ok": False, "error": "bad json"}, status=400, headers=_CORS)
-        url = str(data.get("url", ""))
-        if _on.should_refuse(url):
-            return web.json_response({"ok": False, "error": "blocked"}, status=403, headers=_CORS)
-        if not _on.normalize_onion_url(url):
-            return web.json_response({"ok": False, "error": "not a valid .onion URL"}, status=400, headers=_CORS)
-        try:
-            status, raw, final = await _on.tor_get(url)
-            return web.json_response(
-                {
-                    "ok": True,
-                    "status": status,
-                    "final_url": final,
-                    "html": _on.extract_body_html(raw, final),
-                    "text": _on.extract_text(raw),
-                },
-                headers=_CORS,
-            )
-        except ValueError as e:
-            return web.json_response({"ok": False, "error": str(e)}, status=400, headers=_CORS)
-        except Exception as e:
-            print(f"[ONION] fetch failed: {type(e).__name__}")
-            return web.json_response({"ok": False, "error": "Tor fetch failed"}, status=502, headers=_CORS)
-
-    async def handle_onion_search(request: web.Request) -> web.Response:
-        from sen import onion as _on
-        from sen.search import searx_request
-
-        q = (request.query.get("q", "") or "").strip()
-        if not q:
-            return web.json_response({"ok": False, "error": "empty query"}, status=400, headers=_CORS)
-        if _on.should_refuse(q):
-            return web.json_response({"ok": False, "error": "blocked"}, status=403, headers=_CORS)
-        try:
-            results = await searx_request(q, "general", None, 1, 10)
-        except Exception as e:
-            print(f"[ONION] search failed: {type(e).__name__}")
-            return web.json_response({"ok": False, "error": "search failed"}, status=502, headers=_CORS)
-        out = []
-        for r in results:
-            url = str(r.get("url", ""))
-            if not url.lower().startswith(("http://", "https://")):
-                continue
-            out.append(
-                {
-                    "title": r.get("title") or url,
-                    "url": url,
-                    "snippet": (r.get("content") or "")[:300],
-                    "onion": _on.is_onion_url(url),
-                }
-            )
-            if len(out) >= 8:
-                break
-        return web.json_response({"ok": True, "results": out}, headers=_CORS)
-
-    app.router.add_get("/browser", handle_browser)
-    app.router.add_get("/api/onion/directory", handle_onion_directory)
-    app.router.add_post("/api/onion/fetch", handle_onion_fetch)
-    app.router.add_get("/api/onion/search", handle_onion_search)
-
-    async def handle_onion_img(request: web.Request) -> web.Response:
-        """Proxy an .onion image through Tor so the client can render it."""
-        from sen import onion as _on
-
-        url = (request.query.get("u", "") or "").strip()
-        if _on.should_refuse(url):
-            return web.Response(status=403, text="blocked")
-        if not _on.is_onion_url(url):
-            return web.Response(status=400, text="not an onion image")
-        try:
-            ctype, data = await _on.tor_get_bytes(url)
-        except ValueError as e:
-            return web.Response(status=400, text=str(e))
-        except Exception as e:
-            print(f"[ONION] img failed: {type(e).__name__}")
-            return web.Response(status=502, text="Tor fetch failed")
-        if not ctype.startswith("image/"):
-            return web.Response(status=415, text="not an image")
-        return web.Response(body=data, content_type=ctype)
-
-    app.router.add_get("/api/onion/img", handle_onion_img)
-
-    async def handle_onion_css(request: web.Request) -> web.Response:
-        """Proxy an .onion stylesheet over Tor so pages keep their styling."""
-        from sen import onion as _on
-
-        url = (request.query.get("u", "") or "").strip()
-        if _on.should_refuse(url):
-            return web.Response(status=403, text="blocked")
-        if not _on.is_onion_url(url):
-            return web.Response(status=400, text="not an onion stylesheet")
-        try:
-            ctype, data = await _on.tor_get_bytes(url)
-        except ValueError as e:
-            return web.Response(status=400, text=str(e))
-        except Exception as e:
-            print(f"[ONION] css failed: {type(e).__name__}")
-            return web.Response(status=502, text="Tor fetch failed")
-        if not ctype.startswith("text/"):
-            return web.Response(status=415, text="not a stylesheet")
-        return web.Response(body=data, content_type="text/css")
-
-    app.router.add_get("/api/onion/css", handle_onion_css)
     SimpleRequestHandler(dispatcher=dp, bot=bot).register(app, path="/webhook")
     setup_application(app, dp, bot=bot)
     app.on_cleanup.append(on_shutdown)
