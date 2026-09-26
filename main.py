@@ -252,7 +252,7 @@ async def main() -> None:
         except ValueError as e:
             return web.json_response({"ok": False, "error": str(e)}, status=400, headers=_CORS)
         except Exception as e:
-            print(f"[ONION] fetch failed: {type(e).__name__}: {e}")
+            print(f"[ONION] fetch failed: {type(e).__name__}")
             return web.json_response({"ok": False, "error": "Tor fetch failed"}, status=502, headers=_CORS)
 
     async def handle_onion_search(request: web.Request) -> web.Response:
@@ -267,7 +267,7 @@ async def main() -> None:
         try:
             results = await searx_request(q, "general", None, 1, 10)
         except Exception as e:
-            print(f"[ONION] search failed: {type(e).__name__}: {e}")
+            print(f"[ONION] search failed: {type(e).__name__}")
             return web.json_response({"ok": False, "error": "search failed"}, status=502, headers=_CORS)
         out = []
         for r in results:
@@ -305,7 +305,7 @@ async def main() -> None:
         except ValueError as e:
             return web.Response(status=400, text=str(e))
         except Exception as e:
-            print(f"[ONION] img failed: {type(e).__name__}: {e}")
+            print(f"[ONION] img failed: {type(e).__name__}")
             return web.Response(status=502, text="Tor fetch failed")
         if not ctype.startswith("image/"):
             return web.Response(status=415, text="not an image")
@@ -327,7 +327,7 @@ async def main() -> None:
         except ValueError as e:
             return web.Response(status=400, text=str(e))
         except Exception as e:
-            print(f"[ONION] css failed: {type(e).__name__}: {e}")
+            print(f"[ONION] css failed: {type(e).__name__}")
             return web.Response(status=502, text="Tor fetch failed")
         if not ctype.startswith("text/"):
             return web.Response(status=415, text="not a stylesheet")

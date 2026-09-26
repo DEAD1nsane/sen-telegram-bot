@@ -612,7 +612,7 @@ def register_handlers(router: Router, bot: "Bot") -> None:
         try:
             sent = await message.answer_game(game_short_name=_ONION_GAME, reply_markup=keyboard)
         except Exception as e:
-            print(f"[ONION] game not registered ({type(e).__name__}: {e})")
+            print(f"[ONION] game not registered ({type(e).__name__})")
             await message.answer("The onion game isn't registered in BotFather yet — use the Menu button mini app for now.")
             return
         if arg:
