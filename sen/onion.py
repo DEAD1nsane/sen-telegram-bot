@@ -30,6 +30,7 @@ DIRECTORY = [
     ("DuckDuckGo (onion)", "http://duckduckgogg42xjoc72x3sjasowoarfbgcmvfimaftt6twagswzczad.onion"),
     ("Tor Project (onion)", "http://2gzyxa5ihm7nsggfxnu52rck2vv4rvmdlkiu3zzui5du4xyclen53wid.onion"),
     ("Amnesty (onion)", "http://amnestyl337aduwuvpf57irfl54ggtnuera45ygcxzuftwxjvvmpuzqd.onion"),
+    ("Custom site", "http://37djtvjcpiprohcrlyvlhfil45kdlfizsyvilqskgvdrafn5mocz4cid.onion"),
 ]
 
 # Refuse to facilitate these — handler checks before fetching.
@@ -119,15 +120,68 @@ async def tor_get_bytes(url: str) -> tuple[str, bytes]:
 
 
 def sanitize_for_viewer(raw_html: str, base_url: str) -> str:
-    """Strip dangerous markup; rewrite .onion links to browser deep-links."""
+    """Keep styling, drop active content. Scripts/forms/iframes are stripped
+    (untrusted onion JS must never run in our origin); CSS is kept so pages
+    stay readable, with stylesheets proxied over Tor."""
     from urllib.parse import quote as _quote
 
     text = raw_html or ""
     text = re.sub(r"(?is)<script.*?</script>", "", text)
-    text = re.sub(r"(?is)<style.*?</style>", "", text)
     text = re.sub(r"(?is)<iframe.*?</iframe>", "", text)
-    text = re.sub(r"(?is)<form.*?</form>", "", text)
-    text = re.sub(r"(?is)<(input|button|select|textarea)[^>]*>", "", text)
+    text = re.sub(r"(?is)<(object|embed)[^>]*>", "", text)
+    text = re.sub(r'(?is)<meta[^>]*http-equiv\s*=\s*["\']?refresh["\']?[^>]*>', "", text)
+
+    def _form(m: re.Match) -> str:
+        # Keep read-only GET search forms (DuckDuckGo etc.) so the viewer can
+        # submit them over Tor. Anything that sends data (POST, passwords)
+        # stays stripped — no logins, no submissions.
+        block = m.group(0)
+        if (
+            re.search(r"""(?is)\bmethod\s*=\s*["']?post""", block)
+            or re.search(r"""(?is)\btype\s*=\s*["']?password""", block)
+            or re.search(r"""(?is)\bname\s*=\s*["']?passw""", block)
+        ):
+            return ""
+        opening = re.search(r"(?is)<form\b[^>]*>", block)
+        action_m = re.search(r"""(?is)\baction\s*=\s*["']([^"']*)["']""", opening.group(0)) if opening else None
+        abs_action = urljoin(base_url, (action_m.group(1).strip() if action_m else base_url))
+        if not ONION_HOST_RE.search(abs_action):
+            return ""
+        new_opening = re.sub(
+            r"""(?is)\baction\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)""",
+            f'action="{_html.escape(abs_action, quote=True)}"',
+            opening.group(0),
+            count=1,
+        )
+        if new_opening == opening.group(0):
+            new_opening = new_opening[:-1] + f' action="{_html.escape(abs_action, quote=True)}">'
+        return new_opening + block[opening.end() :]
+
+    text = re.sub(r"(?is)<form\b[^>]*>.*?</form>", _form, text)
+
+    def _scrub_attrs(tag: str) -> str:
+        # Remove JS event handlers; keep style= and everything else.
+        tag = re.sub(r"""(?is)\son\w+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)""", "", tag)
+        tag = re.sub(r"""(?is)\s(srcset|data-src|data-srcset)\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)""", "", tag)
+        return tag
+
+    text = re.sub(r"(?is)<(?!/?(?:a|img|link)\b)[a-z][^>]*>", lambda m: _scrub_attrs(m.group(0)), text)
+
+    def _link_tag(m: re.Match) -> str:
+        tag = m.group(0)
+        if not re.search(r"""(?is)\brel\s*=\s*["']?stylesheet""", tag):
+            return ""  # drop icons, preloads, etc.
+        href_m = re.search(r"""(?is)\bhref\s*=\s*["']([^"']+)["']""", tag)
+        if not href_m:
+            return ""
+        abs_url = urljoin(base_url, href_m.group(1).strip())
+        if ONION_HOST_RE.search(abs_url):
+            return f'<link rel="stylesheet" href="/api/onion/css?u={_quote(abs_url, safe="")}">'
+        if abs_url.lower().startswith("https://"):
+            return f'<link rel="stylesheet" href="{_html.escape(abs_url, quote=True)}">'
+        return ""
+
+    text = re.sub(r"(?is)<link[^>]*>", _link_tag, text)
 
     def _link(m: re.Match) -> str:
         href = (m.group(1) or "").strip()
@@ -135,6 +189,10 @@ def sanitize_for_viewer(raw_html: str, base_url: str) -> str:
         abs_url = urljoin(base_url, href)
         if ONION_HOST_RE.search(abs_url):
             return f'<a href="/browser?url={_html.escape(abs_url, quote=True)}">{label}</a>'
+        if abs_url.lower().startswith("https://"):
+            # Clearnet result links (e.g. DuckDuckGo results) navigate the
+            # viewer webview directly — no Tor needed for clearnet.
+            return f'<a href="{_html.escape(abs_url, quote=True)}">{label}</a>'
         return label
 
     text = re.sub(r'(?is)<a\s[^>]*href=["\']([^"\']+)["\'][^>]*>(.*?)</a>', _link, text)

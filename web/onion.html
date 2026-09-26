@@ -18,11 +18,13 @@ button{padding:8px 12px;border-radius:8px;border:0;background:#3390ec;color:#fff
 <body>
 <h3>🧅 Sen Onion Browser</h3>
 <div class="bar"><input id="url" placeholder="paste .onion URL"><button onclick="go()">Go</button></div>
-<div class="bar"><input id="q" placeholder="search clearnet for .onion links"><button onclick="search()">Search</button></div>
+<div class="bar"><input id="q" placeholder="search clearnet (results open here)"><button onclick="search()">Search</button></div>
 <div class="dir" id="dir"></div>
 <div id="view">Enter a .onion address above, or pick from the directory.</div>
-<p class="warn">Research/OSINT only. No logins, no purchases, no illegal activity. Pages load server-side over Tor; images and forms are stripped. For anything sensitive use Tor Browser directly.</p>
+<p class="warn">Research/OSINT only. No logins, no purchases, no illegal activity. Pages load server-side over Tor; scripts and logins are stripped. For anything sensitive use Tor Browser directly.</p>
 <script>
+let currentUrl='';
+function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
 const params=new URLSearchParams(location.search);
 if(params.get('url')){document.getElementById('url').value=params.get('url');go();}
 if(params.get('q')){document.getElementById('q').value=params.get('q');search();}
@@ -37,10 +39,21 @@ async function go(){
     const r=await fetch('/api/onion/fetch',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url:u})});
     const d=await r.json();
     if(!d.ok){v.innerHTML='<span class=err>'+d.error+'</span>';return;}
-    v.innerHTML='<p><b>'+d.final_url+'</b> (HTTP '+d.status+')</p><div>'+d.html+'</div>';
+    currentUrl=d.final_url;
+    v.innerHTML='<p><b>'+esc(d.final_url)+'</b> (HTTP '+d.status+')</p><div>'+d.html+'</div>';
     v.querySelectorAll('a[href^="/browser?url="]').forEach(a=>{a.onclick=e=>{e.preventDefault();openUrl(new URLSearchParams(a.getAttribute('href').split('?')[1]).get('url'));};});
   }catch(e){v.innerHTML='<span class=err>fetch failed: '+e+'</span>';}
 }
+// Route page search forms (e.g. DuckDuckGo's box) through the Tor viewer.
+document.addEventListener('submit',e=>{
+  const f=e.target;
+  if(!f||f.tagName!=='FORM')return;
+  e.preventDefault();
+  let action=f.getAttribute('action')||currentUrl;
+  if(!/\.onion/i.test(action)){return;}
+  const qs=new URLSearchParams(new FormData(f)).toString();
+  openUrl(action.split('?')[0]+(qs?'?'+qs:''));
+});
 async function search(){
   const q=document.getElementById('q').value.trim();
   const v=document.getElementById('view');v.textContent='Searching…';
@@ -48,8 +61,14 @@ async function search(){
     const r=await fetch('/api/onion/search?q='+encodeURIComponent(q));
     const d=await r.json();
     if(!d.ok){v.innerHTML='<span class=err>'+d.error+'</span>';return;}
-    if(!d.results.length){v.textContent='No .onion links found in clearnet results.';return;}
-    v.innerHTML=d.results.map(x=>`<p><a href="#" onclick="openUrl('${x.url}');return false;">${x.title}</a><br><small>${x.url}</small><br>${x.snippet||''}</p>`).join('');
+    if(!d.results.length){v.textContent='No results found.';return;}
+    v.innerHTML=d.results.map(x=>{
+      const t=esc(x.title), u=esc(x.url), s=esc(x.snippet||'');
+      const link=x.onion
+        ?`<a href="#" onclick="openUrl('${u}');return false;">${t}</a>`
+        :`<a href="${u}">${t}</a>`;
+      return `<p>${link}<br><small>${u}</small><br>${s}</p>`;
+    }).join('');
   }catch(e){v.innerHTML='<span class=err>search failed: '+e+'</span>';}
 }
 </script>

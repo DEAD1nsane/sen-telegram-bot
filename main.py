@@ -272,9 +272,16 @@ async def main() -> None:
         out = []
         for r in results:
             url = str(r.get("url", ""))
-            if not _on.is_onion_url(url):
+            if not url.lower().startswith(("http://", "https://")):
                 continue
-            out.append({"title": r.get("title") or url, "url": url, "snippet": (r.get("content") or "")[:300]})
+            out.append(
+                {
+                    "title": r.get("title") or url,
+                    "url": url,
+                    "snippet": (r.get("content") or "")[:300],
+                    "onion": _on.is_onion_url(url),
+                }
+            )
             if len(out) >= 8:
                 break
         return web.json_response({"ok": True, "results": out}, headers=_CORS)
@@ -305,6 +312,28 @@ async def main() -> None:
         return web.Response(body=data, content_type=ctype)
 
     app.router.add_get("/api/onion/img", handle_onion_img)
+
+    async def handle_onion_css(request: web.Request) -> web.Response:
+        """Proxy an .onion stylesheet over Tor so pages keep their styling."""
+        from sen import onion as _on
+
+        url = (request.query.get("u", "") or "").strip()
+        if _on.should_refuse(url):
+            return web.Response(status=403, text="blocked")
+        if not _on.is_onion_url(url):
+            return web.Response(status=400, text="not an onion stylesheet")
+        try:
+            ctype, data = await _on.tor_get_bytes(url)
+        except ValueError as e:
+            return web.Response(status=400, text=str(e))
+        except Exception as e:
+            print(f"[ONION] css failed: {type(e).__name__}: {e}")
+            return web.Response(status=502, text="Tor fetch failed")
+        if not ctype.startswith("text/"):
+            return web.Response(status=415, text="not a stylesheet")
+        return web.Response(body=data, content_type="text/css")
+
+    app.router.add_get("/api/onion/css", handle_onion_css)
     SimpleRequestHandler(dispatcher=dp, bot=bot).register(app, path="/webhook")
     setup_application(app, dp, bot=bot)
     app.on_cleanup.append(on_shutdown)
