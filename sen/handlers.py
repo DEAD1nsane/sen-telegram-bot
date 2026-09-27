@@ -1123,6 +1123,8 @@ def register_handlers(router: Router, bot: "Bot") -> None:
                 "Do not assume personal details unless explicitly present in the memory list.\n"
                 "When media is attached, treat that media as primary evidence. Never fabricate visual or audio details. If you cannot reliably inspect it, say so.\n"
                 "Return Telegram Rich HTML for sendRichMessage. Use whichever tags best fit the content naturally.\n"
+                "Bold with <b></b> the key items: people's names and job titles, place names, organizations, and concrete figures (dates, numbers, prices, scores). Bold the direct answer to a direct question. Never leave a person's name or title unbolded in a factual answer.\n"
+                "For lists, emit real list markup: <ul><li>…</li></ul> or <ol><li>…</li></ol>, with one <li> per item inside a single list. Never fake list items by writing '1.' or '-' inside plain text.\n"
                 'For code snippets: ALWAYS use <pre><code class="language-xxx">code</code></pre> where xxx is the language (python, javascript, html, css, bash, json, etc). The class attribute is required for syntax highlighting. Example: <pre><code class="language-python">print("hello")</code></pre>\n'
                 "For mathematical answers: wrap standalone equations in $$...$$ and inline math in \\(...\\). Never output raw LaTeX without delimiters.\n"
                 "When Web Search Context contains Image: URLs, put exactly one marker [ATTACH_SEARCH_IMAGE: URL] in your response if the image is genuinely useful. Never use this marker for non-search media.\n"
