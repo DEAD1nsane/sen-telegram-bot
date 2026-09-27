@@ -45,6 +45,10 @@ MENU_TTL = 300
 SEARCH_CACHE_TTL = 300
 AUDIO_CACHE_TTL = 60 * 60 * 24 * 30
 
+# Telegram refuses bot downloads above 20 MB, which is also well under the
+# Gemini inline-data ceiling, so everything a document path fetches can be inlined.
+TELEGRAM_DOWNLOAD_MAX_BYTES = 20 * 1024 * 1024
+
 MENTION_ONLY_RE = re.compile(r"^(?:@[A-Za-z0-9_]{5,32}\s*)+$")
 TEMPORARY_FORGET_RE = re.compile(
     r"\btemporarily\s+(?:forget|ignore)\s+(?:all\s+)?(?:your\s+)?"

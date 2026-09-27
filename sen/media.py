@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import asyncio
+import html
+import io
 import os
 import re
 import tempfile
+import zipfile
 from contextvars import ContextVar
 from typing import Any
+from xml.etree import ElementTree
 
 from google.genai import types
 
@@ -258,6 +262,326 @@ async def download_telegram_media(bot, file_id: str) -> bytes | None:
     except Exception as e:
         print(f"Telegram media download error: {type(e).__name__}")
         return None
+
+
+# ---------------------------------------------------------------------------
+# Document handling
+# ---------------------------------------------------------------------------
+
+# Non-canonical spellings mapped onto the MIME names Gemini documents as supported.
+MIME_ALIASES = {
+    "application/rtf": "text/rtf",
+    "application/xml": "text/xml",
+    "application/xhtml+xml": "text/html",
+    "application/x-javascript": "text/javascript",
+}
+
+# Gemini ingests these application types directly; everything else that is not
+# convertible below has to be rejected or the API call errors out.
+NATIVE_DOCUMENT_MIMES = frozenset({"application/pdf", "application/json"})
+
+# Office and ebook formats Gemini cannot read. They are all ZIP+XML containers,
+# so the text is recovered with the standard library and sent as plain text.
+# Note the legacy binary formats (.doc/.xls/.ppt) are NOT here: they are OLE2
+# compound files and would need a third-party parser.
+CONVERTIBLE_MIMES = {
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "xlsx",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation": "pptx",
+    "application/epub+zip": "epub",
+}
+
+# Telegram frequently reports application/octet-stream, so fall back to the
+# filename extension when the declared type is not one Gemini understands.
+EXTENSION_MIMES = {
+    ".pdf": "application/pdf",
+    ".txt": "text/plain",
+    ".text": "text/plain",
+    ".log": "text/plain",
+    ".md": "text/markdown",
+    ".markdown": "text/markdown",
+    ".csv": "text/csv",
+    ".tsv": "text/tab-separated-values",
+    ".json": "application/json",
+    ".jsonl": "application/json",
+    ".xml": "text/xml",
+    ".html": "text/html",
+    ".htm": "text/html",
+    ".css": "text/css",
+    ".js": "text/javascript",
+    ".mjs": "text/javascript",
+    ".py": "text/x-python",
+    ".rtf": "text/rtf",
+    ".yaml": "text/yaml",
+    ".yml": "text/yaml",
+    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    ".epub": "application/epub+zip",
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".webp": "image/webp",
+    ".gif": "image/gif",
+    ".bmp": "image/bmp",
+    ".mp3": "audio/mpeg",
+    ".m4a": "audio/mp4",
+    ".ogg": "audio/ogg",
+    ".oga": "audio/ogg",
+    ".opus": "audio/ogg",
+    ".wav": "audio/wav",
+    ".flac": "audio/flac",
+    ".mp4": "video/mp4",
+    ".mov": "video/quicktime",
+    ".webm": "video/webm",
+    ".mkv": "video/x-matroska",
+    ".avi": "video/x-msvideo",
+}
+
+DOCUMENT_LABELS = {
+    "application/pdf": "PDF document",
+    "text/plain": "Text file",
+    "text/markdown": "Markdown file",
+    "text/csv": "CSV file",
+    "text/tab-separated-values": "TSV file",
+    "text/html": "HTML file",
+    "text/xml": "XML file",
+    "text/css": "CSS file",
+    "text/javascript": "JavaScript file",
+    "text/x-python": "Python file",
+    "text/yaml": "YAML file",
+    "text/rtf": "RTF file",
+    "application/json": "JSON file",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "Word document",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "Spreadsheet",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation": "Presentation",
+    "application/epub+zip": "eBook",
+}
+
+UNSUPPORTED_DOCUMENT_REPLY = (
+    "I can't read that file type. Send a PDF, Word, Excel, PowerPoint, eBook, plain text, Markdown, "
+    "CSV, JSON, HTML, XML, CSS, JS, YAML, RTF, image, audio, or video file and tell me what to do with it."
+)
+DOCUMENT_DOWNLOAD_ERROR = "I couldn't download that file. Try sending it again."
+DOCUMENT_EMPTY_ERROR = "I couldn't find any readable text in that file."
+
+_MEDIA_FAMILY = {"image": "image", "audio": "audio clip", "video": "video"}
+
+
+def _fallback_document_label(mime: str) -> str:
+    """Name a document type that has no dedicated label, e.g. image/png -> PNG image."""
+    family, _, subtype = mime.partition("/")
+    if not subtype:
+        return "file"
+    if family == "text":
+        return "text file"
+    if family in _MEDIA_FAMILY:
+        name = subtype.upper() if len(subtype) <= 4 else subtype
+        return f"{name} {_MEDIA_FAMILY[family]}"
+    return f"{subtype} file"
+
+
+def is_readable_document_mime(mime: str) -> bool:
+    """Check whether Gemini can ingest a MIME type, natively or after conversion."""
+    if not mime:
+        return False
+    if mime in NATIVE_DOCUMENT_MIMES or mime in CONVERTIBLE_MIMES:
+        return True
+    # text/* is extracted as plain text; media types go down the existing
+    # image/audio/video pipelines. The documented lists are explicitly partial,
+    # so accept the families rather than enumerating every subtype.
+    return mime.startswith(("text/", "image/", "audio/", "video/"))
+
+
+def document_mime_type(document: Any) -> str:
+    """Resolve a document's MIME type: declared type first, then filename extension."""
+    mime = (getattr(document, "mime_type", None) or "").split(";")[0].strip().lower()
+    mime = MIME_ALIASES.get(mime, mime)
+    if is_readable_document_mime(mime):
+        return mime
+    suffix = os.path.splitext(getattr(document, "file_name", None) or "")[1].lower()
+    return EXTENSION_MIMES.get(suffix, "")
+
+
+def is_readable_document(document: Any) -> bool:
+    """Check whether a Telegram document is something the bot can read."""
+    return document is not None and is_readable_document_mime(document_mime_type(document))
+
+
+def describe_document(document: Any) -> str:
+    """Describe a document for the model prompt, including its filename when known."""
+    mime = document_mime_type(document)
+    label = DOCUMENT_LABELS.get(mime) or _fallback_document_label(mime)
+    name = re.sub(r"[\"'<>]", "", (getattr(document, "file_name", None) or "").strip())[:80]
+    return f'{label} "{name}"' if name else label
+
+
+def get_replied_document(message: Message) -> Any | None:
+    """The readable document in the message the user replied to, if there is one."""
+    replied = getattr(message, "reply_to_message", None)
+    document = getattr(replied, "document", None) if replied is not None else None
+    return document if is_readable_document(document) else None
+
+
+def prepare_document(document: Any, data: bytes) -> tuple[bytes, str, str]:
+    """Classify a document and convert it to plain text when Gemini cannot read it.
+
+    Returns (data, mime, description) ready for ``Part.from_bytes``.
+    """
+    mime = document_mime_type(document)
+    description = describe_document(document)
+    kind = CONVERTIBLE_MIMES.get(mime)
+    if not kind:
+        return data, mime, description
+    text = _convert_document_to_text(data, kind) or ""
+    return text.encode("utf-8"), "text/plain", description
+
+
+# ---------------------------------------------------------------------------
+# Document -> text conversion
+# ---------------------------------------------------------------------------
+
+_W_NS = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+_S_NS = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
+_A_NS = "{http://schemas.openxmlformats.org/drawingml/2006/main}"
+_ZIP_NUMBERED_RE = re.compile(r"(\d+)\.xml$")
+
+
+def _paragraph_text(paragraph: Any, tag: str) -> str:
+    """Join every text run inside one paragraph element."""
+    return "".join(node.text or "" for node in paragraph.iter(f"{tag}t"))
+
+
+def _docx_to_text(data: bytes) -> str | None:
+    """Extract paragraph text from a .docx body (ZIP + word/document.xml)."""
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as archive:
+            root = ElementTree.fromstring(archive.read("word/document.xml"))
+    except Exception:
+        return None
+    lines = [text for text in (_paragraph_text(p, _W_NS).strip() for p in root.iter(f"{_W_NS}p")) if text]
+    return "\n".join(lines) or None
+
+
+def _xlsx_to_text(data: bytes) -> str | None:
+    """Extract every non-empty cell as 'ref: value', grouped per worksheet."""
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as archive:
+            names = archive.namelist()
+            shared: list[str] = []
+            if "xl/sharedStrings.xml" in names:
+                strings = ElementTree.fromstring(archive.read("xl/sharedStrings.xml"))
+                shared = ["".join(t.text or "" for t in si.iter(f"{_S_NS}t")) for si in strings.iter(f"{_S_NS}si")]
+            sheets = sorted(
+                (n for n in names if re.fullmatch(r"xl/worksheets/sheet\d+\.xml", n)),
+                key=lambda n: int(_ZIP_NUMBERED_RE.search(n).group(1)),
+            )
+            if not sheets:
+                return None
+            labels = _xlsx_sheet_labels(archive, len(sheets))
+            out: list[str] = []
+            for index, sheet in enumerate(sheets):
+                rows = ElementTree.fromstring(archive.read(sheet))
+                cells: list[str] = []
+                for row in rows.iter(f"{_S_NS}row"):
+                    for cell in row.iter(f"{_S_NS}c"):
+                        value = _xlsx_cell_value(cell, shared)
+                        if value:
+                            cells.append(f"{cell.get('r') or '?'}: {value}")
+                if cells:
+                    out.append(f"### Sheet: {labels[index]}")
+                    out.extend(cells)
+            return "\n".join(out) or None
+    except Exception:
+        return None
+
+
+def _xlsx_sheet_labels(archive: zipfile.ZipFile, count: int) -> list[str]:
+    """Best-effort worksheet names; falls back to the sheet file names."""
+    fallback = [n.rsplit("/", 1)[-1][:-4] for n in sorted(archive.namelist(), key=lambda n: n) if "worksheets/" in n]
+    try:
+        book = ElementTree.fromstring(archive.read("xl/workbook.xml"))
+        names = [(s.get("name") or "").strip() for s in book.iter(f"{_S_NS}sheet")]
+    except Exception:
+        return fallback[:count]
+    if len(names) != count:
+        return fallback[:count]
+    return names
+
+
+def _xlsx_cell_value(cell: Any, shared: list[str]) -> str:
+    """Read one cell, resolving shared-string and inline-string references."""
+    kind = cell.get("t")
+    if kind == "s":
+        node = cell.find(f"{_S_NS}v")
+        index = int(node.text) if node is not None and (node.text or "").lstrip("-").isdigit() else None
+        return shared[index].strip() if index is not None and 0 <= index < len(shared) else ""
+    if kind == "inlineStr":
+        return "".join(t.text or "" for t in cell.iter(f"{_S_NS}t")).strip()
+    node = cell.find(f"{_S_NS}v")
+    return (node.text or "").strip() if node is not None else ""
+
+
+def _pptx_to_text(data: bytes) -> str | None:
+    """Extract text from each slide of a .pptx deck (ZIP + ppt/slides/slideN.xml)."""
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as archive:
+            slides = sorted(
+                (n for n in archive.namelist() if re.fullmatch(r"ppt/slides/slide\d+\.xml", n)),
+                key=lambda n: int(_ZIP_NUMBERED_RE.search(n).group(1)),
+            )
+            if not slides:
+                return None
+            out: list[str] = []
+            for slide in slides:
+                root = ElementTree.fromstring(archive.read(slide))
+                lines = [t for t in (_paragraph_text(p, _A_NS).strip() for p in root.iter(f"{_A_NS}p")) if t]
+                if lines:
+                    out.append(f"### {slide.rsplit('/', 1)[-1][:-4]}")
+                    out.extend(lines)
+            return "\n".join(out) or None
+    except Exception:
+        return None
+
+
+def _epub_to_text(data: bytes) -> str | None:
+    """Extract text from an .epub (ZIP of XHTML documents), stripping markup."""
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as archive:
+            parts = [
+                n
+                for n in archive.namelist()
+                if n.lower().endswith((".xhtml", ".html", ".htm")) and not n.startswith("__MACOSX")
+            ]
+            if not parts:
+                return None
+            out: list[str] = []
+            for part in sorted(
+                parts, key=lambda n: int(_ZIP_NUMBERED_RE.search(n).group(1)) if _ZIP_NUMBERED_RE.search(n) else 0
+            ):
+                markup = archive.read(part).decode("utf-8", "replace")
+                markup = re.sub(r"(?is)<(script|style)\b.*?</\1>", " ", markup)
+                text = html.unescape(re.sub(r"(?s)<[^>]+>", " ", markup))
+                text = re.sub(r"[ \t]*\n\s*", "\n", re.sub(r"[ \t]{2,}", " ", text)).strip()
+                if text:
+                    out.append(f"### {part.rsplit('/', 1)[-1]}")
+                    out.append(text)
+            return "\n".join(out) or None
+    except Exception:
+        return None
+
+
+def _convert_document_to_text(data: bytes, kind: str) -> str | None:
+    """Dispatch a convertible document kind to its text extractor."""
+    if kind == "docx":
+        return _docx_to_text(data)
+    if kind == "xlsx":
+        return _xlsx_to_text(data)
+    if kind == "pptx":
+        return _pptx_to_text(data)
+    if kind == "epub":
+        return _epub_to_text(data)
+    return None
 
 
 # ---------------------------------------------------------------------------

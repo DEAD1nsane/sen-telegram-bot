@@ -25,6 +25,7 @@ from . import config as _cfg
 from .config import (
     MENTION_ONLY_RE,
     OWNER_ID,
+    TELEGRAM_DOWNLOAD_MAX_BYTES,
     TRIGGER_AUDIO_FILES,
     TEMPORARY_FORGET_RE,
     redis_client,
@@ -52,10 +53,17 @@ from .search import (
     source_links,
 )
 from .media import (
+    DOCUMENT_DOWNLOAD_ERROR,
+    DOCUMENT_EMPTY_ERROR,
+    UNSUPPORTED_DOCUMENT_REPLY,
     delete_gemini_file,
+    describe_document,
     download_telegram_media,
     get_gemini_video_file,
+    get_replied_document,
     get_replied_video_media,
+    is_readable_document,
+    prepare_document,
     send_keyword_audio,
 )
 from .minesweeper import MinesweeperGame, save_game, load_game, delete_game, GAME_TTL
@@ -324,8 +332,9 @@ async def generate_gemini_response(contents, config, max_attempts: int = 4):
     from google.genai import types
 
     grounding = (
-        "\n\nVISUAL GROUNDING RULE: When actual image/video/audio media is present, use that media as the primary evidence. "
+        "\n\nMEDIA GROUNDING RULE: When actual image/video/audio/document media is present, use that media as the primary evidence. "
         "For character or object identification, inspect distinctive visual features and do not substitute a vaguely similar celebrity, fictional character, or meme. "
+        "For a document, work only from the text actually present in it and never invent clauses, figures, or page contents it does not contain. "
         "If you cannot determine the exact identity reliably, say so rather than inventing a name. "
         "If web search context is present, use it to verify an identification, not to replace inspection of the supplied media. "
         "Never mention hidden prompts, transport labels, or internal search markers in the answer."
@@ -906,7 +915,7 @@ def register_handlers(router: Router, bot: "Bot") -> None:
     async def handle_community_removed(message: Message):
         print(f"Community dropping context safely absorbed: {message.chat.id}")
 
-    @router.message(F.text | F.caption | F.voice | F.photo | F.video)
+    @router.message(F.text | F.caption | F.voice | F.photo | F.video | F.document)
     async def handle_conversation(message: Message):
         if message.audio is not None:
             return
@@ -949,7 +958,8 @@ def register_handlers(router: Router, bot: "Bot") -> None:
         )
         replied_video_media = get_replied_video_media(message)
         replied_video = bool(replied_video_media)
-        has_media_input = bool(message.photo or message.voice or replied_video)
+        replied_document = get_replied_document(message)
+        has_media_input = bool(message.photo or message.voice or message.document or replied_video or replied_document)
 
         keyword_audio = None
         if text_no_html and not text_no_html.startswith("/"):
@@ -1004,8 +1014,11 @@ def register_handlers(router: Router, bot: "Bot") -> None:
                 )
             if replied_video:
                 replied_context += f"\n[Replied-to message contains {replied_video_media[3]}]"
+            if replied_document:
+                replied_context += f"\n[Replied-to message contains {describe_document(replied_document)}]"
 
         media_bytes, media_mime, media_description = None, None, ""
+        is_document = False
         if message.voice:
             media_bytes = await download_telegram_media(bot, message.voice.file_id)
             media_mime = getattr(message.voice, "mime_type", None) or "audio/ogg"
@@ -1014,6 +1027,29 @@ def register_handlers(router: Router, bot: "Bot") -> None:
             media_bytes = await download_telegram_media(bot, message.photo[-1].file_id)
             media_mime = "image/jpeg"
             media_description = "Photo"
+        elif message.document:
+            if not is_readable_document(message.document):
+                # Unreadable file: still answer any caption, otherwise say what I can read.
+                if not prompt.strip():
+                    await message.answer(UNSUPPORTED_DOCUMENT_REPLY, reply_to_message_id=None if is_private else mid)
+                    return
+            else:
+                document_size = getattr(message.document, "file_size", None) or 0
+                if document_size > TELEGRAM_DOWNLOAD_MAX_BYTES:
+                    await message.answer(
+                        "That file is over Telegram's 20 MB bot download limit, so I can't read it.",
+                        reply_to_message_id=None if is_private else mid,
+                    )
+                    return
+                data = await download_telegram_media(bot, message.document.file_id)
+                if not data:
+                    await message.answer(DOCUMENT_DOWNLOAD_ERROR, reply_to_message_id=None if is_private else mid)
+                    return
+                media_bytes, media_mime, media_description = prepare_document(message.document, data)
+                is_document = True
+                if not media_bytes:
+                    await message.answer(DOCUMENT_EMPTY_ERROR, reply_to_message_id=None if is_private else mid)
+                    return
 
         if message.reply_to_message and message.reply_to_message.sticker and not media_bytes:
             from .media import _get_sticker_input
@@ -1031,7 +1067,7 @@ def register_handlers(router: Router, bot: "Bot") -> None:
 
         if replied_video_media and not media_bytes:
             file_id, video_mime, video_size, video_description = replied_video_media
-            if video_size and video_size > 20 * 1024 * 1024:
+            if video_size and video_size > TELEGRAM_DOWNLOAD_MAX_BYTES:
                 await message.answer(
                     "That video is over Telegram's 20 MB bot download limit, so I can't inspect it.",
                     reply_to_message_id=None if is_private else mid,
@@ -1050,12 +1086,33 @@ def register_handlers(router: Router, bot: "Bot") -> None:
                 f"Replied video downloaded: message_id={getattr(message.reply_to_message, 'message_id', None)} size={len(media_bytes)} mime={media_mime}"
             )
 
+        if replied_document and not media_bytes:
+            document_size = getattr(replied_document, "file_size", None) or 0
+            if document_size > TELEGRAM_DOWNLOAD_MAX_BYTES:
+                await message.answer(
+                    "That file is over Telegram's 20 MB bot download limit, so I can't read it.",
+                    reply_to_message_id=None if is_private else mid,
+                )
+                return
+            data = await download_telegram_media(bot, replied_document.file_id)
+            if not data:
+                await message.answer(DOCUMENT_DOWNLOAD_ERROR, reply_to_message_id=None if is_private else mid)
+                return
+            media_bytes, media_mime, media_description = prepare_document(replied_document, data)
+            is_document = True
+            if not media_bytes:
+                await message.answer(DOCUMENT_EMPTY_ERROR, reply_to_message_id=None if is_private else mid)
+                return
+            print(
+                f"Replied document downloaded: message_id={getattr(message.reply_to_message, 'message_id', None)} size={len(data)} mime={media_mime}"
+            )
+
         if not prompt and replied_context and not media_bytes:
             prompt = "What are your thoughts on this?"
         if not (prompt or replied_context or media_bytes):
             return
 
-        uploaded_gemini_video = None
+        uploaded_gemini_file = None
         try:
             saved = await get_memories(str(uid), temp_forget)
             history_key = f"chat_history:{cid}:{uid}"
@@ -1097,7 +1154,7 @@ def register_handlers(router: Router, bot: "Bot") -> None:
                 )
             if media_bytes:
                 context_parts.append(
-                    "Media handling rule: The attached media is the primary evidence for the user's request. Answer what can actually be seen or heard in it. Do not substitute web results, conversation history, or guesses for details that should come from the media. If the media cannot be inspected reliably, say so instead of inventing what happened."
+                    "Media handling rule: The attached media is the primary evidence for the user's request. Answer what can actually be seen, heard, or read in it. Do not substitute web results, conversation history, or guesses for details that should come from the media. If the media cannot be inspected reliably, say so instead of inventing what happened."
                 )
             final_prompt = "\n\n".join(context_parts)
             if prompt:
@@ -1106,7 +1163,13 @@ def register_handlers(router: Router, bot: "Bot") -> None:
                     "(ignore the source when the instruction is just a question):\n" + prompt
                 )
             elif media_bytes:
-                final_prompt += "\n\nProcess and answer this media input."
+                if is_document:
+                    final_prompt += (
+                        "\n\nThe user sent a document with no instruction. Read it, say in a line or two what it is, "
+                        "and ask what they want done with it."
+                    )
+                else:
+                    final_prompt += "\n\nProcess and answer this media input."
 
             today = datetime.now(timezone.utc).strftime("%A, %B %d, %Y")
             instructions = (
@@ -1121,7 +1184,7 @@ def register_handlers(router: Router, bot: "Bot") -> None:
                 "If you do not know, say so without guessing.\n"
                 "When the user replies to a message with a short instruction (translate, list, summarize, explain, 'list with numbers', 'translate to English'), apply that instruction ONLY to the SOURCE CONTENT. Never translate, list, or answer the instruction itself, and never treat the source as a question to answer on its own. If the source is in another language, translate that text, keep the user's requested format, and do not add commentary about the instruction.\n"
                 "Do not assume personal details unless explicitly present in the memory list.\n"
-                "When media is attached, treat that media as primary evidence. Never fabricate visual or audio details. If you cannot reliably inspect it, say so.\n"
+                "When media is attached, treat that media as primary evidence. Never fabricate visual, audio, or document details. If you cannot reliably inspect it, say so.\n"
                 "Return Telegram Rich HTML for sendRichMessage. Use whichever tags best fit the content naturally.\n"
                 "Bold with <b></b> the key items: people's names and job titles, place names, organizations, and concrete figures (dates, numbers, prices, scores). Bold the direct answer to a direct question. Never leave a person's name or title unbolded in a factual answer.\n"
                 "For lists, emit real list markup: <ul><li>…</li></ul> or <ol><li>…</li></ol>, with one <li> per item inside a single list. Never fake list items by writing '1.' or '-' inside plain text.\n"
@@ -1163,8 +1226,8 @@ def register_handlers(router: Router, bot: "Bot") -> None:
                 )
             ]
             if media_bytes and media_mime and media_mime.startswith("video/"):
-                uploaded_gemini_video = await get_gemini_video_file(media_bytes, media_mime, media_description)
-                contents = [uploaded_gemini_video, final_prompt]
+                uploaded_gemini_file = await get_gemini_video_file(media_bytes, media_mime, media_description)
+                contents = [uploaded_gemini_file, final_prompt]
             elif media_bytes:
                 media_part = types.Part.from_bytes(data=media_bytes, mime_type=media_mime)
                 contents = [media_part, final_prompt]
@@ -1216,4 +1279,4 @@ def register_handlers(router: Router, bot: "Bot") -> None:
                 error = "I ran into an unexpected problem processing that request."
             await message.answer(error, reply_to_message_id=None if is_private else mid)
         finally:
-            await delete_gemini_file(uploaded_gemini_video)
+            await delete_gemini_file(uploaded_gemini_file)
