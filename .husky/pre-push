@@ -1,1 +1,3 @@
 node upload.js
+
+~/bin/buzz "pre-push" "hook finished"
