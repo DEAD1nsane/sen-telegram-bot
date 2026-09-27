@@ -424,13 +424,28 @@ def get_replied_document(message: Message) -> Any | None:
 
 
 def prepare_document(document: Any, data: bytes) -> tuple[bytes, str, str]:
-    """Classify a document and convert it to plain text when Gemini cannot read it.
+    """Classify a document and convert it to plain text when it helps.
+
+    Office/ebook formats are always converted (Gemini cannot read them).
+    PDFs are text-extracted locally with pypdf first — native Gemini PDF
+    reading proved unreliable — falling back to native bytes only for
+    scanned/image PDFs with no extractable text.
 
     Returns (data, mime, description) ready for ``Part.from_bytes``.
     """
     mime = document_mime_type(document)
     description = describe_document(document)
     kind = CONVERTIBLE_MIMES.get(mime)
+    if kind:
+        text = _convert_document_to_text(data, kind) or ""
+        return text.encode("utf-8"), "text/plain", description
+    if mime == "application/pdf":
+        text = _pdf_to_text(data)
+        if text and len(text.strip()) >= 50:
+            if len(text) > _PDF_MAX_CHARS:
+                text = text[:_PDF_MAX_CHARS] + "\n\n[truncated: PDF longer than limit]"
+            return text.encode("utf-8"), "text/plain", description
+        return data, mime, description
     if not kind:
         return data, mime, description
     text = _convert_document_to_text(data, kind) or ""
@@ -582,6 +597,33 @@ def _convert_document_to_text(data: bytes, kind: str) -> str | None:
     if kind == "epub":
         return _epub_to_text(data)
     return None
+
+
+_PDF_MAX_CHARS = 80_000
+
+
+def _pdf_to_text(data: bytes) -> str | None:
+    """Extract text from a PDF with pypdf, marking page boundaries."""
+    try:
+        from pypdf import PdfReader
+    except ImportError:
+        return None
+    try:
+        reader = PdfReader(io.BytesIO(data))
+    except Exception:
+        return None
+    pages: list[str] = []
+    try:
+        for index, page in enumerate(reader.pages):
+            try:
+                text = (page.extract_text() or "").strip()
+            except Exception:
+                text = ""
+            if text:
+                pages.append(f"--- Page {index + 1} ---\n{text}")
+    except Exception:
+        return "\n\n".join(pages).strip() or None
+    return "\n\n".join(pages).strip() or None
 
 
 # ---------------------------------------------------------------------------
