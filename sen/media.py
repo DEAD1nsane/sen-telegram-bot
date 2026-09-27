@@ -441,10 +441,13 @@ def prepare_document(document: Any, data: bytes) -> tuple[bytes, str, str]:
         return text.encode("utf-8"), "text/plain", description
     if mime == "application/pdf":
         text = _pdf_to_text(data)
-        if text and len(text.strip()) >= 50:
+        extracted = len((text or "").strip())
+        print(f"PDF extraction: {len(data)} bytes in, {extracted} chars out")
+        if text and extracted >= 50:
             if len(text) > _PDF_MAX_CHARS:
                 text = text[:_PDF_MAX_CHARS] + "\n\n[truncated: PDF longer than limit]"
             return text.encode("utf-8"), "text/plain", description
+        print(f"PDF fallback to native bytes (extracted={extracted})")
         return data, mime, description
     if not kind:
         return data, mime, description
@@ -607,10 +610,13 @@ def _pdf_to_text(data: bytes) -> str | None:
     try:
         from pypdf import PdfReader
     except ImportError:
+        print("PDF extraction unavailable: pypdf not installed")
         return None
     try:
         reader = PdfReader(io.BytesIO(data))
-    except Exception:
+        print(f"PDF extraction: {len(reader.pages)} pages")
+    except Exception as e:
+        print(f"PDF parse error: {type(e).__name__}")
         return None
     pages: list[str] = []
     try:
