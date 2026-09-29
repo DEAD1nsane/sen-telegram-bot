@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 from aiogram import F, Router
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
 from aiogram.types import (
     CallbackQuery,
@@ -301,6 +302,27 @@ def clean_ai_output(text: str, plain_lists: bool = False) -> str:
     return sanitize_rich_html(render_math_markup(text)).strip()
 
 
+#: Hosts whose links Telegram renders as a video/audio embed. Covers
+#: youtube.com plus its www./m./music. subdomains and the youtu.be short form.
+#: The lookbehind keeps lookalikes like "notyoutube.com" from matching on tail.
+YOUTUBE_HOST = r"(?:www\.|m\.|music\.|studio\.|tv\.)?(?:youtube\.com|youtu\.be)"
+YOUTUBE_URL_RE = re.compile(rf"(?<![\w-])(?:https?://)?{YOUTUBE_HOST}/\S*", re.I)
+
+# A URL inside <a href> is a text_link, and Telegram never generates a link
+# preview for a text_link, so the embed would be silently dropped.
+_YOUTUBE_ANCHOR_RE = re.compile(
+    rf'<a\s+href="((?:https?://)?{YOUTUBE_HOST}/\S*?)"\s*>.*?</a>',
+    re.I | re.S,
+)
+
+# Markup only a rich message understands. Plain sendMessage would reject the
+# text outright, so those replies stay on the rich path (no embed, as before).
+_RICH_ONLY_TAG_RE = re.compile(
+    r"</?(?:ul|ol|li|table|thead|tbody|tr|td|th|details|summary|tg-math|tg-math-block|h[1-6]|hr)\b",
+    re.I,
+)
+
+
 async def send_ai_response(
     bot: "Bot",
     chat_id: int,
@@ -310,15 +332,26 @@ async def send_ai_response(
     thread_id: int | None = None,
 ):
     """Send a response, keeping it in the originating forum topic."""
-    rich = InputRichMessage(html=sanitize_rich_html(render_math_markup(response_text)))
-    kwargs: dict = {"chat_id": chat_id, "rich_message": rich}
+    sanitized = sanitize_rich_html(render_math_markup(response_text))
+    kwargs: dict = {"chat_id": chat_id}
     # Without this the reply lands in General instead of the topic it was
     # asked in, which reads as the bot "forgetting" the conversation.
     if thread_id:
         kwargs["message_thread_id"] = thread_id
     if not is_private:
         kwargs["reply_parameters"] = ReplyParameters(message_id=msg_id)
-    return await bot.send_rich_message(**kwargs)
+
+    # Rich messages cannot carry a link preview at all: sendRichMessage takes no
+    # link_preview_options and RichMessage has nowhere to put one, so a YouTube
+    # link sent that way is a dead clickable link with no embed. Those replies
+    # go out as plain text instead, where Telegram builds the preview itself.
+    if YOUTUBE_URL_RE.search(sanitized) and not _RICH_ONLY_TAG_RE.search(sanitized):
+        try:
+            return await bot.send_message(text=_YOUTUBE_ANCHOR_RE.sub(r"\1", sanitized), **kwargs)
+        except TelegramBadRequest as e:
+            print(f"YouTube preview send rejected ({str(e)[:100]}), using rich message instead")
+
+    return await bot.send_rich_message(rich_message=InputRichMessage(html=sanitized), **kwargs)
 
 
 # ---------------------------------------------------------------------------
