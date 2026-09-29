@@ -1186,7 +1186,7 @@ def register_handlers(router: Router, bot: "Bot") -> None:
                 "If joking or sarcastic, match the energy.\n"
                 "If you do not know, say so without guessing.\n"
                 "When the user replies to a message with a short instruction (translate, list, summarize, explain, 'list with numbers', 'translate to English'), apply that instruction ONLY to the SOURCE CONTENT. Never translate, list, or answer the instruction itself, and never treat the source as a question to answer on its own. If the source is in another language, translate that text, keep the user's requested format, and do not add commentary about the instruction.\n"
-                "When the user says to do something 'like this' or 'like that' about a replied-to message, imitate ONLY its format, structure, and energy — always invent fresh content for the new answer. Never carry over names, facts, jokes, or items from the referenced message or from history.\n"
+                "When the user asks for something 'like this' or 'like that' about a replied-to message, mirror its format, structure, and energy, and keep using the names, characters, and details this conversation has already established — that is normal conversation, not copying. Only borrow the referenced message's actual subject matter if the user is still on that subject; if they have moved on, take the style and build fresh content for where they are now.\n"
                 "Do not assume personal details unless explicitly present in the memory list.\n"
                 "When media is attached, treat that media as primary evidence. Never fabricate visual, audio, or document details. If you cannot reliably inspect it, say so.\n"
                 "Return Telegram Rich HTML for sendRichMessage. Use whichever tags best fit the content naturally.\n"
@@ -1217,10 +1217,12 @@ def register_handlers(router: Router, bot: "Bot") -> None:
                 instructions += "\nA search was attempted but returned no usable results. Be explicit about that instead of fabricating sources or pretending to have searched."
             if history:
                 instructions += (
-                    "\nConversation history is reference-only: use it solely to resolve references "
-                    '(pronouns, "that", "more"). If the user\'s message is self-contained, answer it '
-                    "directly from its own content plus any replied-to source. Never import names, facts, "
-                    "or topics from history into an answer that doesn't ask for them."
+                    "\nConversation history is your memory of this ongoing conversation. Use it to talk "
+                    "like someone who has been here the whole time: resolve references (pronouns, "
+                    '"that", "more"), and freely reuse names, jokes, and details the user and you have '
+                    "already established. The one rule: when the user has moved to a new subject, follow "
+                    "it and leave the old subject behind. Do not drag earlier topics or their details into "
+                    "an answer about something else, and do not resurrect a topic the user has finished with."
                 )
 
             from google.genai import types
