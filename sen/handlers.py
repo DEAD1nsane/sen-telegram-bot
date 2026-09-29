@@ -1116,17 +1116,8 @@ def register_handlers(router: Router, bot: "Bot") -> None:
         try:
             saved = await get_memories(str(uid), temp_forget)
             history_key = f"chat_history:{cid}:{uid}"
-            # A fresh @-tag in a group is a new question, not a continuation:
-            # answer it on its own instead of dragging the old thread in.
-            # Replies to the bot and private chats keep history for continuity.
-            fresh_tag = tagged and not reply_to_bot and not is_private
-            raw_hist = [] if (temp_forget or fresh_tag) else await redis_client.lrange(history_key, 0, -1)
+            raw_hist = [] if temp_forget else await redis_client.lrange(history_key, 0, -1)
             history = [x.decode() if isinstance(x, bytes) else str(x) for x in raw_hist]
-            if not is_private and len(history) > 4:
-                # Group threads interleave topics; only the latest exchanges are
-                # relevant continuity. Older ones are what bleed stale topics
-                # (news bullets, scores) into unrelated answers.
-                history = history[-4:]
 
             use_search = detect_explicit_search_intent(prompt) if media_bytes else detect_search_intent(prompt)
             news = bool(re.search(r"\b(?:news|headlines|latest|today|breaking|recent)\b", prompt, re.I))
@@ -1142,9 +1133,11 @@ def register_handlers(router: Router, bot: "Bot") -> None:
                 )
             if history:
                 context_parts.append(
-                    "Recent Conversation Context — background only. Do not treat any of it as the "
-                    "target of the user's instruction, and never repeat or reuse its topics, "
-                    "facts, or items unless the user's current message asks for them.\n" + "\n".join(history)
+                    "OLDER CONVERSATION (reference only — most recent last). It exists SOLELY so you can "
+                    'resolve references like "it", "that", "more", or "continue". It is NOT material '
+                    "for your answer: never copy, repeat, paraphrase, or reuse any person, fact, headline, "
+                    "joke, score, or item from it unless the user's current message explicitly asks about "
+                    "that exact thing.\n<<<HISTORY>>>\n" + "\n".join(history) + "\n<<<END HISTORY>>>"
                 )
             if media_description:
                 context_parts.append(f"Incoming Media: {media_description}")
@@ -1223,9 +1216,10 @@ def register_handlers(router: Router, bot: "Bot") -> None:
                 instructions += "\nA search was attempted but returned no usable results. Be explicit about that instead of fabricating sources or pretending to have searched."
             if history:
                 instructions += (
-                    "\nUse Recent Conversation Context for continuity without repeating it. "
-                    "Never introduce topics, facts, or items from it that the user's current "
-                    "message does not ask about."
+                    "\nConversation history is reference-only: use it solely to resolve references "
+                    '(pronouns, "that", "more"). If the user\'s message is self-contained, answer it '
+                    "directly from its own content plus any replied-to source. Never import names, facts, "
+                    "or topics from history into an answer that doesn't ask for them."
                 )
 
             from google.genai import types
