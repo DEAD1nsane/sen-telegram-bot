@@ -14,6 +14,15 @@ import httpx
 
 from .config import SEARXNG_URL, SEARCH_CACHE_TTL, redis_client, search_cache_key
 
+#: Any YouTube URL shape -> its video id. Covers watch?v=, youtu.be/, shorts/,
+#: live/, embed/ and the music. subdomain, with or without a scheme. Defined up
+#: here because source_entries() needs it before the YouTube section.
+_YOUTUBE_ID_RE = re.compile(
+    r"(?:youtube\.com/(?:watch\?(?:.*&)?v=|shorts/|live/|embed/|v/)|youtu\.be/)"
+    r"([A-Za-z0-9_-]{11})",
+    re.I,
+)
+
 _SEARCH_STATE: ContextVar[tuple[str, str]] = ContextVar("sen_search_state", default=("", ""))
 
 
@@ -277,6 +286,10 @@ def source_entries(search_context: str) -> list[tuple[str, str]]:
         if not url_match:
             continue
         url = url_match.group(1).rstrip(".,)")
+        # A YouTube watch?v= link lives entirely in its query string, and
+        # clean_url drops query strings, so it has to be left alone.
+        if not _YOUTUBE_ID_RE.search(url):
+            url = clean_url(url)
         if url in seen:
             continue
         seen.add(url)
@@ -366,14 +379,6 @@ def asked_for_sources(text: str) -> bool:
 # ---------------------------------------------------------------------------
 # YouTube link validation
 # ---------------------------------------------------------------------------
-
-#: Any YouTube URL shape -> its video id. Covers watch?v=, youtu.be/, shorts/,
-#: live/, embed/ and the music. subdomain, with or without a scheme.
-_YOUTUBE_ID_RE = re.compile(
-    r"(?:youtube\.com/(?:watch\?(?:.*&)?v=|shorts/|live/|embed/|v/)|youtu\.be/)"
-    r"([A-Za-z0-9_-]{11})",
-    re.I,
-)
 
 _OEMBED_URL = "https://www.youtube.com/oembed"
 _PLAYABLE_TTL = 60 * 60 * 24 * 7
