@@ -1246,11 +1246,15 @@ def register_handlers(router: Router, bot: "Bot") -> None:
                             if _picked:
                                 context_parts.append("Additional Web Search Context:\n" + _retry)
                     if _picked:
-                        _url, _title = _picked
+                        _url, _label = _picked
                         context_parts.append(
                             "Verified media link — this exact id was confirmed to still resolve on YouTube, so "
                             "Telegram can embed it. Send exactly this URL unmodified, nothing else invented, and "
-                            "do not swap it for any other link:\n" + _url
+                            "do not swap it for any other link.\n"
+                            f"URL: {_url}\n"
+                            f"Label it exactly like this and nothing else: [{_label}]({_url})\n"
+                            "That label is the track's real title and artist read straight from the link, so use it "
+                            "verbatim - do not expand it, rename the track, or take the wording from the request."
                         )
                     else:
                         context_parts.append(

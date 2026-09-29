@@ -546,4 +546,26 @@ async def pick_playable_youtube(
         f"artist={best.artist_match} cover={best.cover} by {best.author!r} {best.title!r}"
     )
     host = "www.youtube.com" if want_video else "music.youtube.com"
-    return f"https://{host}/watch?v={best.vid}", best.title
+    return f"https://{host}/watch?v={best.vid}", youtube_label(best)
+
+
+#: "Incubus - Topic" and "bulletvalentineVEVO" name the channel, not the band.
+_CHANNEL_SUFFIX_RE = re.compile(r"\s*[-–—]\s*(?:topic|vevo|official|music|records)\s*$", re.I)
+_VEVO_SUFFIX_RE = re.compile(r"\s*VEVO\s*$", re.I)
+
+
+def youtube_label(candidate: YouTubeCandidate) -> str:
+    """Build "Track - Artist" from the probed id's own metadata.
+
+    This is the id's real title and channel, not anything the model might
+    invent, and not the wording of the request. "Drive" by "Incubus - Topic" is
+    the actual title, so nothing here guesses at a longer one.
+    """
+    title = (candidate.title or "").strip()
+    if not title:
+        return candidate.author.strip()
+    author = _CHANNEL_SUFFIX_RE.sub("", candidate.author or "").strip()
+    author = _VEVO_SUFFIX_RE.sub("", author).strip()
+    if not author or author.lower() in title.lower():
+        return title
+    return f"{title} - {author}"
