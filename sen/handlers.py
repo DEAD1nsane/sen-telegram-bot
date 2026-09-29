@@ -51,6 +51,7 @@ from .search import (
     get_search_state,
     is_music_request,
     normalize_search_query,
+    artist_from_prompt,
     pick_playable_youtube,
     replace_model_source_blocks,
     source_entries,
@@ -1234,13 +1235,14 @@ def register_handlers(router: Router, bot: "Bot") -> None:
                     # A track request wants the audio card; only an explicit
                     # video request wants the ordinary watch page.
                     _want_video = bool(VIDEO_REQUEST_RE.search(prompt))
-                    _picked = await pick_playable_youtube(search_context, want_video=_want_video)
+                    _artist = artist_from_prompt(prompt)
+                    _picked = await pick_playable_youtube(search_context, want_video=_want_video, artist=_artist)
                     if _picked is None:
                         # Every link the first search turned up is dead, so go
                         # back for another rather than shipping an unplayable id.
                         _retry = await free_web_search(f"{normalize_search_query(prompt)} site:youtube.com", news=False)
                         if _retry and _retry != search_context:
-                            _picked = await pick_playable_youtube(_retry, want_video=_want_video)
+                            _picked = await pick_playable_youtube(_retry, want_video=_want_video, artist=_artist)
                             if _picked:
                                 context_parts.append("Additional Web Search Context:\n" + _retry)
                     if _picked:

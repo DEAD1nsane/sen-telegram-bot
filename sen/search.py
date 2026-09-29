@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import contextlib
 import html
+import json
 import re
 from contextvars import ContextVar
+from typing import NamedTuple
 from urllib.parse import urlsplit, urlunsplit
 
 import httpx
@@ -404,27 +406,69 @@ VIDEO_REQUEST_RE = re.compile(r"\bvideo\b", re.I)
 _OFFICIAL_AUTHOR_RE = re.compile(r"\bvevo\b|official|\btopic\b|records|\blabel\b", re.I)
 _OFFICIAL_TITLE_RE = re.compile(r"\bofficial\b|\bvevo\b|\blyric[s]?\s+video\b", re.I)
 
+#: Nobody asking to hear a track wants somebody teaching it. These all carry the
+#: right song and often the word "official", so they have to be pushed down even
+#: though they pass a naive official check.
+_COVER_RE = re.compile(
+    r"\b(?:covers?|tutorials?|how\s+to|lessons?|tabs?\b|chords?\b|acoustic|instrumental|karaoke|"
+    r"worship|reactions?|reviews?|interviews?|unplugged|medley|mashups?|parod(?:y|ies)|"
+    r"playthrough|play\s+along|sing\s+along|talk\s+about|documentar(?:y|ies)|podcast)\b",
+    re.I,
+)
 
-async def youtube_probe(url: str) -> tuple[bool, bool]:
-    """Return (playable, official) for a YouTube id.
+
+class YouTubeCandidate(NamedTuple):
+    """One probed search result."""
+
+    vid: str
+    title: str
+    author: str
+    playable: bool
+    official: bool
+    artist_match: bool
+    cover: bool
+
+    @property
+    def score(self) -> int:
+        """Higher is better. Playability is handled before this is consulted."""
+        s = 0
+        if not self.cover:
+            s += 4
+        if self.artist_match:
+            s += 2
+        if self.official:
+            s += 1
+        return s
+
+
+async def youtube_probe(url: str, artist: str = "") -> YouTubeCandidate:
+    """Resolve a candidate's real title/author and judge how well it fits.
 
     A deleted, private or hallucinated id answers 404 on oEmbed, and Telegram
     builds its preview from the same metadata, so those links can never embed.
-    The same response carries author_name and title, which is enough to tell a
-    label upload from a fan rip without a second request. A transport failure
-    reports playable-but-not-official so a YouTube outage degrades to today's
-    behaviour instead of dropping the link.
+    The same response carries author_name and title, which is enough to spot a
+    label upload and a cover without a second request. A transport failure
+    reports playable so a YouTube outage degrades to today's behaviour instead of
+    dropping the link.
     """
-    vid = youtube_video_id(url)
+    vid = youtube_video_id(url) or ""
     if not vid:
-        return False, False
+        return YouTubeCandidate("", "", "", False, False, False, False)
+
     key = f"yt_ok:{vid}"
+    blob = None
     with contextlib.suppress(Exception):
         cached = await redis_client.get(key)
         if cached:
-            val = cached.decode() if isinstance(cached, bytes) else str(cached)
-            ok, _, official = val.partition(":")
-            return ok == "1", official == "1"
+            blob = cached.decode() if isinstance(cached, bytes) else str(cached)
+    if blob is not None:
+        try:
+            ok, title, author, official = json.loads(blob)
+        except Exception:
+            ok, title, author, official = False, "", "", False
+        return YouTubeCandidate(vid, title, author, bool(ok), bool(official), _artist_in(artist, title, author), False)
+
+    title = author = ""
     official = False
     try:
         async with httpx.AsyncClient(follow_redirects=True, timeout=8.0) as client:
@@ -435,49 +479,60 @@ async def youtube_probe(url: str) -> tuple[bool, bool]:
         if ok:
             with contextlib.suppress(Exception):
                 data = r.json()
-                official = bool(
-                    _OFFICIAL_AUTHOR_RE.search(data.get("author_name") or "")
-                    or _OFFICIAL_TITLE_RE.search(data.get("title") or "")
-                )
+                title = data.get("title") or ""
+                author = data.get("author_name") or ""
+                official = bool(_OFFICIAL_AUTHOR_RE.search(author) or _OFFICIAL_TITLE_RE.search(title))
     except Exception as e:
         print(f"YouTube oEmbed check failed for {vid}: {type(e).__name__}")
-        return True, False
+        return YouTubeCandidate(vid, "", "", True, False, False, False)
+
     with contextlib.suppress(Exception):
-        await redis_client.set(key, f"{'1' if ok else '0'}:{'1' if official else '0'}", ex=_PLAYABLE_TTL)
-    return ok, official
+        await redis_client.set(key, json.dumps([ok, title, author, official]), ex=_PLAYABLE_TTL)
+    return YouTubeCandidate(
+        vid, title, author, ok, official, _artist_in(artist, title, author), bool(_COVER_RE.search(title))
+    )
+
+
+def _artist_in(artist: str, *fields: str) -> bool:
+    """True when the requested artist appears in the title or channel name."""
+    name = re.sub(r"[^\w\s]", " ", (artist or "").strip().lower())
+    name = re.sub(r"\s+", " ", name).strip()
+    if not name:
+        return False
+    hay = " ".join((f or "") for f in fields).lower()
+    return name in hay or any(part in hay for part in name.split() if len(part) > 2)
+
+
+def artist_from_prompt(prompt: str) -> str:
+    """Pull the artist out of "play <track> by <artist>"."""
+    m = re.search(r"\bby\s+(.+)$", (prompt or "").strip(), re.I)
+    return m.group(1).strip(" .!?,") if m else ""
 
 
 async def pick_playable_youtube(
-    search_context: str, want_video: bool = False, limit: int = 6
+    search_context: str, want_video: bool = False, artist: str = "", limit: int = 8
 ) -> tuple[str, str] | None:
-    """Find the first YouTube link in search results that actually resolves.
+    """Pick the best YouTube link in search results that actually resolves.
 
-    Returns (url, title) or None when every candidate is dead. Defaults to the
-    music.youtube.com audio card, since a track is what people usually ask for;
-    pass want_video for the ordinary watch page.
+    Renderability is the hard gate. Among links that embed, one that is neither a
+    cover nor a tutorial and names the artist beats an official-looking cover.
+    Defaults to the music.youtube.com audio card, since a track is what people
+    usually ask for; pass want_video for the ordinary watch page.
     """
-    candidates: list[tuple[str, str]] = []
-    for title, url in source_entries(search_context):
-        vid = youtube_video_id(url)
-        if not vid:
-            continue
-        candidates.append((vid, title))
-        if len(candidates) >= limit:
-            break
-    if not candidates:
+    urls = [u for _, u in source_entries(search_context) if youtube_video_id(u)][:limit]
+    if not urls:
         return None
 
     import asyncio
 
-    probes = await asyncio.gather(*(youtube_probe(f"https://www.youtube.com/watch?v={v}") for v, _ in candidates))
-    host = "www.youtube.com" if want_video else "music.youtube.com"
-    # Playability is the hard requirement; among links that actually embed, the
-    # label/artist upload wins over a fan rip.
-    playable = [(vid, title) for (vid, title), (ok, _) in zip(candidates, probes, strict=True) if ok]
+    probes = await asyncio.gather(*(youtube_probe(u, artist) for u in urls))
+    playable = [p for p in probes if p.playable and p.vid]
     if not playable:
         return None
-    chosen = next(
-        ((vid, title) for (vid, title), (_, official) in zip(candidates, probes, strict=True) if official),
-        playable[0],
+    best = max(playable, key=lambda p: p.score)
+    print(
+        f"[YOUTUBE] chose {best.vid} score={best.score} official={best.official} "
+        f"artist={best.artist_match} cover={best.cover} by {best.author!r} {best.title!r}"
     )
-    return f"https://{host}/watch?v={chosen[0]}", chosen[1]
+    host = "www.youtube.com" if want_video else "music.youtube.com"
+    return f"https://{host}/watch?v={best.vid}", best.title
