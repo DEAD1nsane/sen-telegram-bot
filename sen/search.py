@@ -399,34 +399,52 @@ def as_music_url(url: str) -> str:
 VIDEO_REQUEST_RE = re.compile(r"\bvideo\b", re.I)
 
 
-async def youtube_is_playable(url: str) -> bool:
-    """Check YouTube still serves metadata for this id.
+#: A channel or title like VEVO, "Official Music Video" or an auto-generated
+#: "- Topic" track is the label/artist upload rather than a fan rip.
+_OFFICIAL_AUTHOR_RE = re.compile(r"\bvevo\b|official|\btopic\b|records|\blabel\b", re.I)
+_OFFICIAL_TITLE_RE = re.compile(r"\bofficial\b|\bvevo\b|\blyric[s]?\s+video\b", re.I)
+
+
+async def youtube_probe(url: str) -> tuple[bool, bool]:
+    """Return (playable, official) for a YouTube id.
 
     A deleted, private or hallucinated id answers 404 on oEmbed, and Telegram
     builds its preview from the same metadata, so those links can never embed.
-    A transport failure is reported as playable so a YouTube outage degrades to
-    today's behaviour instead of dropping the link.
+    The same response carries author_name and title, which is enough to tell a
+    label upload from a fan rip without a second request. A transport failure
+    reports playable-but-not-official so a YouTube outage degrades to today's
+    behaviour instead of dropping the link.
     """
     vid = youtube_video_id(url)
     if not vid:
-        return False
+        return False, False
     key = f"yt_ok:{vid}"
     with contextlib.suppress(Exception):
         cached = await redis_client.get(key)
-        if cached is not None:
-            return cached in (b"1", "1")
+        if cached:
+            val = cached.decode() if isinstance(cached, bytes) else str(cached)
+            ok, _, official = val.partition(":")
+            return ok == "1", official == "1"
+    official = False
     try:
         async with httpx.AsyncClient(follow_redirects=True, timeout=8.0) as client:
             r = await client.get(
                 _OEMBED_URL, params={"url": f"https://www.youtube.com/watch?v={vid}", "format": "json"}
             )
         ok = r.status_code == 200
+        if ok:
+            with contextlib.suppress(Exception):
+                data = r.json()
+                official = bool(
+                    _OFFICIAL_AUTHOR_RE.search(data.get("author_name") or "")
+                    or _OFFICIAL_TITLE_RE.search(data.get("title") or "")
+                )
     except Exception as e:
         print(f"YouTube oEmbed check failed for {vid}: {type(e).__name__}")
-        return True
+        return True, False
     with contextlib.suppress(Exception):
-        await redis_client.set(key, "1" if ok else "0", ex=_PLAYABLE_TTL)
-    return ok
+        await redis_client.set(key, f"{'1' if ok else '0'}:{'1' if official else '0'}", ex=_PLAYABLE_TTL)
+    return ok, official
 
 
 async def pick_playable_youtube(
@@ -451,9 +469,15 @@ async def pick_playable_youtube(
 
     import asyncio
 
-    checks = await asyncio.gather(*(youtube_is_playable(f"https://www.youtube.com/watch?v={v}") for v, _ in candidates))
+    probes = await asyncio.gather(*(youtube_probe(f"https://www.youtube.com/watch?v={v}") for v, _ in candidates))
     host = "www.youtube.com" if want_video else "music.youtube.com"
-    for (vid, title), ok in zip(candidates, checks, strict=True):
-        if ok:
-            return f"https://{host}/watch?v={vid}", title
-    return None
+    # Playability is the hard requirement; among links that actually embed, the
+    # label/artist upload wins over a fan rip.
+    playable = [(vid, title) for (vid, title), (ok, _) in zip(candidates, probes, strict=True) if ok]
+    if not playable:
+        return None
+    chosen = next(
+        ((vid, title) for (vid, title), (_, official) in zip(candidates, probes, strict=True) if official),
+        playable[0],
+    )
+    return f"https://{host}/watch?v={chosen[0]}", chosen[1]
