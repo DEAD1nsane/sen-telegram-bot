@@ -1186,6 +1186,7 @@ def register_handlers(router: Router, bot: "Bot") -> None:
                 "If joking or sarcastic, match the energy.\n"
                 "If you do not know, say so without guessing.\n"
                 "When the user replies to a message with a short instruction (translate, list, summarize, explain, 'list with numbers', 'translate to English'), apply that instruction ONLY to the SOURCE CONTENT. Never translate, list, or answer the instruction itself, and never treat the source as a question to answer on its own. If the source is in another language, translate that text, keep the user's requested format, and do not add commentary about the instruction.\n"
+                "When the user says to do something 'like this' or 'like that' about a replied-to message, imitate ONLY its format, structure, and energy — always invent fresh content for the new answer. Never carry over names, facts, jokes, or items from the referenced message or from history.\n"
                 "Do not assume personal details unless explicitly present in the memory list.\n"
                 "When media is attached, treat that media as primary evidence. Never fabricate visual, audio, or document details. If you cannot reliably inspect it, say so.\n"
                 "Return Telegram Rich HTML for sendRichMessage. Use whichever tags best fit the content naturally.\n"
