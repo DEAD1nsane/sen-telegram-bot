@@ -149,6 +149,9 @@ def sanitize_rich_html(text: str) -> str:
     """Strip unsupported HTML tags for Telegram RichMessage."""
     if not text:
         return text
+    # Drop these outright: the model sometimes emits them, and neither a rich
+    # message nor plain sendMessage accepts a <script> start tag.
+    text = re.sub(r"<(?:script|style)\b[^>]*>.*?</(?:script|style)>", "", text, flags=re.I | re.S)
     text = re.sub(r"<div\b[^>]*>|</div>|<section\b[^>]*>|</section>|<article\b[^>]*>|</article>", "", text, flags=re.I)
     text = re.sub(r"<br\s*/?>", "\n", text, flags=re.I)
     text = re.sub(r"\n{3,}", "\n\n", text)
@@ -309,11 +312,28 @@ YOUTUBE_HOST = r"(?:www\.|m\.|music\.|studio\.|tv\.)?(?:youtube\.com|youtu\.be)"
 YOUTUBE_URL_RE = re.compile(rf"(?<![\w-])(?:https?://)?{YOUTUBE_HOST}/\S*", re.I)
 
 # A URL inside <a href> is a text_link, and Telegram never generates a link
-# preview for a text_link, so the embed would be silently dropped.
+# preview for a text_link, so the embed would be silently dropped. Capture the
+# label too, so it can be re-emitted next to a bare URL.
 _YOUTUBE_ANCHOR_RE = re.compile(
-    rf'<a\s+href="((?:https?://)?{YOUTUBE_HOST}/\S*?)"\s*>.*?</a>',
+    rf'<a\s+href="((?:https?://)?{YOUTUBE_HOST}/\S*?)"\s*>(.*?)</a>',
     re.I | re.S,
 )
+
+
+def _label_and_url(text: str) -> str:
+    """Turn YouTube text_links into "label\\nurl".
+
+    A text_link never gets a link preview, so keeping the label means giving up
+    the embed. Emitting the label as plain text with the bare URL on its own
+    line is the only form that gives up neither.
+    """
+
+    def repl(m: re.Match) -> str:
+        url, label = m.group(1), m.group(2).strip()
+        return f"{label}\n{url}" if label else url
+
+    return _YOUTUBE_ANCHOR_RE.sub(repl, text)
+
 
 # Markup only a rich message understands. Plain sendMessage would reject the
 # text outright, so those replies stay on the rich path (no embed, as before).
@@ -346,10 +366,20 @@ async def send_ai_response(
     # link sent that way is a dead clickable link with no embed. Those replies
     # go out as plain text instead, where Telegram builds the preview itself.
     if YOUTUBE_URL_RE.search(sanitized) and not _RICH_ONLY_TAG_RE.search(sanitized):
+        plain = _label_and_url(sanitized)
         try:
-            return await bot.send_message(text=_YOUTUBE_ANCHOR_RE.sub(r"\1", sanitized), **kwargs)
+            return await bot.send_message(text=plain, **kwargs)
         except TelegramBadRequest as e:
-            print(f"YouTube preview send rejected ({str(e)[:100]}), using rich message instead")
+            # The model can still emit markup only a rich message tolerates (a
+            # stray <script>, an unclosed tag). Retry as bare text so the embed
+            # survives instead of being lost to the rich path.
+            bare = html.unescape(re.sub(r"<[^>]+>", "", plain)).strip()
+            print(f"YouTube preview send rejected ({str(e)[:100]}), retrying as plain text")
+            if bare:
+                try:
+                    return await bot.send_message(text=bare, **kwargs)
+                except TelegramBadRequest as e2:
+                    print(f"Plain text retry also failed ({str(e2)[:100]}), using rich message instead")
 
     return await bot.send_rich_message(rich_message=InputRichMessage(html=sanitized), **kwargs)
 
