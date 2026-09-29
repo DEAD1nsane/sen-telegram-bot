@@ -1116,7 +1116,11 @@ def register_handlers(router: Router, bot: "Bot") -> None:
         try:
             saved = await get_memories(str(uid), temp_forget)
             history_key = f"chat_history:{cid}:{uid}"
-            raw_hist = [] if temp_forget else await redis_client.lrange(history_key, 0, -1)
+            # A fresh @-tag in a group is a new question, not a continuation:
+            # answer it on its own instead of dragging the old thread in.
+            # Replies to the bot and private chats keep history for continuity.
+            fresh_tag = tagged and not reply_to_bot and not is_private
+            raw_hist = [] if (temp_forget or fresh_tag) else await redis_client.lrange(history_key, 0, -1)
             history = [x.decode() if isinstance(x, bytes) else str(x) for x in raw_hist]
 
             use_search = detect_explicit_search_intent(prompt) if media_bytes else detect_search_intent(prompt)
