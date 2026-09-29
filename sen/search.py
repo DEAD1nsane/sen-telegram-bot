@@ -192,6 +192,7 @@ async def searx_request(
     time_range: str | None = None,
     page: int = 1,
     limit: int = 10,
+    engines: str | None = None,
 ) -> list[dict]:
     """Execute a single SearXNG search request."""
     params: dict = {
@@ -204,6 +205,8 @@ async def searx_request(
     }
     if time_range:
         params["time_range"] = time_range
+    if engines:
+        params["engines"] = engines
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
         "Accept": "application/json",
@@ -215,8 +218,13 @@ async def searx_request(
         return r.json().get("results", []) or []
 
 
-async def free_web_search(query: str, news: bool = False) -> str:
-    """Search the web and return formatted results text."""
+async def free_web_search(query: str, news: bool = False, engines: str | None = None) -> str:
+    """Search the web and return formatted results text.
+
+    `engines` narrows the backend, which a site: query cannot rely on: most
+    engines ignore site:, so "play x by y site:youtube.com" comes back full of
+    unrelated pages and leaves too few real YouTube candidates to rank.
+    """
     search_query = normalize_search_query(query)
     if not search_query:
         return ""
@@ -229,13 +237,13 @@ async def free_web_search(query: str, news: bool = False) -> str:
         print(f"Web search cache read failure: {e}")
     try:
         if news:
-            results = await searx_request(search_query, "news", "day", 1, 8)
+            results = await searx_request(search_query, "news", "day", 1, 8, engines=engines)
             if not results:
-                results = await searx_request(search_query, "news", "week", 1, 8)
+                results = await searx_request(search_query, "news", "week", 1, 8, engines=engines)
             if not results:
-                results = await searx_request(search_query, "general", "month", 1, 8)
+                results = await searx_request(search_query, "general", "month", 1, 8, engines=engines)
         else:
-            results = await searx_request(search_query, "general", None, 1, 8)
+            results = await searx_request(search_query, "general", None, 1, 8, engines=engines)
         seen: set = set()
         out: list[str] = []
         for result in results:
@@ -381,7 +389,11 @@ def asked_for_sources(text: str) -> bool:
 # ---------------------------------------------------------------------------
 
 _OEMBED_URL = "https://www.youtube.com/oembed"
+#: A confirmed-live id is stable for a week. A dead one is not: a video can be
+#: reuploaded, unlisted or restored, and one transient failure must not blacklist
+#: an id for seven days, so negatives expire quickly.
 _PLAYABLE_TTL = 60 * 60 * 24 * 7
+_DEAD_TTL = 60 * 60
 
 
 def youtube_video_id(url: str) -> str | None:
@@ -468,10 +480,18 @@ async def youtube_probe(url: str, artist: str = "") -> YouTubeCandidate:
             blob = cached.decode() if isinstance(cached, bytes) else str(cached)
     if blob is not None:
         try:
-            ok, title, author, official = json.loads(blob)
+            ok, title, author, official, cover = json.loads(blob)
         except Exception:
-            ok, title, author, official = False, "", "", False
-        return YouTubeCandidate(vid, title, author, bool(ok), bool(official), _artist_in(artist, title, author), False)
+            # A cache entry written by an older release stored a bare "1"/"0"
+            # or "1:1", which does not unpack into five values. Treating that as
+            # playable=unplayable would silently blacklist every id we have
+            # checked before, so re-probe instead of trusting the shape.
+            print(f"YouTube cache entry for {vid} is in an old format, re-probing")
+            blob = None
+        if blob is not None:
+            return YouTubeCandidate(
+                vid, title, author, bool(ok), bool(official), _artist_in(artist, title, author), bool(cover)
+            )
 
     title = author = ""
     official = False
@@ -491,8 +511,11 @@ async def youtube_probe(url: str, artist: str = "") -> YouTubeCandidate:
         print(f"YouTube oEmbed check failed for {vid}: {type(e).__name__}")
         return YouTubeCandidate(vid, "", "", True, False, False, False)
 
+    cover = bool(_COVER_RE.search(title))
     with contextlib.suppress(Exception):
-        await redis_client.set(key, json.dumps([ok, title, author, official]), ex=_PLAYABLE_TTL)
+        await redis_client.set(
+            key, json.dumps([ok, title, author, official, cover]), ex=_PLAYABLE_TTL if ok else _DEAD_TTL
+        )
     return YouTubeCandidate(
         vid, title, author, ok, official, _artist_in(artist, title, author), bool(_COVER_RE.search(title))
     )

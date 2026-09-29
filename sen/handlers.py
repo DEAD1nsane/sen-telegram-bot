@@ -1240,7 +1240,11 @@ def register_handlers(router: Router, bot: "Bot") -> None:
                     if _picked is None:
                         # Every link the first search turned up is dead, so go
                         # back for another rather than shipping an unplayable id.
-                        _retry = await free_web_search(f"{normalize_search_query(prompt)} site:youtube.com", news=False)
+                        # Most engines ignore site:, so asking YouTube engines
+                        # directly gets a pool of real candidates to rank.
+                        _retry = await free_web_search(
+                            f"{normalize_search_query(prompt)} youtube", news=False, engines="youtube"
+                        )
                         if _retry and _retry != search_context:
                             _picked = await pick_playable_youtube(_retry, want_video=_want_video, artist=_artist)
                             if _picked:
