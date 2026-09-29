@@ -520,14 +520,20 @@ async def pick_playable_youtube(
     usually ask for; pass want_video for the ordinary watch page.
     """
     urls = [u for _, u in source_entries(search_context) if youtube_video_id(u)][:limit]
+    print(f"[YOUTUBE] probe artist={artist!r} want_video={want_video} candidates={len(urls)}")
+    for u in urls:
+        print(f"[YOUTUBE]   candidate {u}")
     if not urls:
         return None
 
     import asyncio
 
     probes = await asyncio.gather(*(youtube_probe(u, artist) for u in urls))
+    for p in probes:
+        print(f"[YOUTUBE]   probe {p.vid} playable={p.playable} score={p.score} by {p.author!r} {p.title!r}")
     playable = [p for p in probes if p.playable and p.vid]
     if not playable:
+        print(f"[YOUTUBE] no playable id among {len(probes)} candidates")
         return None
     best = max(playable, key=lambda p: p.score)
     print(
