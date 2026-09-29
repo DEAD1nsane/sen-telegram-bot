@@ -152,6 +152,29 @@ def detect_explicit_search_intent(text: str) -> bool:
     return any(marker in t for marker in _EXPLICIT_SEARCH_MARKERS)
 
 
+_MUSIC_NOUN_RE = re.compile(r"\b(?:songs?|tracks?|music|album|single|playlist|ep)\b", re.I)
+_STRONG_MUSIC_VERB_RE = re.compile(r"\b(?:listen\s+to|put\s+on|throw\s+on|stream)\b", re.I)
+_PLAY_RE = re.compile(r"\bplay\b", re.I)
+_BY_ARTIST_RE = re.compile(r"\bby\s+\S", re.I)
+
+
+def is_music_request(prompt: str) -> bool:
+    """True when the user is asking to be played something.
+
+    "play wait and bleed by slipknot" names no keyword the media-link path used
+    to look for, so without this it reached the model with no search at all and
+    the model improvised a video id from memory. Bot commands are excluded so
+    /play (Minesweeper) never becomes a music request, and bare "play" needs an
+    artist so "play minesweeper" stays a game command.
+    """
+    t = (prompt or "").strip()
+    if not t or t.startswith("/"):
+        return False
+    if _MUSIC_NOUN_RE.search(t) or _STRONG_MUSIC_VERB_RE.search(t):
+        return True
+    return bool(_PLAY_RE.search(t) and _BY_ARTIST_RE.search(t))
+
+
 async def searx_request(
     query: str,
     category: str = "general",
