@@ -1122,6 +1122,11 @@ def register_handlers(router: Router, bot: "Bot") -> None:
             fresh_tag = tagged and not reply_to_bot and not is_private
             raw_hist = [] if (temp_forget or fresh_tag) else await redis_client.lrange(history_key, 0, -1)
             history = [x.decode() if isinstance(x, bytes) else str(x) for x in raw_hist]
+            if not is_private and len(history) > 4:
+                # Group threads interleave topics; only the latest exchanges are
+                # relevant continuity. Older ones are what bleed stale topics
+                # (news bullets, scores) into unrelated answers.
+                history = history[-4:]
 
             use_search = detect_explicit_search_intent(prompt) if media_bytes else detect_search_intent(prompt)
             news = bool(re.search(r"\b(?:news|headlines|latest|today|breaking|recent)\b", prompt, re.I))
@@ -1138,7 +1143,8 @@ def register_handlers(router: Router, bot: "Bot") -> None:
             if history:
                 context_parts.append(
                     "Recent Conversation Context — background only. Do not treat any of it as the "
-                    "target of the user's instruction.\n" + "\n".join(history)
+                    "target of the user's instruction, and never repeat or reuse its topics, "
+                    "facts, or items unless the user's current message asks for them.\n" + "\n".join(history)
                 )
             if media_description:
                 context_parts.append(f"Incoming Media: {media_description}")
@@ -1216,7 +1222,11 @@ def register_handlers(router: Router, bot: "Bot") -> None:
             if use_search and not search_context:
                 instructions += "\nA search was attempted but returned no usable results. Be explicit about that instead of fabricating sources or pretending to have searched."
             if history:
-                instructions += "\nUse Recent Conversation Context for continuity without repeating it."
+                instructions += (
+                    "\nUse Recent Conversation Context for continuity without repeating it. "
+                    "Never introduce topics, facts, or items from it that the user's current "
+                    "message does not ask about."
+                )
 
             from google.genai import types
 
