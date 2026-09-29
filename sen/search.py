@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import html
 import re
 from contextvars import ContextVar
@@ -335,3 +336,101 @@ def asked_for_sources(text: str) -> bool:
             re.I,
         )
     )
+
+
+# ---------------------------------------------------------------------------
+# YouTube link validation
+# ---------------------------------------------------------------------------
+
+#: Any YouTube URL shape -> its video id. Covers watch?v=, youtu.be/, shorts/,
+#: live/, embed/ and the music. subdomain, with or without a scheme.
+_YOUTUBE_ID_RE = re.compile(
+    r"(?:youtube\.com/(?:watch\?(?:.*&)?v=|shorts/|live/|embed/|v/)|youtu\.be/)"
+    r"([A-Za-z0-9_-]{11})",
+    re.I,
+)
+
+_OEMBED_URL = "https://www.youtube.com/oembed"
+_PLAYABLE_TTL = 60 * 60 * 24 * 7
+
+
+def youtube_video_id(url: str) -> str | None:
+    """Return the 11-character video id, or None if this isn't a YouTube link."""
+    m = _YOUTUBE_ID_RE.search(url or "")
+    return m.group(1) if m else None
+
+
+def as_music_url(url: str) -> str:
+    """Rewrite a YouTube link to music.youtube.com.
+
+    Telegram renders music.youtube.com as an audio card, which is what someone
+    asking for a track actually wants, and the id is identical so the video
+    behind it is unchanged.
+    """
+    vid = youtube_video_id(url)
+    return f"https://music.youtube.com/watch?v={vid}" if vid else url
+
+
+#: "music video", "official video", "the video" - only these want the watch page
+#: rather than the audio card.
+VIDEO_REQUEST_RE = re.compile(r"\bvideo\b", re.I)
+
+
+async def youtube_is_playable(url: str) -> bool:
+    """Check YouTube still serves metadata for this id.
+
+    A deleted, private or hallucinated id answers 404 on oEmbed, and Telegram
+    builds its preview from the same metadata, so those links can never embed.
+    A transport failure is reported as playable so a YouTube outage degrades to
+    today's behaviour instead of dropping the link.
+    """
+    vid = youtube_video_id(url)
+    if not vid:
+        return False
+    key = f"yt_ok:{vid}"
+    with contextlib.suppress(Exception):
+        cached = await redis_client.get(key)
+        if cached is not None:
+            return cached in (b"1", "1")
+    try:
+        async with httpx.AsyncClient(follow_redirects=True, timeout=8.0) as client:
+            r = await client.get(
+                _OEMBED_URL, params={"url": f"https://www.youtube.com/watch?v={vid}", "format": "json"}
+            )
+        ok = r.status_code == 200
+    except Exception as e:
+        print(f"YouTube oEmbed check failed for {vid}: {type(e).__name__}")
+        return True
+    with contextlib.suppress(Exception):
+        await redis_client.set(key, "1" if ok else "0", ex=_PLAYABLE_TTL)
+    return ok
+
+
+async def pick_playable_youtube(
+    search_context: str, want_video: bool = False, limit: int = 6
+) -> tuple[str, str] | None:
+    """Find the first YouTube link in search results that actually resolves.
+
+    Returns (url, title) or None when every candidate is dead. Defaults to the
+    music.youtube.com audio card, since a track is what people usually ask for;
+    pass want_video for the ordinary watch page.
+    """
+    candidates: list[tuple[str, str]] = []
+    for title, url in source_entries(search_context):
+        vid = youtube_video_id(url)
+        if not vid:
+            continue
+        candidates.append((vid, title))
+        if len(candidates) >= limit:
+            break
+    if not candidates:
+        return None
+
+    import asyncio
+
+    checks = await asyncio.gather(*(youtube_is_playable(f"https://www.youtube.com/watch?v={v}") for v, _ in candidates))
+    host = "www.youtube.com" if want_video else "music.youtube.com"
+    for (vid, title), ok in zip(candidates, checks, strict=True):
+        if ok:
+            return f"https://{host}/watch?v={vid}", title
+    return None

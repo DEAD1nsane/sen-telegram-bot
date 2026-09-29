@@ -18,6 +18,7 @@ from aiogram.types import (
     BotCommandScopeAllGroupChats,
     BotCommandScopeAllPrivateChats,
     InputRichMessage,
+    LinkPreviewOptions,
     Message,
     ReplyParameters,
 )
@@ -49,9 +50,11 @@ from .search import (
     free_web_search,
     get_search_state,
     normalize_search_query,
+    pick_playable_youtube,
     replace_model_source_blocks,
     source_entries,
     source_links,
+    VIDEO_REQUEST_RE,
 )
 from .media import (
     DOCUMENT_DOWNLOAD_ERROR,
@@ -320,12 +323,25 @@ _YOUTUBE_ANCHOR_RE = re.compile(
 )
 
 
+def _youtube_preview_url(text: str) -> str | None:
+    """Pull the YouTube URL to request a preview for.
+
+    An href wins, because \\S* would otherwise run straight through the closing
+    quote and into the label; a bare URL just needs trailing punctuation trimmed.
+    """
+    anchored = _YOUTUBE_ANCHOR_RE.search(text or "")
+    if anchored:
+        return anchored.group(1)
+    m = YOUTUBE_URL_RE.search(text or "")
+    return m.group(0).rstrip("\"'>),.;]") if m else None
+
+
 def _label_and_url(text: str) -> str:
     """Turn YouTube text_links into "label\\nurl".
 
-    A text_link never gets a link preview, so keeping the label means giving up
-    the embed. Emitting the label as plain text with the bare URL on its own
-    line is the only form that gives up neither.
+    Only used on the retry path, where every tag gets stripped and an href would
+    take its URL with it. Splitting first leaves a bare URL Telegram can still
+    auto-detect once the label survives as plain text.
     """
 
     def repl(m: re.Match) -> str:
@@ -364,16 +380,19 @@ async def send_ai_response(
     # Rich messages cannot carry a link preview at all: sendRichMessage takes no
     # link_preview_options and RichMessage has nowhere to put one, so a YouTube
     # link sent that way is a dead clickable link with no embed. Those replies
-    # go out as plain text instead, where Telegram builds the preview itself.
+    # go out as plain text, where the preview is requested explicitly.
     if YOUTUBE_URL_RE.search(sanitized) and not _RICH_ONLY_TAG_RE.search(sanitized):
-        plain = _label_and_url(sanitized)
+        preview = _youtube_preview_url(sanitized)
+        options = LinkPreviewOptions(url=preview) if preview else None
         try:
-            return await bot.send_message(text=plain, **kwargs)
+            # The label stays a real link; asking for the preview by URL is what
+            # lets a text_link embed, since auto-detection only fires on bare URLs.
+            return await bot.send_message(text=sanitized, link_preview_options=options, **kwargs)
         except TelegramBadRequest as e:
             # The model can still emit markup only a rich message tolerates (a
-            # stray <script>, an unclosed tag). Retry as bare text so the embed
-            # survives instead of being lost to the rich path.
-            bare = html.unescape(re.sub(r"<[^>]+>", "", plain)).strip()
+            # stray <script>, an unclosed tag). Retry with the label and URL
+            # split so the URL survives tag stripping and can still auto-embed.
+            bare = html.unescape(re.sub(r"<[^>]+>", "", _label_and_url(sanitized))).strip()
             print(f"YouTube preview send rejected ({str(e)[:100]}), retrying as plain text")
             if bare:
                 try:
@@ -1207,12 +1226,30 @@ def register_handlers(router: Router, bot: "Bot") -> None:
             if search_context:
                 context_parts.append("Web Search Context:\n" + search_context)
                 if re.search(r"song|youtube|youtu\.be|\bvideo\b|\blink\b", prompt, re.I):
-                    _yt = re.search(r"URL: (https?://(?:www\.)?(?:youtube\.com|youtu\.be)\S+)", search_context)
-                    _any = _yt or re.search(r"URL: (https?://\S+)", search_context)
-                    if _any:
+                    # A track request wants the audio card; only an explicit
+                    # video request wants the ordinary watch page.
+                    _want_video = bool(VIDEO_REQUEST_RE.search(prompt))
+                    _picked = await pick_playable_youtube(search_context, want_video=_want_video)
+                    if _picked is None:
+                        # Every link the first search turned up is dead, so go
+                        # back for another rather than shipping an unplayable id.
+                        _retry = await free_web_search(f"{normalize_search_query(prompt)} site:youtube.com", news=False)
+                        if _retry and _retry != search_context:
+                            _picked = await pick_playable_youtube(_retry, want_video=_want_video)
+                            if _picked:
+                                context_parts.append("Additional Web Search Context:\n" + _retry)
+                    if _picked:
+                        _url, _title = _picked
                         context_parts.append(
-                            "Verified media link — send exactly this URL unmodified, nothing else invented:\n"
-                            + _any.group(1)
+                            "Verified media link — this exact id was confirmed to still resolve on YouTube, so "
+                            "Telegram can embed it. Send exactly this URL unmodified, nothing else invented, and "
+                            "do not swap it for any other link:\n" + _url
+                        )
+                    else:
+                        context_parts.append(
+                            "No YouTube link found in search results still resolves (the ids are deleted, private or "
+                            "wrong), so there is no embeddable link to send. Do not invent a video id or guess a URL. "
+                            "If you can only offer links that will not embed, say so plainly in one line."
                         )
             elif use_search:
                 context_parts.append(
