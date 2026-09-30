@@ -167,6 +167,10 @@ _MUSIC_NOUN_RE = re.compile(r"\b(?:songs?|tracks?|music|album|single|playlist|ep
 _STRONG_MUSIC_VERB_RE = re.compile(r"\b(?:listen\s+to|put\s+on|throw\s+on|stream)\b", re.I)
 _PLAY_RE = re.compile(r"\bplay\b", re.I)
 _BY_ARTIST_RE = re.compile(r"\bby\s+\S", re.I)
+#: "play ohio is for lovers - hawthorne heights" names the artist after a dash,
+#: not after "by". Without this the request is not recognised as music at all,
+#: the verifier never runs, and the model invents a video id from memory.
+_DASH_ARTIST_RE = re.compile(r"\bplay\b.+?\s+[-–—]\s+\S", re.I)
 
 
 def is_music_request(prompt: str) -> bool:
@@ -183,7 +187,9 @@ def is_music_request(prompt: str) -> bool:
         return False
     if _MUSIC_NOUN_RE.search(t) or _STRONG_MUSIC_VERB_RE.search(t):
         return True
-    return bool(_PLAY_RE.search(t) and _BY_ARTIST_RE.search(t))
+    if _PLAY_RE.search(t) and _BY_ARTIST_RE.search(t):
+        return True
+    return bool(_DASH_ARTIST_RE.search(t))
 
 
 async def searx_request(
@@ -532,8 +538,12 @@ def _artist_in(artist: str, *fields: str) -> bool:
 
 
 def artist_from_prompt(prompt: str) -> str:
-    """Pull the artist out of "play <track> by <artist>"."""
-    m = re.search(r"\bby\s+(.+)$", (prompt or "").strip(), re.I)
+    """Pull the artist out of "play <track> by <artist>" or "play <track> - <artist>"."""
+    t = (prompt or "").strip()
+    m = re.search(r"\bby\s+(.+)$", t, re.I)
+    if m:
+        return m.group(1).strip(" .!?,")
+    m = re.search(r"\s+[-–—]\s+([^-–—]+)$", t)
     return m.group(1).strip(" .!?,") if m else ""
 
 

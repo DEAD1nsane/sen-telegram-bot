@@ -1270,6 +1270,12 @@ def register_handlers(router: Router, bot: "Bot") -> None:
                 context_parts.append(
                     "Web Search Context:\nA web search was requested, but no usable results were returned. Do not pretend that a search result supports a claim."
                 )
+                if is_music_request(prompt):
+                    context_parts.append(
+                        "No verified YouTube link is available for this track request, so there is nothing "
+                        "embeddable to send. Do not invent a video id or guess a watch URL — say plainly you "
+                        "could not find a working link."
+                    )
             if media_bytes:
                 context_parts.append(
                     "Media handling rule: The attached media is the primary evidence for the user's request. Answer what can actually be seen, heard, or read in it. Do not substitute web results, conversation history, or guesses for details that should come from the media. If the media cannot be inspected reliably, say so instead of inventing what happened."
