@@ -51,6 +51,7 @@ from .search import (
     get_search_state,
     is_music_request,
     normalize_search_query,
+    music_search_query,
     artist_from_prompt,
     pick_playable_youtube,
     replace_model_source_blocks,
@@ -1210,6 +1211,8 @@ def register_handlers(router: Router, bot: "Bot") -> None:
             use_search = use_search or is_music_request(prompt)
             news = bool(re.search(r"\b(?:news|headlines|latest|today|breaking|recent)\b", prompt, re.I))
             search_query = normalize_search_query(prompt)
+            if is_music_request(prompt):
+                search_query = music_search_query(prompt)
             search_context = await free_web_search(search_query, news=news) if use_search else ""
 
             context_parts = []
@@ -1236,17 +1239,19 @@ def register_handlers(router: Router, bot: "Bot") -> None:
                     # video request wants the ordinary watch page.
                     _want_video = bool(VIDEO_REQUEST_RE.search(prompt))
                     _artist = artist_from_prompt(prompt)
-                    _picked = await pick_playable_youtube(search_context, want_video=_want_video, artist=_artist)
+                    _picked = await pick_playable_youtube(
+                        search_context, want_video=_want_video, artist=_artist, tag="first"
+                    )
                     if _picked is None:
                         # Every link the first search turned up is dead, so go
                         # back for another rather than shipping an unplayable id.
                         # Most engines ignore site:, so asking YouTube engines
                         # directly gets a pool of real candidates to rank.
-                        _retry = await free_web_search(
-                            f"{normalize_search_query(prompt)} youtube", news=False, engines="youtube"
-                        )
+                        _retry = await free_web_search(f"{search_query} youtube", news=False, engines="youtube")
                         if _retry and _retry != search_context:
-                            _picked = await pick_playable_youtube(_retry, want_video=_want_video, artist=_artist)
+                            _picked = await pick_playable_youtube(
+                                _retry, want_video=_want_video, artist=_artist, tag="retry"
+                            )
                             if _picked:
                                 context_parts.append("Additional Web Search Context:\n" + _retry)
                     if _picked:
@@ -1258,13 +1263,16 @@ def register_handlers(router: Router, bot: "Bot") -> None:
                             f"URL: {_url}\n"
                             f"Label it exactly like this and nothing else: [{_label}]({_url})\n"
                             "That label is the track's real title and artist read straight from the link, so use it "
-                            "verbatim - do not expand it, rename the track, or take the wording from the request."
+                            "verbatim - do not expand it, rename the track, or take the wording from the request. "
+                            "Keep the link's host exactly as given: a music.youtube.com link stays music.youtube.com, "
+                            "do not rewrite it to www.youtube.com. Only a request that explicitly asks for a video "
+                            "gets the watch page, and then the URL above already says so."
                         )
                     else:
                         context_parts.append(
-                            "No YouTube link found in search results still resolves (the ids are deleted, private or "
-                            "wrong), so there is no embeddable link to send. Do not invent a video id or guess a URL. "
-                            "If you can only offer links that will not embed, say so plainly in one line."
+                            "No working YouTube link exists for this track request, so reply with exactly this "
+                            "sentence and nothing else: I couldn't find a working link for that track right now. "
+                            "Do not invent a video id, guess a watch URL, explain why, or blame the network."
                         )
             elif use_search:
                 context_parts.append(
@@ -1272,9 +1280,9 @@ def register_handlers(router: Router, bot: "Bot") -> None:
                 )
                 if is_music_request(prompt):
                     context_parts.append(
-                        "No verified YouTube link is available for this track request, so there is nothing "
-                        "embeddable to send. Do not invent a video id or guess a watch URL — say plainly you "
-                        "could not find a working link."
+                        "No working YouTube link exists for this track request, so reply with exactly this "
+                        "sentence and nothing else: I couldn't find a working link for that track right now. "
+                        "Do not invent a video id, guess a watch URL, explain why, or blame the network."
                     )
             if media_bytes:
                 context_parts.append(

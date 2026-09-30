@@ -547,8 +547,23 @@ def artist_from_prompt(prompt: str) -> str:
     return m.group(1).strip(" .!?,") if m else ""
 
 
+_MENTION_RE = re.compile(r"^\s*@\w+\s+")
+
+
+def music_search_query(prompt: str) -> str:
+    """Search query for a track request: mention and "play" stripped, artist kept.
+
+    "@SenAnythangBot play ohio is for lovers - hawthorne heights" goes to the
+    engine as "ohio is for lovers - hawthorne heights" instead of carrying the
+    mention and command verb into the results.
+    """
+    t = _MENTION_RE.sub("", (prompt or "").strip())
+    t = re.sub(r"^\s*play\s+", "", t, flags=re.I)
+    return normalize_search_query(t)
+
+
 async def pick_playable_youtube(
-    search_context: str, want_video: bool = False, artist: str = "", limit: int = 8
+    search_context: str, want_video: bool = False, artist: str = "", limit: int = 8, tag: str = ""
 ) -> tuple[str, str] | None:
     """Pick the best YouTube link in search results that actually resolves.
 
@@ -557,11 +572,14 @@ async def pick_playable_youtube(
     Defaults to the music.youtube.com audio card, since a track is what people
     usually ask for; pass want_video for the ordinary watch page.
     """
-    urls = [u for _, u in source_entries(search_context) if youtube_video_id(u)][:limit]
-    print(f"[YOUTUBE] probe artist={artist!r} want_video={want_video} candidates={len(urls)}")
+    entries = source_entries(search_context)
+    urls = [u for _, u in entries if youtube_video_id(u)][:limit]
+    print(f"[YOUTUBE] probe artist={artist!r} want_video={want_video} candidates={len(urls)} {tag}".rstrip())
     for u in urls:
         print(f"[YOUTUBE]   candidate {u}")
     if not urls:
+        hosts = [re.sub(r"https?://(www\.)?", "", u).split("/")[0] for _, u in entries]
+        print(f"[YOUTUBE] no video ids among {len(entries)} entries {tag}: hosts={hosts}".rstrip())
         return None
 
     import asyncio
