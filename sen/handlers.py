@@ -1216,6 +1216,9 @@ def register_handlers(router: Router, bot: "Bot") -> None:
             search_context = await free_web_search(search_query, news=news) if use_search else ""
 
             context_parts = []
+            # Set when a track/video request has no verified link: the reply
+            # goes out verbatim and the model is skipped entirely (below).
+            _no_link_fallback: str | None = None
             if replied_context:
                 context_parts.append(
                     "SOURCE CONTENT — the message the user replied to. This is the material the "
@@ -1245,9 +1248,10 @@ def register_handlers(router: Router, bot: "Bot") -> None:
                     if _picked is None:
                         # Every link the first search turned up is dead, so go
                         # back for another rather than shipping an unplayable id.
-                        # Most engines ignore site:, so asking YouTube engines
-                        # directly gets a pool of real candidates to rank.
-                        _retry = await free_web_search(f"{search_query} youtube", news=False, engines="youtube")
+                        # The videos category aggregates video engines and
+                        # returns watch?v= links; the engines= filter proved
+                        # decorative (the retry came back reddit and wikipedia).
+                        _retry = await free_web_search(f"{search_query} youtube", news=False, category="videos")
                         if _retry and _retry != search_context:
                             _picked = await pick_playable_youtube(
                                 _retry, want_video=_want_video, artist=_artist, tag="retry"
@@ -1269,21 +1273,13 @@ def register_handlers(router: Router, bot: "Bot") -> None:
                             "gets the watch page, and then the URL above already says so."
                         )
                     else:
-                        context_parts.append(
-                            "No working YouTube link exists for this track request, so reply with exactly this "
-                            "sentence and nothing else: I couldn't find a working link for that track right now. "
-                            "Do not invent a video id, guess a watch URL, explain why, or blame the network."
-                        )
+                        _no_link_fallback = "I couldn't find a working link for that one right now."
             elif use_search:
                 context_parts.append(
                     "Web Search Context:\nA web search was requested, but no usable results were returned. Do not pretend that a search result supports a claim."
                 )
                 if is_music_request(prompt):
-                    context_parts.append(
-                        "No working YouTube link exists for this track request, so reply with exactly this "
-                        "sentence and nothing else: I couldn't find a working link for that track right now. "
-                        "Do not invent a video id, guess a watch URL, explain why, or blame the network."
-                    )
+                    _no_link_fallback = "I couldn't find a working link for that one right now."
             if media_bytes:
                 context_parts.append(
                     "Media handling rule: The attached media is the primary evidence for the user's request. Answer what can actually be seen, heard, or read in it. Do not substitute web results, conversation history, or guesses for details that should come from the media. If the media cannot be inspected reliably, say so instead of inventing what happened."
@@ -1375,17 +1371,24 @@ def register_handlers(router: Router, bot: "Bot") -> None:
             else:
                 contents = final_prompt
 
-            response = await generate_gemini_response(
-                contents, types.GenerateContentConfig(system_instruction=instructions, safety_settings=safety)
-            )
-            plain_lists = bool(
-                re.search(
-                    r"\b(?:plain|non[- ]?rich|without formatting|no formatting|no rich text|as text|just text|raw text)\b",
-                    prompt or "",
-                    re.I,
+            if _no_link_fallback is not None:
+                # No verified link exists and the model cannot be trusted with
+                # this one: left to itself it invents dead ids, sends a bare
+                # youtube.com/watch, or blames the network. It never sees the
+                # request; the sentence goes out verbatim.
+                response_text = _no_link_fallback
+            else:
+                response = await generate_gemini_response(
+                    contents, types.GenerateContentConfig(system_instruction=instructions, safety_settings=safety)
                 )
-            )
-            response_text = clean_ai_output(response.text, plain_lists=plain_lists)
+                plain_lists = bool(
+                    re.search(
+                        r"\b(?:plain|non[- ]?rich|without formatting|no formatting|no rich text|as text|just text|raw text)\b",
+                        prompt or "",
+                        re.I,
+                    )
+                )
+                response_text = clean_ai_output(response.text, plain_lists=plain_lists)
 
             response_text = re.sub(
                 r"\s*\[ATTACH_SEARCH_IMAGE:\s*https?://[^\]\s]+\]\s*", "\n", response_text, flags=re.I

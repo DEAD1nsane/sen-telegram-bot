@@ -224,17 +224,19 @@ async def searx_request(
         return r.json().get("results", []) or []
 
 
-async def free_web_search(query: str, news: bool = False, engines: str | None = None) -> str:
+async def free_web_search(query: str, news: bool = False, engines: str | None = None, category: str = "general") -> str:
     """Search the web and return formatted results text.
 
-    `engines` narrows the backend, which a site: query cannot rely on: most
-    engines ignore site:, so "play x by y site:youtube.com" comes back full of
-    unrelated pages and leaves too few real YouTube candidates to rank.
+    `category` selects the SearXNG category ("general", "news", "videos"...).
+    The track-link retry uses "videos", which aggregates video engines and
+    returns watch?v= links; asking general engines (or a decorative engines=
+    filter the instance ignores) comes back full of lyrics pages, channel URLs
+    and playlists with no playable id in them.
     """
     search_query = normalize_search_query(query)
     if not search_query:
         return ""
-    cache_key = search_cache_key(search_query, news)
+    cache_key = search_cache_key(f"{category}:{search_query}", news)
     try:
         cached = await redis_client.get(cache_key)
         if cached:
@@ -247,15 +249,21 @@ async def free_web_search(query: str, news: bool = False, engines: str | None = 
             if not results:
                 results = await searx_request(search_query, "news", "week", 1, 8, engines=engines)
             if not results:
-                results = await searx_request(search_query, "general", "month", 1, 8, engines=engines)
+                results = await searx_request(search_query, category, "month", 1, 8, engines=engines)
         else:
-            results = await searx_request(search_query, "general", None, 1, 8, engines=engines)
+            results = await searx_request(search_query, category, None, 1, 8, engines=engines)
         seen: set = set()
         out: list[str] = []
         for result in results:
             title = (result.get("title") or "").strip()
             content = (result.get("content") or result.get("snippet") or "").strip()
-            url = clean_url(result.get("url", ""))
+            # A YouTube watch?v= link lives entirely in its query string, and
+            # clean_url drops query strings, so stripping here destroys the id
+            # and the context ends up with a bare youtube.com/watch that the
+            # model then sends out id-less. YouTube links keep their raw form;
+            # source_entries() guards them a second time downstream.
+            raw_url = result.get("url", "")
+            url = raw_url if _YOUTUBE_ID_RE.search(raw_url or "") else clean_url(raw_url)
             published = (result.get("publishedDate") or result.get("published_date") or "").strip()
             source = (result.get("engine") or result.get("source") or "").strip()
             image_url = (result.get("img_src") or result.get("image") or result.get("thumbnail") or "").strip()
@@ -578,8 +586,10 @@ async def pick_playable_youtube(
     for u in urls:
         print(f"[YOUTUBE]   candidate {u}")
     if not urls:
-        hosts = [re.sub(r"https?://(www\.)?", "", u).split("/")[0] for _, u in entries]
-        print(f"[YOUTUBE] no video ids among {len(entries)} entries {tag}: hosts={hosts}".rstrip())
+        # Log the actual URLs, not just hosts: a youtube.com entry with no id
+        # is a channel, playlist, or homepage, which explains an empty pool.
+        seen_urls = [u[:100] for _, u in entries]
+        print(f"[YOUTUBE] no video ids among {len(entries)} entries {tag}: urls={seen_urls}".rstrip())
         return None
 
     import asyncio
