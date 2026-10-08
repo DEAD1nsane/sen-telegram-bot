@@ -1089,6 +1089,24 @@ def register_handlers(router: Router, bot: "Bot") -> None:
         replied_document = get_replied_document(message)
         has_media_input = bool(message.photo or message.voice or message.document or replied_video or replied_document)
 
+        # Keyword audio always fires, even on non-directed chatter.
+        keyword_audio = None
+        if text_no_html and not text_no_html.startswith("/"):
+            msg_entities = (
+                getattr(message, "entities", None)
+                if message.text is not None
+                else getattr(message, "caption_entities", None)
+            )
+            code_stripped = _strip_code_spans(text, msg_entities)
+            if re.search(r"\bsen\b", code_stripped, re.I):
+                keyword_audio = TRIGGER_AUDIO_FILES["sen"]
+            elif re.search(r"\bmagical\b", code_stripped, re.I):
+                keyword_audio = TRIGGER_AUDIO_FILES["magical"]
+            elif re.search(r"\bmagic\b", code_stripped, re.I):
+                keyword_audio = TRIGGER_AUDIO_FILES["magic"]
+        if keyword_audio:
+            await send_keyword_audio(message, keyword_audio)
+
         if message.voice is not None:
             if not (tagged or reply_to_bot):
                 return
@@ -1109,26 +1127,6 @@ def register_handlers(router: Router, bot: "Bot") -> None:
             return
         if not re.sub(r"```(?:\w+)?", "", prompt).strip() and not has_media_input and not message.reply_to_message:
             return
-
-        # Keyword audio only fires for directed messages (tag / reply / DM).
-        # It used to run before the gate above, so every "sen" / "magic" in
-        # group chatter sent an audio reply that looked random.
-        if text_no_html and not text_no_html.startswith("/"):
-            msg_entities = (
-                getattr(message, "entities", None)
-                if message.text is not None
-                else getattr(message, "caption_entities", None)
-            )
-            code_stripped = _strip_code_spans(text, msg_entities)
-            keyword_audio = None
-            if re.search(r"\bsen\b", code_stripped, re.I):
-                keyword_audio = TRIGGER_AUDIO_FILES["sen"]
-            elif re.search(r"\bmagical\b", code_stripped, re.I):
-                keyword_audio = TRIGGER_AUDIO_FILES["magical"]
-            elif re.search(r"\bmagic\b", code_stripped, re.I):
-                keyword_audio = TRIGGER_AUDIO_FILES["magic"]
-            if keyword_audio:
-                await send_keyword_audio(message, keyword_audio)
 
         uid, cid, mid = message.from_user.id, message.chat.id, message.message_id
         cooldown = f"cooldown:{uid}"
