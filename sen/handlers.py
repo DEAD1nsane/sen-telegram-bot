@@ -311,6 +311,30 @@ def clean_ai_output(text: str, plain_lists: bool = False) -> str:
     return sanitize_rich_html(render_math_markup(text)).strip()
 
 
+#: New emojis the model predates and misidentifies from memory. 🫈 U+1FAC8
+#: (HAIRY CREATURE, Emoji 17.0) is read as 🪬 U+1FAAC (HAMSA / Hand of
+#: Fatima) because the codepoints differ by one hex digit and the model
+#: has no training data for the newer one. Grounded explicitly so the
+#: model does not have to rely on its own emoji knowledge.
+_NEW_EMOJI_NOTES = {
+    "🫈": "U+1FAC8 HAIRY CREATURE (a Bigfoot/Sasquatch-like hairy humanoid cryptid, Emoji 17.0). It is NOT 🪬 U+1FAAC HAMSA (Hamsa hand / Hand of Fatima amulet).",
+    "🪬": "U+1FAAC HAMSA (Hamsa hand / Hand of Fatima protective amulet). It is NOT 🫈 U+1FAC8 HAIRY CREATURE.",
+}
+
+
+def _emoji_grounding_note(*texts: str) -> str | None:
+    """Return a grounding note for known-confusable emojis present in the texts."""
+    found = [c for c in _NEW_EMOJI_NOTES if any(c in (t or "") for t in texts)]
+    if not found:
+        return None
+    lines = [f"{c} = {_NEW_EMOJI_NOTES[c]}" for c in found]
+    return (
+        "Emoji grounding — the exact characters below appear in this conversation. "
+        "Identify them ONLY as stated, by exact codepoint; never substitute a "
+        "similar-looking emoji.\n" + "\n".join(lines)
+    )
+
+
 #: Hosts whose links Telegram renders as a video/audio embed. Covers
 #: youtube.com plus its www./m./music. subdomains and the youtu.be short form.
 #: The lookbehind keeps lookalikes like "notyoutube.com" from matching on tail.
@@ -1235,6 +1259,9 @@ def register_handlers(router: Router, bot: "Bot") -> None:
                 )
             if media_description:
                 context_parts.append(f"Incoming Media: {media_description}")
+            _emoji_note = _emoji_grounding_note(prompt, replied_context)
+            if _emoji_note:
+                context_parts.append(_emoji_note)
             if search_context:
                 context_parts.append("Web Search Context:\n" + search_context)
                 if re.search(r"song|youtube|youtu\.be|\bvideo\b|\blink\b", prompt, re.I) or is_music_request(prompt):
@@ -1314,6 +1341,7 @@ def register_handlers(router: Router, bot: "Bot") -> None:
                 "When the user asks for something 'like this' or 'like that' about a replied-to message, mirror its format, structure, and energy, and keep using the names, characters, and details this conversation has already established — that is normal conversation, not copying. Only borrow the referenced message's actual subject matter if the user is still on that subject; if they have moved on, take the style and build fresh content for where they are now.\n"
                 "Do not assume personal details unless explicitly present in the memory list.\n"
                 "When media is attached, treat that media as primary evidence. Never fabricate visual, audio, or document details. If you cannot reliably inspect it, say so.\n"
+                "For emoji, identify by exact codepoint, never by resemblance. Newer Unicode emojis postdate you: 🫈 is HAIRY CREATURE (Bigfoot-like cryptid, Emoji 17.0), never 🪬 HAMSA (Hand of Fatima). If Web Search Context covers the emoji, prefer it over memory; if unsure, say so instead of substituting a similar-looking emoji.\n"
                 "Return Telegram Rich HTML for sendRichMessage. Use whichever tags best fit the content naturally.\n"
                 "Bold with <b></b> the key items: people's names and job titles, place names, organizations, and concrete figures (dates, numbers, prices, scores). Bold the direct answer to a direct question. Never leave a person's name or title unbolded in a factual answer.\n"
                 "For lists, emit real list markup: <ul><li>…</li></ul> or <ol><li>…</li></ol>, with one <li> per item inside a single list. Never fake list items by writing '1.' or '-' inside plain text.\n"

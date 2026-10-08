@@ -129,7 +129,23 @@ _EXPLICIT_SEARCH_MARKERS = (
     "who won the",
     "still in office",
     "current officeholder",
+    "emoji",
 )
+
+#: Emoji identification requests ("what is 🫈?") are almost always about
+#: characters newer than the model's training data (e.g. U+1FAC8 HAIRY
+#: CREATURE, Emoji 17.0, which the model misreads as 🪬 U+1FAAC HAMSA).
+#: Those must verify via search instead of answering from memory.
+_EMOJI_CHAR_RE = re.compile(r"[☀-➿⬀-⯿\U00010000-\U0010FFFF]")
+_EMOJI_MEANING_RE = re.compile(r"\b(?:what|which|meaning|means?|name|identify|describe|explain|emoji)\b", re.I)
+
+
+def is_emoji_identification_request(text: str) -> bool:
+    """True when the user asks what an emoji character is/means."""
+    if not text:
+        return False
+    return bool(_EMOJI_CHAR_RE.search(text) and _EMOJI_MEANING_RE.search(text))
+
 
 _IMPLICIT_QUESTION_WORDS = (
     "who",
@@ -148,6 +164,8 @@ def detect_search_intent(text: str) -> bool:
         return False
     if any(marker in t for marker in _EXPLICIT_SEARCH_MARKERS):
         return True
+    if is_emoji_identification_request(text):
+        return True
     question = re.search(
         r"\b(?:" + "|".join(_IMPLICIT_QUESTION_WORDS) + r")\b",
         t,
@@ -160,6 +178,8 @@ def detect_explicit_search_intent(text: str) -> bool:
     t = re.sub(r"\s+", " ", (text or "")).strip().lower()
     if not t:
         return False
+    if is_emoji_identification_request(text):
+        return True
     return any(marker in t for marker in _EXPLICIT_SEARCH_MARKERS)
 
 
