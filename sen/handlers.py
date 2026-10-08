@@ -311,23 +311,42 @@ def clean_ai_output(text: str, plain_lists: bool = False) -> str:
     return sanitize_rich_html(render_math_markup(text)).strip()
 
 
-#: New emojis the model predates and misidentifies from memory. 🫈 U+1FAC8
-#: (HAIRY CREATURE, Emoji 17.0) is read as 🪬 U+1FAAC (HAMSA / Hand of
-#: Fatima) because the codepoints differ by one hex digit and the model
-#: has no training data for the newer one. Grounded explicitly so the
-#: model does not have to rely on its own emoji knowledge.
+#: Emoji knowledge newer than the model's training data, grounded explicitly
+#: so it never has to rely on its own emoji memory. Covers the single
+#: codepoints of Emoji 16.0 (2024) and Emoji 17.0 (2025) plus the
+#: confusable 🪬 U+1FAAC HAMSA. Known misread fixed here: 🫈 U+1FAC8
+#: HAIRY CREATURE read as 🪬 Hand of Fatima (codepoints differ by one hex
+#: digit); 🫩/🫪 (U+1FAE9/U+1FAEA) also differ by one. Codepoints are
+#: computed from the characters at runtime — do not hand-edit them.
 _NEW_EMOJI_NOTES = {
-    "🫈": "U+1FAC8 HAIRY CREATURE (a Bigfoot/Sasquatch-like hairy humanoid cryptid, Emoji 17.0). It is NOT 🪬 U+1FAAC HAMSA (Hamsa hand / Hand of Fatima amulet).",
-    "🪬": "U+1FAAC HAMSA (Hamsa hand / Hand of Fatima protective amulet). It is NOT 🫈 U+1FAC8 HAIRY CREATURE.",
+    # Emoji 16.0 (Unicode 16.0, Sept 2024)
+    "🫩": "FACE WITH BAGS UNDER EYES — tired face with bags under the eyes; exhaustion, burnout, sleeplessness.",
+    "🫆": "FINGERPRINT — fingerprint whorl; identity, biometrics, security, verification.",
+    "🪾": "LEAFLESS TREE — bare tree without leaves; winter, barrenness, drought.",
+    "🫜": "ROOT VEGETABLE — turnip-like root vegetable; gardening, food, harvest.",
+    "🪉": "HARP — harp musical instrument; classical music, orchestra.",
+    "🪏": "SHOVEL — shovel; digging, gardening, construction.",
+    "🫟": "SPLATTER — paint or liquid splatter spot; mess, art, paint.",
+    # Emoji 17.0 (Unicode 17.0, Sept 2025)
+    "🫪": "DISTORTED FACE — wobbly melting face; dizziness, confusion, feeling overwhelmed, surreal. It is NOT 🫩 FACE WITH BAGS UNDER EYES.",
+    "🫯": "FIGHT CLOUD — cartoon fight-cloud puff; comedic brawl, cartoon scuffle.",
+    "🫍": "ORCA — orca / killer whale; marine life. It is NOT 🐋 WHALE or 🦈 SHARK.",
+    "🫈": "HAIRY CREATURE — Bigfoot/Sasquatch-like hairy humanoid cryptid. It is NOT 🪬 HAMSA (Hand of Fatima amulet) and NOT 🦍 GORILLA.",
+    "🪊": "TROMBONE — trombone brass instrument; jazz, orchestra, marching band.",
+    "🛘": "LANDSLIDE — falling-rocks / landslide warning sign; rockfall, hazard.",
+    "🪎": "TREASURE CHEST — treasure chest; loot, games, rewards, pirates.",
+    "🧑‍🩰": "BALLET DANCER — gender-neutral ballet dancer (person + ballet shoes sequence); ballet, dance.",
+    # Older but confusable with the above
+    "🪬": "HAMSA — hamsa hand / Hand of Fatima protective amulet. It is NOT 🫈 HAIRY CREATURE.",
 }
 
 
 def _emoji_grounding_note(*texts: str) -> str | None:
-    """Return a grounding note for known-confusable emojis present in the texts."""
+    """Return a grounding note for new/confusable emojis present in the texts."""
     found = [c for c in _NEW_EMOJI_NOTES if any(c in (t or "") for t in texts)]
     if not found:
         return None
-    lines = [f"{c} = {_NEW_EMOJI_NOTES[c]}" for c in found]
+    lines = [f"{c} = {' '.join(f'U+{ord(ch):04X}' for ch in c)} {_NEW_EMOJI_NOTES[c]}" for c in found]
     return (
         "Emoji grounding — the exact characters below appear in this conversation. "
         "Identify them ONLY as stated, by exact codepoint; never substitute a "
@@ -1341,7 +1360,7 @@ def register_handlers(router: Router, bot: "Bot") -> None:
                 "When the user asks for something 'like this' or 'like that' about a replied-to message, mirror its format, structure, and energy, and keep using the names, characters, and details this conversation has already established — that is normal conversation, not copying. Only borrow the referenced message's actual subject matter if the user is still on that subject; if they have moved on, take the style and build fresh content for where they are now.\n"
                 "Do not assume personal details unless explicitly present in the memory list.\n"
                 "When media is attached, treat that media as primary evidence. Never fabricate visual, audio, or document details. If you cannot reliably inspect it, say so.\n"
-                "For emoji, identify by exact codepoint, never by resemblance. Newer Unicode emojis postdate you: 🫈 is HAIRY CREATURE (Bigfoot-like cryptid, Emoji 17.0), never 🪬 HAMSA (Hand of Fatima). If Web Search Context covers the emoji, prefer it over memory; if unsure, say so instead of substituting a similar-looking emoji.\n"
+                "For emoji, identify by exact codepoint, never by resemblance. Emoji 16.0 (2024) and 17.0 (2025) postdate you — e.g. 🫈 is HAIRY CREATURE (Bigfoot-like cryptid), never 🪬 HAMSA (Hand of Fatima); 🫪 is DISTORTED FACE, never 🫩. An explicit Emoji grounding note in the prompt overrides your memory; if Web Search Context covers the emoji, prefer it; if unsure, say so instead of substituting a similar-looking emoji.\n"
                 "Return Telegram Rich HTML for sendRichMessage. Use whichever tags best fit the content naturally.\n"
                 "Bold with <b></b> the key items: people's names and job titles, place names, organizations, and concrete figures (dates, numbers, prices, scores). Bold the direct answer to a direct question. Never leave a person's name or title unbolded in a factual answer.\n"
                 "For lists, emit real list markup: <ul><li>…</li></ul> or <ol><li>…</li></ol>, with one <li> per item inside a single list. Never fake list items by writing '1.' or '-' inside plain text.\n"
