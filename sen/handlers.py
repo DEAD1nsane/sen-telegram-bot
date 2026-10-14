@@ -114,6 +114,96 @@ def _strip_code_spans(text: str, entities=None) -> str:
     return text
 
 
+def _entities_to_markdown(text: str, entities=None) -> str:
+    """Re-encode Telegram entities as markdown so the model can preserve them.
+
+    message.text is plain text — a text_link's URL and a spoiler's markers
+    live only in entities. Without this the model never sees the link URL or
+    which span was spoilered, so verbatim reformats drop both (as observed).
+    Emits the same markdown _markdown_to_rich_html understands:
+    [label](url) for text_link, ||...|| for spoiler, plus bold/italic/strike.
+    """
+    if not text or not entities:
+        return text or ""
+    try:
+        entity_list = list(entities)
+    except TypeError:
+        return text
+    if not entity_list:
+        return text
+    # Telegram offsets are UTF-16 code units; map them to Python char indices.
+    cumulative = [0]
+    for char in text:
+        cumulative.append(cumulative[-1] + len(char.encode("utf-16-le")) // 2)
+    total_units = cumulative[-1]
+
+    def to_index(units: int) -> int | None:
+        for i, value in enumerate(cumulative):
+            if value >= units:
+                return i
+        return None
+
+    opens: dict[int, list[tuple[int, str]]] = {}
+    closes: dict[int, list[tuple[int, str]]] = {}
+
+    def add_span(start: int, end: int, open_mark: str, close_mark: str) -> None:
+        if start is None or end is None or start >= end:
+            return
+        span_len = end - start
+        opens.setdefault(start, []).append((span_len, open_mark))
+        closes.setdefault(end, []).append((span_len, close_mark))
+
+    for entity in entity_list:
+        entity_type = getattr(entity, "type", None)
+        if hasattr(entity_type, "value"):
+            entity_type = entity_type.value
+        offset = getattr(entity, "offset", 0) or 0
+        length = getattr(entity, "length", 0) or 0
+        if length <= 0:
+            continue
+        if offset < 0 or offset + length > total_units:
+            continue
+        start = to_index(offset)
+        end = to_index(offset + length)
+        if start is None or end is None or start >= end:
+            continue
+        if entity_type == "bold":
+            add_span(start, end, "**", "**")
+        elif entity_type == "italic":
+            add_span(start, end, "_", "_")
+        elif entity_type == "underline":
+            add_span(start, end, "<u>", "</u>")
+        elif entity_type == "strikethrough":
+            add_span(start, end, "~~", "~~")
+        elif entity_type == "spoiler":
+            add_span(start, end, "||", "||")
+        elif entity_type == "code":
+            add_span(start, end, "`", "`")
+        elif entity_type == "pre":
+            lang = getattr(entity, "language", None) or ""
+            add_span(start, end, f"```{lang}\n" if lang else "```\n", "```")
+        elif entity_type == "text_link":
+            url = getattr(entity, "url", None) or ""
+            if url:
+                add_span(start, end, "[", f"]({url})")
+        # "url", "mention", "hashtag", "bot_command", "email",
+        # "phone_number", "cashtag", "text_mention", "custom_emoji" need no
+        # markers: bare URLs are already in the text, the rest stay plain.
+
+    if not opens and not closes:
+        return text
+    out: list[str] = []
+    for i, char in enumerate(text):
+        if i in opens:
+            for _, mark in sorted(opens[i], key=lambda x: -x[0]):
+                out.append(mark)
+        out.append(char)
+        if i + 1 in closes:
+            for _, mark in sorted(closes[i + 1], key=lambda x: x[0]):
+                out.append(mark)
+    return "".join(out)
+
+
 # ---------------------------------------------------------------------------
 # Rich message helpers
 # ---------------------------------------------------------------------------
@@ -1121,7 +1211,12 @@ def register_handlers(router: Router, bot: "Bot") -> None:
             )
             return
 
-        prompt = text
+        prompt = _entities_to_markdown(
+            text,
+            getattr(message, "entities", None)
+            if message.text is not None
+            else getattr(message, "caption_entities", None),
+        )
         if bot_username:
             prompt = re.sub(re.escape(bot_username), "", prompt, flags=re.I)
         prompt = re.sub(r"@gemini\b", "", prompt, flags=re.I).strip()
@@ -1140,7 +1235,13 @@ def register_handlers(router: Router, bot: "Bot") -> None:
         replied_author = ""
         current_name = get_user_display_name(message.from_user)
         if message.reply_to_message:
-            replied_context = message.reply_to_message.text or message.reply_to_message.caption or ""
+            _reply_text = message.reply_to_message.text or message.reply_to_message.caption or ""
+            _reply_entities = (
+                getattr(message.reply_to_message, "entities", None)
+                if message.reply_to_message.text is not None
+                else getattr(message.reply_to_message, "caption_entities", None)
+            )
+            replied_context = _entities_to_markdown(_reply_text, _reply_entities)
             rfu = getattr(message.reply_to_message, "from_user", None)
             if rfu is not None and _cfg.BOT_INFO is not None and rfu.id == _cfg.BOT_INFO.id:
                 replied_author = "your own previous message"
@@ -1398,7 +1499,10 @@ def register_handlers(router: Router, bot: "Bot") -> None:
                     prompt = (
                         "Reformat the SOURCE CONTENT word for word. Preserve every word, sentence, "
                         "link, and spoiler marker exactly — including the header, the footer, the link, "
-                        "and the spoilered note. Only improve formatting (lists, bold, links, spoilers). "
+                        "and the spoilered note. Links look like [label](url): keep both the label "
+                        "and the URL exactly, on the exact same words. Spoilers look like "
+                        "||text||: keep the || markers on the exact same words. "
+                        "Only improve formatting (lists, bold, links, spoilers). "
                         "Do not drop, summarize, or paraphrase anything."
                     )
             final_prompt = "\n\n".join(context_parts)
