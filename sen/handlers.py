@@ -1217,6 +1217,28 @@ def register_handlers(router: Router, bot: "Bot") -> None:
             if message.text is not None
             else getattr(message, "caption_entities", None),
         )
+        _incoming_ents = (
+            list(getattr(message, "entities", None) or [])
+            if message.text is not None
+            else list(getattr(message, "caption_entities", None) or [])
+        )
+        print(
+            "[DEBUG] incoming entities: "
+            + str(
+                [
+                    (
+                        getattr(e, "type", None).value
+                        if hasattr(getattr(e, "type", None), "value")
+                        else getattr(e, "type", None),
+                        getattr(e, "offset", None),
+                        getattr(e, "length", None),
+                        getattr(e, "url", None),
+                    )
+                    for e in _incoming_ents
+                ]
+            )
+            + f" markdown_marks=[{('/MD-LINK/' if '](' in prompt else '')}{('/MD-SPOILER/' if '||' in prompt else '')}]"
+        )
         if bot_username:
             prompt = re.sub(re.escape(bot_username), "", prompt, flags=re.I)
         prompt = re.sub(r"@gemini\b", "", prompt, flags=re.I).strip()
@@ -1623,6 +1645,14 @@ def register_handlers(router: Router, bot: "Bot") -> None:
                     )
                 )
                 response_text = clean_ai_output(response.text, plain_lists=plain_lists)
+                print(
+                    "[DEBUG] verbatim_markers: "
+                    f"verbatim={_verbatim_reformat} "
+                    f"out_spoiler={'tg-spoiler' in response_text} "
+                    f"out_link={bool(re.search(r'<a\\s+href=', response_text))} "
+                    f"raw_had_spoiler={'||' in (response.text or '')} "
+                    f"raw_had_mdlink={bool(re.search(r'\\]\\(https?://', response.text or ''))}"
+                )
                 if is_music_request(prompt) and not VIDEO_REQUEST_RE.search(prompt or ""):
                     # The picker already chose a music.youtube.com URL, but the model
                     # sometimes rewrites the host to www (especially when the title
