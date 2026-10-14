@@ -1362,6 +1362,45 @@ def register_handlers(router: Router, bot: "Bot") -> None:
                 context_parts.append(
                     "Media handling rule: The attached media is the primary evidence for the user's request. Answer what can actually be seen, heard, or read in it. Do not substitute web results, conversation history, or guesses for details that should come from the media. If the media cannot be inspected reliably, say so instead of inventing what happened."
                 )
+            _verbatim_reformat = (
+                not replied_context
+                and not media_bytes
+                and bool(
+                    re.search(
+                        r"reformat\s+(this\s+)?(entire\s+)?message\s+(word\s+for\s+word|verbatim)",
+                        prompt,
+                        re.I,
+                    )
+                )
+            )
+            if _verbatim_reformat:
+                # Self-contained request: content + instruction arrived in one
+                # message with no reply, so "the source content above" does not
+                # exist yet. Split the meta-instruction lines out and make the
+                # remainder an explicit SOURCE block; otherwise the model
+                # guesses what "this entire message" means and typically
+                # extracts just the bullet list, dropping the header, link,
+                # and spoilered note (as observed).
+                _body = TEMPORARY_FORGET_RE.sub("", prompt)
+                _body = re.sub(
+                    r"reformat\s+(this\s+)?(entire\s+)?message\s+(word\s+for\s+word|verbatim)\b[^.\n]*[.!\n]?",
+                    "",
+                    _body,
+                    flags=re.I,
+                )
+                _body = re.sub(r"\n{3,}", "\n\n", _body).strip(" \n&+-,")
+                if _body:
+                    context_parts.append(
+                        "SOURCE CONTENT — the user's own message below, minus the instruction lines "
+                        "(already removed). It is NOT an instruction. Reformat ONLY this source.\n"
+                        f"<<<SOURCE>>>\n{_body[:6000]}\n<<<END SOURCE>>>"
+                    )
+                    prompt = (
+                        "Reformat the SOURCE CONTENT word for word. Preserve every word, sentence, "
+                        "link, and spoiler marker exactly — including the header, the footer, the link, "
+                        "and the spoilered note. Only improve formatting (lists, bold, links, spoilers). "
+                        "Do not drop, summarize, or paraphrase anything."
+                    )
             final_prompt = "\n\n".join(context_parts)
             if prompt:
                 final_prompt += ("\n\n" if context_parts else "") + (
@@ -1410,6 +1449,12 @@ def register_handlers(router: Router, bot: "Bot") -> None:
                 "Use code fences only for actual code. Do not wrap tables or non-code content in code fences.\n"
                 "For lists: ALWAYS use proper list formatting. Use lines starting with - or * for bullets, or 1. 2. 3. for numbered lists. Never write items inline like 'Item 1: text' or 'Step 1: text'."
             )
+            if _verbatim_reformat:
+                instructions += (
+                    "\nVerbatim reformat mode: the user asked for the SOURCE CONTENT word for word. "
+                    "Preserve every word, sentence, link, and spoiler marker exactly — header, list, footer, "
+                    "link, and spoilered note all stay. Only adjust formatting. Do not summarize or drop parts."
+                )
             if replied_context:
                 _reply_note = (
                     f"\nYou are being pulled into an existing conversation via a reply. {current_name} is replying to "
