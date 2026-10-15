@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import contextlib
-import html
 import json
 import re
 from contextvars import ContextVar
@@ -12,7 +11,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 
-from .config import SEARXNG_URL, SEARCH_CACHE_TTL, redis_client, search_cache_key
+from .config import SEARCH_CACHE_TTL, SEARXNG_URL, redis_client, search_cache_key
 
 #: Any YouTube URL shape -> its video id. Covers watch?v=, youtu.be/, shorts/,
 #: live/, embed/ and the music. subdomain, with or without a scheme. Defined up
@@ -348,7 +347,7 @@ def source_links(search_context: str) -> str:
     if not entries:
         return ""
     domains = []
-    for title, url in entries:
+    for _title, url in entries:
         domain = re.sub(r"https?://(www\.)?", "", url).split("/")[0]
         if domain not in domains:
             domains.append(domain)
@@ -371,7 +370,7 @@ def replace_model_source_blocks(text: str) -> str:
 
     text = pattern.sub(_replace, text or "")
 
-    SOURCE_NAMES = re.compile(
+    source_names = re.compile(
         r"GeeksforGeeks|Digital Aptech|Treehouse|Tech Insider|Stanza|Coddy|Proxidize|Udacity|"
         r"Stanford|W3Schools|MDN|freeCodeCamp|Baeldung|Medium|Dev\.to|Stack Overflow|Reddit|"
         r"Javatpoint|TutorialsPoint|Guru99|Simplilearn|CodingNinjas|Intellipaat|Edureka|"
@@ -400,7 +399,7 @@ def replace_model_source_blocks(text: str) -> str:
         if in_source_block and not stripped:
             in_source_block = False
             continue
-        if SOURCE_NAMES.search(stripped) and not re.search(r"[<>(){}]", stripped):
+        if source_names.search(stripped) and not re.search(r"[<>(){}]", stripped):
             continue
         cleaned.append(line)
 

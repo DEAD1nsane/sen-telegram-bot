@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import html
 import re
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from aiogram import F, Router
@@ -13,10 +14,6 @@ from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
 from aiogram.types import (
     CallbackQuery,
-    BotCommand,
-    BotCommandScopeAllChatAdministrators,
-    BotCommandScopeAllGroupChats,
-    BotCommandScopeAllPrivateChats,
     InputRichMessage,
     LinkPreviewOptions,
     Message,
@@ -28,38 +25,10 @@ from .config import (
     MENTION_ONLY_RE,
     OWNER_ID,
     TELEGRAM_DOWNLOAD_MAX_BYTES,
-    TRIGGER_AUDIO_FILES,
     TEMPORARY_FORGET_RE,
-    redis_client,
+    TRIGGER_AUDIO_FILES,
     interaction_key,
-)
-from .storage import get_memories, clear_interaction, clear_menu_identity, get_interaction, set_interaction
-from .memory import (
-    close_menu,
-    edit_memory_menu,
-    authorize_memory_callback,
-    get_user_display_name,
-    process_memory_text,
-    schedule_menu_expiry,
-    send_memory_menu,
-)
-from .search import (
-    asked_for_sources,
-    detect_explicit_search_intent,
-    detect_search_intent,
-    free_web_search,
-    get_search_state,
-    is_music_request,
-    normalize_search_query,
-    music_search_query,
-    artist_from_prompt,
-    pick_playable_youtube,
-    replace_model_source_blocks,
-    source_entries,
-    source_links,
-    youtube_video_id,
-    as_music_url,
-    VIDEO_REQUEST_RE,
+    redis_client,
 )
 from .media import (
     DOCUMENT_DOWNLOAD_ERROR,
@@ -75,10 +44,31 @@ from .media import (
     prepare_document,
     send_keyword_audio,
 )
-from .minesweeper import MinesweeperGame, save_game, load_game, delete_game, GAME_TTL
+from .memory import (
+    authorize_memory_callback,
+    close_menu,
+    edit_memory_menu,
+    get_user_display_name,
+    process_memory_text,
+    send_memory_menu,
+)
+from .minesweeper import GAME_TTL, MinesweeperGame, delete_game, load_game, save_game
+from .search import (
+    VIDEO_REQUEST_RE,
+    artist_from_prompt,
+    detect_explicit_search_intent,
+    detect_search_intent,
+    free_web_search,
+    is_music_request,
+    music_search_query,
+    normalize_search_query,
+    pick_playable_youtube,
+    youtube_video_id,
+)
+from .storage import clear_interaction, clear_menu_identity, get_interaction, get_memories, set_interaction
 
 if TYPE_CHECKING:
-    from aiogram import Bot, Dispatcher
+    from aiogram import Bot
 
 
 # ---------------------------------------------------------------------------
@@ -266,7 +256,7 @@ def _split_inline_numbered(text: str) -> str:
     matches = list(pattern.finditer(text))
     if len(matches) < 2 or int(matches[0].group(1)) != 1:
         return text
-    for prev, cur in zip(matches, matches[1:]):
+    for prev, cur in zip(matches, matches[1:], strict=False):
         if int(cur.group(1)) != int(prev.group(1)) + 1:
             return text
     for i, match in enumerate(matches):
@@ -332,7 +322,7 @@ def clean_ai_output(text: str, plain_lists: bool = False) -> str:
     text = re.sub(r"```\n?(.*?)```", lambda m: f"<pre><code>{m.group(1).strip()}</code></pre>", text, flags=re.S)
     text = _markdown_to_rich_html(text)
 
-    LANG_LABELS = re.compile(
+    lang_labels = re.compile(
         r"^(Python|JavaScript|JS|Py|Bash|Shell|HTML|CSS|JSON|TypeScript|TS|Java|C|C\+\+|Go|Rust|Ruby|PHP|SQL|YAML|XML|Swift|Kotlin|R|Lua|Perl|Scala|Haskell):\s*$",
         re.I,
     )
@@ -340,13 +330,13 @@ def clean_ai_output(text: str, plain_lists: bool = False) -> str:
     result = []
     i = 0
     while i < len(lines):
-        m = LANG_LABELS.match(lines[i].strip())
+        m = lang_labels.match(lines[i].strip())
         if m:
             lang = m.group(1).lower()
             code_lines = []
             i += 1
             while i < len(lines):
-                if LANG_LABELS.match(lines[i].strip()):
+                if lang_labels.match(lines[i].strip()):
                     break
                 code_lines.append(lines[i])
                 i += 1
@@ -498,7 +488,7 @@ _RICH_ONLY_TAG_RE = re.compile(
 
 
 async def send_ai_response(
-    bot: "Bot",
+    bot: Bot,
     chat_id: int,
     msg_id: int,
     response_text: str,
@@ -548,8 +538,8 @@ async def send_ai_response(
 
 async def generate_gemini_response(contents, config, max_attempts: int = 4):
     """Call Gemini with visual grounding rule and retry on transient errors."""
+
     from .config import gemini_client
-    from google.genai import types
 
     grounding = (
         "\n\nMEDIA GROUNDING RULE: When actual image/video/audio/document media is present, use that media as the primary evidence. "
@@ -587,7 +577,7 @@ async def generate_gemini_response(contents, config, max_attempts: int = 4):
 # ---------------------------------------------------------------------------
 
 
-def register_handlers(router: Router, bot: "Bot") -> None:
+def register_handlers(router: Router, bot: Bot) -> None:
     """Register all message and callback handlers."""
 
     @router.message(Command("memories"))
@@ -639,6 +629,7 @@ def register_handlers(router: Router, bot: "Bot") -> None:
             InputRichBlockSectionHeading,
             InputRichMessage,
         )
+
         from .memory import rich_text_from_markup
 
         share_blocks = [InputRichBlockSectionHeading(text=f"What TGB Remembers for {safe_first_name}", size=3)]
@@ -665,7 +656,7 @@ def register_handlers(router: Router, bot: "Bot") -> None:
     async def handle_memory_add(callback: CallbackQuery):
         print(f"[DEBUG] memory_add callback from user {callback.from_user.id}")
         if not await authorize_memory_callback(callback, bot):
-            print(f"[DEBUG] memory_add authorization failed")
+            print("[DEBUG] memory_add authorization failed")
             return
         print(f"[DEBUG] memory_add setting interaction for chat {callback.message.chat.id}")
         await set_interaction(callback.message.chat.id, callback.from_user.id, "add")
@@ -774,17 +765,17 @@ def register_handlers(router: Router, bot: "Bot") -> None:
         print("[/del] executed")
 
     # --- Minesweeper ---
-    MINESWEEPER_APP_URL = "https://minesweeper-game-production.up.railway.app/minesweeper.html"
-    GAME_SHORT_NAME = "minesweeper"
+    minesweeper_app_url = "https://minesweeper-game-production.up.railway.app/minesweeper.html"
+    game_short_name = "minesweeper"
 
     @router.message(Command("play"))
     async def handle_play(message: Message):
-        from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+        from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
         keyboard = InlineKeyboardMarkup(
             inline_keyboard=[[InlineKeyboardButton(text="💣 Play Minesweeper", callback_game={})]]
         )
-        sent = await message.answer_game(game_short_name=GAME_SHORT_NAME, reply_markup=keyboard)
+        sent = await message.answer_game(game_short_name=game_short_name, reply_markup=keyboard)
         try:
             # 90 days — game messages + Telegram scores outlive the old 24h TTL.
             # game_last alone decides what /scores reads, so it must not expire daily.
@@ -815,14 +806,14 @@ def register_handlers(router: Router, bot: "Bot") -> None:
                 show_alert=True,
             )
             return
-        url = MINESWEEPER_APP_URL
+        url = minesweeper_app_url
         sep = "&" if "?" in url else "?"
         url = f"{url}{sep}uid={uid}"
         if owner:
             url += f"&owner={owner}"
         if callback.message is not None:
-            import hmac as _hmac
             import hashlib as _hashlib
+            import hmac as _hmac
 
             cid = callback.message.chat.id
             mid = callback.message.message_id
@@ -888,8 +879,8 @@ def register_handlers(router: Router, bot: "Bot") -> None:
                 current = await load_game(chat_id, user_id)
                 if current and not current.game_over:
                     from aiogram.types import (
-                        InputRichMessage,
                         InputRichBlockParagraph,
+                        InputRichMessage,
                         RichTextBold,
                         RichTextSubscript,
                     )
@@ -939,11 +930,9 @@ def register_handlers(router: Router, bot: "Bot") -> None:
         mines = min(mines, (rows * cols) - 9)
         mines = max(mines, min(5, (rows * cols) // 4))
 
-        import time
-
         existing = await load_game(cid, uid)
         if existing and not existing.game_over:
-            from aiogram.types import InputRichMessage, InputRichBlockParagraph, RichTextBold, RichTextSubscript
+            from aiogram.types import InputRichBlockParagraph, InputRichMessage, RichTextBold, RichTextSubscript
 
             rich = InputRichMessage(
                 blocks=[
@@ -972,8 +961,7 @@ def register_handlers(router: Router, bot: "Bot") -> None:
         game = MinesweeperGame(rows=rows, cols=cols, mines=mines)
         await save_game(cid, uid, game)
 
-        from aiogram.types import InputRichMessage, InputRichBlockParagraph
-        from .memory import rich_text_from_markup
+        from aiogram.types import InputRichBlockParagraph, InputRichMessage
 
         rich = game.get_rich_message(creator_uid=uid)
         blocks = list(rich.blocks)
@@ -998,10 +986,8 @@ def register_handlers(router: Router, bot: "Bot") -> None:
         if sent_board is not None:
             name = html.escape(message.from_user.first_name or "Player")
             await _schedule_inactivity_collapse(cid, uid, name, sent_board)
-        try:
+        with contextlib.suppress(Exception):
             await message.delete()
-        except Exception:
-            pass
 
     @router.callback_query(F.data.startswith("ms:"))
     async def handle_mines_callback(callback: CallbackQuery):
@@ -1088,8 +1074,8 @@ def register_handlers(router: Router, bot: "Bot") -> None:
                     if stored_val != f"game_over:{ts}":
                         return
                     from aiogram.types import (
-                        InputRichMessage,
                         InputRichBlockParagraph,
+                        InputRichMessage,
                         RichTextBold,
                         RichTextSubscript,
                     )
@@ -1156,12 +1142,16 @@ def register_handlers(router: Router, bot: "Bot") -> None:
         temporary_forget = bool(TEMPORARY_FORGET_RE.search(text_forget))
         await _handle_conversation_inner(message, bot, temporary_forget)
 
-    async def _handle_conversation_inner(message: Message, bot: "Bot", temp_forget: bool):
+    async def _handle_conversation_inner(message: Message, bot: Bot, temp_forget: bool):
         action = await get_interaction(message.chat.id, message.from_user.id)
         print(f"[DEBUG] interaction check: action={action}, text={message.text[:30] if message.text else None}")
-        if action and message.text and not message.text.startswith("/"):
-            if await process_memory_text(message, action, temp_forget, bot):
-                return
+        if (
+            action
+            and message.text
+            and not message.text.startswith("/")
+            and await process_memory_text(message, action, temp_forget, bot)
+        ):
+            return
 
         text = message.text or message.caption or ""
         text_no_html = re.sub(r"<[^>]+>", "", text)
@@ -1387,20 +1377,18 @@ def register_handlers(router: Router, bot: "Bot") -> None:
             # so without this it reaches the model with no sources and it invents
             # a video id from memory.
             use_search = use_search or is_music_request(prompt)
-            if media_bytes:
-                # Attached/replied media is the primary evidence. Generic nouns
-                # ("video", "song", "president", "who is the", ...) are part of
-                # the explicit-marker list and used to fire a web search for
-                # media-identification questions ("who is this in this video?"),
-                # injecting an unrelated YouTube id + sources that the model
-                # then parrots. Only an explicit search verb justifies a search
-                # on top of media; a track request still gets its link check.
-                if not is_music_request(prompt) and not re.search(
+            # Attached/replied media is the primary evidence; only an explicit
+            # search verb justifies a search on top of media.
+            if (
+                media_bytes
+                and not is_music_request(prompt)
+                and not re.search(
                     r"\b(?:search(?:\s+the\s+web)?|google|look\s*up|lookup|find\s+out|browse|web\s+search|internet|online)\b",
                     prompt,
                     re.I,
-                ):
-                    use_search = False
+                )
+            ):
+                use_search = False
             news = bool(re.search(r"\b(?:news|headlines|latest|today|breaking|recent)\b", prompt, re.I))
             search_query = normalize_search_query(prompt)
             if is_music_request(prompt):
@@ -1542,7 +1530,7 @@ def register_handlers(router: Router, bot: "Bot") -> None:
                 else:
                     final_prompt += "\n\nProcess and answer this media input."
 
-            today = datetime.now(timezone.utc).strftime("%A, %B %d, %Y")
+            today = datetime.now(UTC).strftime("%A, %B %d, %Y")
             instructions = (
                 f"Today's date is {today}.\n"
                 "Your training data has a cutoff and is likely well out of date. The date above is authoritative — use it to judge what is current.\n"

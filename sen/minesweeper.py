@@ -5,11 +5,10 @@ from __future__ import annotations
 import json
 import random
 from dataclasses import dataclass, field
-from typing import Optional
 
 from aiogram.types import (
-    InputRichMessage,
     InputRichBlockButtons,
+    InputRichMessage,
     RichMessageButton,
 )
 
@@ -214,7 +213,7 @@ async def save_game(chat_id: int, user_id: int, game: MinesweeperGame) -> None:
     await redis_client.set(key, json.dumps(game.to_dict()), ex=GAME_TTL)
 
 
-async def load_game(chat_id: int, user_id: int) -> Optional[MinesweeperGame]:
+async def load_game(chat_id: int, user_id: int) -> MinesweeperGame | None:
     key = f"ms_game:{chat_id}:{user_id}"
     data = await redis_client.get(key)
     if not data:

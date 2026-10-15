@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import html
 import io
 import os
@@ -13,11 +14,10 @@ from contextvars import ContextVar
 from typing import Any
 from xml.etree import ElementTree
 
+from aiogram.types import FSInputFile, Message, ReplyParameters
 from google.genai import types
 
-from aiogram.types import Message, FSInputFile, ReplyParameters
-
-from .config import gemini_client, AUDIO_METADATA
+from .config import AUDIO_METADATA, gemini_client
 
 _RAW_UPDATE: ContextVar[Any] = ContextVar("sen_raw_update", default=None)
 
@@ -730,7 +730,7 @@ async def get_gemini_video_file(media_bytes: bytes, media_mime: str, media_descr
         print(
             f"Gemini video uploaded: name={getattr(uploaded, 'name', None)} state={getattr(getattr(uploaded, 'state', None), 'name', getattr(uploaded, 'state', None))}"
         )
-        for attempt in range(60):
+        for _attempt in range(60):
             state = getattr(uploaded, "state", None)
             state_name = str(getattr(state, "name", state) or "").upper()
             if state_name == "ACTIVE":
@@ -743,10 +743,8 @@ async def get_gemini_video_file(media_bytes: bytes, media_mime: str, media_descr
         raise RuntimeError("Gemini video processing timed out after 60 seconds")
     finally:
         if temp_path:
-            try:
+            with contextlib.suppress(OSError):
                 os.unlink(temp_path)
-            except OSError:
-                pass
 
 
 async def delete_gemini_file(uploaded) -> None:

@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 from .config import (
-    redis_client,
     INTERACTION_TTL,
     MENU_TTL,
     interaction_key,
     menu_identity_key,
+    redis_client,
 )
 
 
@@ -25,9 +25,7 @@ async def clear_interaction(chat_id: int, user_id: int) -> None:
 
 
 async def register_menu_identity(chat_id: int, user_id: int, message_id: int) -> None:
-    await redis_client.set(
-        menu_identity_key(chat_id, user_id), str(message_id), ex=MENU_TTL + 5
-    )
+    await redis_client.set(menu_identity_key(chat_id, user_id), str(message_id), ex=MENU_TTL + 5)
 
 
 async def get_menu_identity(chat_id: int, user_id: int) -> int | None:

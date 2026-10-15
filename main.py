@@ -5,12 +5,12 @@ from __future__ import annotations
 import asyncio
 import os
 
-from aiohttp import web
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
+from aiohttp import web
 
-from sen.config import API_TOKEN, gemini_client, redis_client
 import sen.config as _cfg
+from sen.config import API_TOKEN, gemini_client, redis_client
 from sen.handlers import register_handlers
 
 # ---------------------------------------------------------------------------
@@ -116,8 +116,6 @@ async def main() -> None:
         dp.feed_raw_update = feed_raw_update_with_capture
 
     # Install no-media Gemini guard
-    from sen.config import gemini_client
-    import re
 
     gemini_models = getattr(getattr(gemini_client, "aio", None), "models", None)
     original_generate_content = getattr(gemini_models, "generate_content", None) if gemini_models is not None else None
@@ -141,7 +139,6 @@ async def main() -> None:
         print("Installed no-media Gemini guard")
 
     # Register handlers
-    from sen.handlers import register_handlers
 
     register_handlers(dp, bot)
 
@@ -168,14 +165,14 @@ async def main() -> None:
         await bot.session.close()
         await redis_client.aclose()
 
-    _CORS = {
+    _cors = {
         "Access-Control-Allow-Origin": "*",
         "Access-Control-Allow-Methods": "POST, OPTIONS",
         "Access-Control-Allow-Headers": "Content-Type",
     }
 
     async def handle_score_options(request: web.Request) -> web.Response:
-        return web.Response(headers=_CORS)
+        return web.Response(headers=_cors)
 
     async def handle_score(request: web.Request) -> web.Response:
         """Accept a finished-game score from the web game and record it."""
@@ -185,24 +182,24 @@ async def main() -> None:
         try:
             data = await request.json()
         except Exception:
-            return web.json_response({"ok": False, "error": "bad json"}, status=400, headers=_CORS)
+            return web.json_response({"ok": False, "error": "bad json"}, status=400, headers=_cors)
         try:
             uid, cid, mid, score = int(data["uid"]), int(data["chat"]), int(data["mid"]), int(data["score"])
             sig = str(data["sig"])
         except Exception:
-            return web.json_response({"ok": False, "error": "bad fields"}, status=400, headers=_CORS)
+            return web.json_response({"ok": False, "error": "bad fields"}, status=400, headers=_cors)
         if not (0 <= score <= 10000):
-            return web.json_response({"ok": False, "error": "score out of range"}, status=400, headers=_CORS)
+            return web.json_response({"ok": False, "error": "score out of range"}, status=400, headers=_cors)
         expect = hmac_mod.new(API_TOKEN.encode(), f"{uid}:{cid}:{mid}".encode(), hashlib.sha256).hexdigest()
         if not hmac_mod.compare_digest(expect, sig):
-            return web.json_response({"ok": False, "error": "bad signature"}, status=403, headers=_CORS)
+            return web.json_response({"ok": False, "error": "bad signature"}, status=403, headers=_cors)
         try:
             await bot.set_game_score(user_id=uid, score=score, chat_id=cid, message_id=mid)
         except Exception as e:
             print(f"[SCORE] set failed: {type(e).__name__}: {e}")
-            return web.json_response({"ok": False, "error": "telegram rejected"}, status=502, headers=_CORS)
+            return web.json_response({"ok": False, "error": "telegram rejected"}, status=502, headers=_cors)
         print(f"[SCORE] recorded {score} for {uid} in {cid}:{mid}")
-        return web.json_response({"ok": True}, headers=_CORS)
+        return web.json_response({"ok": True}, headers=_cors)
 
     app = web.Application()
     app.router.add_get("/", health_check)

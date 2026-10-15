@@ -12,7 +12,7 @@ class Handler(SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(WEB_DIR), **kwargs)
 
-    def log_message(self, format, *args):
+    def log_message(self, fmt, *args):
         pass
 
 

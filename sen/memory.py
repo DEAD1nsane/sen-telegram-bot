@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import html
 import re
 from typing import TYPE_CHECKING
@@ -25,15 +26,13 @@ from aiogram.types import (
     RichTextUnderline,
 )
 
-from .config import MENU_TTL, redis_client, interaction_key
+from .config import MENU_TTL, redis_client
 from .storage import (
     clear_interaction,
     clear_menu_identity,
-    get_interaction,
     get_memories,
     get_menu_identity,
     register_menu_identity,
-    set_interaction,
 )
 
 if TYPE_CHECKING:
@@ -190,7 +189,7 @@ def get_memory_rich_message(text: str, menu_type: str = "main", memories: list[s
 
 
 async def send_memory_menu(
-    bot: "Bot",
+    bot: Bot,
     chat_id: int,
     user_id: int,
     text: str,
@@ -220,7 +219,7 @@ async def send_memory_menu(
     return message
 
 
-async def authorize_memory_callback(callback: CallbackQuery, bot: "Bot") -> bool:
+async def authorize_memory_callback(callback: CallbackQuery, bot: Bot) -> bool:
     """Check that a callback is from the active memory menu owner."""
     message = callback.message
     if not message:
@@ -243,7 +242,7 @@ async def authorize_memory_callback(callback: CallbackQuery, bot: "Bot") -> bool
 
 
 async def edit_memory_menu(
-    bot: "Bot",
+    bot: Bot,
     callback: CallbackQuery,
     text: str,
     menu_type: str = "main",
@@ -277,7 +276,7 @@ async def edit_memory_menu(
         schedule_menu_expiry(bot, chat_id, user_id, message.message_id)
 
 
-async def close_menu(bot: "Bot", callback: CallbackQuery) -> None:
+async def close_menu(bot: Bot, callback: CallbackQuery) -> None:
     """Close and delete a memory menu."""
     message = callback.message
     if not message:
@@ -297,7 +296,7 @@ async def close_menu(bot: "Bot", callback: CallbackQuery) -> None:
         await clear_menu_identity(chat_id, user_id)
 
 
-async def expire_memory_menu(bot: "Bot", chat_id: int, user_id: int, menu_id: int) -> None:
+async def expire_memory_menu(bot: Bot, chat_id: int, user_id: int, menu_id: int) -> None:
     """Auto-delete a memory menu after TTL."""
     try:
         await asyncio.sleep(MENU_TTL)
@@ -322,7 +321,7 @@ async def expire_memory_menu(bot: "Bot", chat_id: int, user_id: int, menu_id: in
         print(f"Memory menu expiry task error: {e}")
 
 
-def schedule_menu_expiry(bot: "Bot", chat_id: int, user_id: int, menu_id: int) -> None:
+def schedule_menu_expiry(bot: Bot, chat_id: int, user_id: int, menu_id: int) -> None:
     """Fire-and-forget task to expire a memory menu."""
     asyncio.create_task(expire_memory_menu(bot, chat_id, user_id, menu_id))
 
@@ -416,10 +415,8 @@ async def process_memory_text(message, action: str, temp_forget: bool = False, b
         await clear_interaction(cid, uid)
     else:
         return False
-    try:
+    with contextlib.suppress(Exception):
         await message.delete()
-    except Exception:
-        pass
     if action == "add":
         sub = f"➕ {name} added {added_count} new memories!" if added_count != 1 else f"➕ {name} added a new memory!"
     elif action == "edit_number":
@@ -440,7 +437,7 @@ async def process_memory_text(message, action: str, temp_forget: bool = False, b
         refreshed = await refresh_memory_menu(bot, cid, uid, sub)
     if not refreshed:
         try:
-            from aiogram.types import InputRichMessage, InputRichBlockParagraph, RichTextBold, RichTextSubscript
+            from aiogram.types import InputRichBlockParagraph, InputRichMessage, RichTextBold, RichTextSubscript
 
             rich = InputRichMessage(
                 blocks=[InputRichBlockParagraph(text=[RichTextBold(text=[RichTextSubscript(text=sub)])])]
