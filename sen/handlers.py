@@ -1642,9 +1642,9 @@ def register_handlers(router: Router, bot: Bot) -> None:
                     "[DEBUG] verbatim_markers: "
                     f"verbatim={_verbatim_reformat} "
                     f"out_spoiler={'tg-spoiler' in response_text} "
-                    f"out_link={bool(re.search(r'<a\\s+href=', response_text))} "
+                    f"out_link={bool(re.search(r'<a\s+href=', response_text))} "
                     f"raw_had_spoiler={'||' in (response.text or '')} "
-                    f"raw_had_mdlink={bool(re.search(r'\\]\\(https?://', response.text or ''))}"
+                    f"raw_had_mdlink={bool(re.search(r'\]\(https?://', response.text or ''))}"
                 )
                 if is_music_request(prompt) and not VIDEO_REQUEST_RE.search(prompt or ""):
                     # The picker already chose a music.youtube.com URL, but the model
