@@ -1623,7 +1623,12 @@ def register_handlers(router: Router, bot: Bot) -> None:
                 response_text = _no_link_fallback
             else:
                 response = await generate_gemini_response(
-                    contents, types.GenerateContentConfig(system_instruction=instructions, safety_settings=safety)
+                    contents,
+                    types.GenerateContentConfig(
+                        system_instruction=instructions,
+                        safety_settings=safety,
+                        automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
+                    ),
                 )
                 plain_lists = bool(
                     re.search(
@@ -1686,7 +1691,10 @@ def register_handlers(router: Router, bot: Bot) -> None:
             )
             await redis_client.ltrim(history_key, -10, -1)
         except Exception as e:
+            import traceback
+
             print(f"Gemini AI processing error: {type(e).__name__}: {str(e)[:120]}")
+            traceback.print_exc()
             s = str(e).upper()
             if "503" in s or "UNAVAILABLE" in s:
                 error = "Gemini is overloaded (503). Try again in a few seconds."
