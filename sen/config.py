@@ -34,6 +34,15 @@ if not GEMINI_API_KEY:
 gemini_client = genai.Client(api_key=GEMINI_API_KEY)
 OWNER_ID = int(os.getenv("OWNER_ID", "0"))
 
+# Chats where the bot reads and summarises photos on its own, without being
+# tagged: a photo album or a ZIP of images is summarised as one paced reply.
+# Comma separated chat ids; empty disables the feature entirely.
+PHOTO_BATCH_CHAT_IDS = {
+    int(part)
+    for part in os.getenv("PHOTO_BATCH_CHAT_IDS", "").split(",")
+    if part.strip().lstrip("-").isdigit()
+}
+
 BOT_INFO = None
 
 # ---------------------------------------------------------------------------
