@@ -495,6 +495,12 @@ _RICH_ONLY_TAG_RE = re.compile(
 _SEND_BREAK_RE = re.compile(r"\[\s*send[_\s]?new[_\s]?message\s*\]", re.I)
 _MAX_SEND_PARTS = 10
 
+
+def strip_send_markers(text: str) -> str:
+    """Remove [SEND_NEW_MESSAGE] markers so they never leak into text or history."""
+    return _SEND_BREAK_RE.sub("\n\n", text or "")
+
+
 # A "sources" demand whose topical words live in the conversation rather than
 # in the message: "provide sources", "quit being a cunt and provide sources",
 # "provide sources for the motel rates there". Searching the raw phrasing once
@@ -720,6 +726,7 @@ def base_instructions(today: str) -> str:
         "When the user explicitly asks for several messages (spam, repeated sends, 'ping them 5 times'), split the parts with the marker [SEND_NEW_MESSAGE] on its own line. Each marker starts a new outgoing message in this same chat, up to 10 parts. In a spam request put the target's @mention in every part and vary the wording across parts; never fake multiple sends by repeating text inside one message. Only use the marker when multiple messages are actually requested.\n"
     )
     return instructions
+
 
 def bare_sources_request(prompt: str) -> bool:
     """True when a "sources" demand should reuse the conversation's last search."""
@@ -1937,23 +1944,12 @@ def register_handlers(router: Router, bot: Bot) -> None:
             except Exception as rich_error:
                 print(f"Rich response delivery error: {rich_error}")
                 fallback = (
-                    html.unescape(
-                        re.sub(
-                            r"\[\s*send[_\s]?new[_\s]?message\s*\]",
-                            "\n\n",
-                            re.sub(r"<[^>]+>", "", response_text),
-                            flags=re.I,
-                        )
-                    ).strip()
+                    html.unescape(strip_send_markers(re.sub(r"<[^>]+>", "", response_text))).strip()
                     or "I didn't receive a response."
                 )
                 await message.answer(fallback, reply_to_message_id=None if is_private else mid)
 
-            clean_history = html.unescape(
-                re.sub(
-                    r"\[\s*send[_\s]?new[_\s]?message\s*\]", "\n\n", re.sub(r"<[^>]+>", "", response_text), flags=re.I
-                )
-            ).strip()
+            clean_history = html.unescape(strip_send_markers(re.sub(r"<[^>]+>", "", response_text))).strip()
             await redis_client.rpush(
                 history_key, f"User: {prompt or media_description or 'Media'}", f"Bot: {clean_history}"
             )

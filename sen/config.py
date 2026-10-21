@@ -38,9 +38,7 @@ OWNER_ID = int(os.getenv("OWNER_ID", "0"))
 # tagged: a photo album or a ZIP of images is summarised as one paced reply.
 # Comma separated chat ids; empty disables the feature entirely.
 PHOTO_BATCH_CHAT_IDS = {
-    int(part)
-    for part in os.getenv("PHOTO_BATCH_CHAT_IDS", "").split(",")
-    if part.strip().lstrip("-").isdigit()
+    int(part) for part in os.getenv("PHOTO_BATCH_CHAT_IDS", "").split(",") if part.strip().lstrip("-").isdigit()
 }
 
 BOT_INFO = None

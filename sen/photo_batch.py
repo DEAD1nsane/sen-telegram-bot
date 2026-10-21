@@ -24,7 +24,8 @@ import html
 import io
 import os
 import zipfile
-from typing import Any, Awaitable, Callable
+from collections.abc import Awaitable, Callable
+from typing import Any
 
 from aiogram import Bot, Router
 from aiogram.exceptions import TelegramRetryAfter
@@ -154,9 +155,7 @@ def _addresses_bot(message: Message) -> bool:
     if "@gemini" in text:
         return True
     replied = message.reply_to_message
-    if replied and replied.from_user and _cfg.BOT_INFO and replied.from_user.id == _cfg.BOT_INFO.id:
-        return True
-    return False
+    return bool(replied and replied.from_user and _cfg.BOT_INFO and replied.from_user.id == _cfg.BOT_INFO.id)
 
 
 def _is_zip(document) -> bool:
@@ -186,10 +185,7 @@ def _chunk(text: str) -> list[str]:
 def _format_summaries(entries: list[tuple[str, str]]) -> str:
     """Render the per-image summaries as one reply body."""
     total = len(entries)
-    if total == 1:
-        header = "📸 Read 1 image - here is the gist:"
-    else:
-        header = f"📸 Read {total} images - here's the gist:"
+    header = "📸 Read 1 image - here is the gist:" if total == 1 else f"📸 Read {total} images - here's the gist:"
     body = "\n\n".join(f"{label}\n{summary}" for label, summary in entries)
     return f"{header}\n\n{body}"
 
@@ -434,9 +430,7 @@ class BatchPhotoFilter(BaseFilter):
             return True
 
         if message.document and _is_zip(message.document):
-            if _addresses_bot(message):
-                return False
-            return True
+            return not _addresses_bot(message)
 
         return False
 
