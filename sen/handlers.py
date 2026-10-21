@@ -58,11 +58,13 @@ from .search import (
     artist_from_prompt,
     detect_explicit_search_intent,
     detect_search_intent,
+    fetch_last_search,
     free_web_search,
     is_music_request,
     music_search_query,
     normalize_search_query,
     pick_playable_youtube,
+    remember_last_search,
     youtube_video_id,
 )
 from .storage import clear_interaction, clear_menu_identity, get_interaction, get_memories, set_interaction
@@ -486,8 +488,57 @@ _RICH_ONLY_TAG_RE = re.compile(
     re.I,
 )
 
+#: The model starts a new outgoing message wherever it puts this marker, so
+#: "spam them" becomes real separate messages instead of a repeated tag packed
+#: into one reply (which the API has no way to turn into multiple messages).
+_SEND_BREAK_RE = re.compile(r"\[\s*send[_\s]?new[_\s]?message\s*\]", re.I)
+_MAX_SEND_PARTS = 10
 
-async def send_ai_response(
+# A "sources" demand whose topical words live in the conversation rather than
+# in the message: "provide sources", "quit being a cunt and provide sources",
+# "provide sources for the motel rates there". Searching the raw phrasing once
+# returned an aggressive-profanity Medium article as the citations for motel
+# rates, so these re-run the search that produced the claim instead. Deictic
+# words (there, those) or a demand stripped to filler means "the thing you just
+# said"; a real topic ("sources on the 2024 election") still searches fresh.
+_SOURCE_WORD_RE = re.compile(r"\b(?:sources?|citations?|references?|footnotes?)\b", re.I)
+_DEICTIC_RE = re.compile(r"\b(?:it|that|this|those|these|them|there|here|same|above)\b", re.I)
+#: Function words, demand verbs, venting filler and slurs — words that appear
+#: in a "quit being a cunt and provide sources" demand but carry no topic.
+_DEMAND_FILLER_WORDS = frozenset(
+    (
+        "a", "about", "actual", "add", "adding", "adds", "an", "and", "any", "are", "around", "as",
+        "at", "ass", "asshole", "been", "being", "bitch", "bro", "bruh", "but", "by", "came", "cite",
+        "citing", "citation", "citations", "correct", "cunt", "damn", "demand", "demanding",
+        "demands", "did", "do", "does", "drop", "dropping", "drops", "dude", "even", "fam", "find",
+        "finding", "for", "from", "fuck", "fucking", "gave", "get", "getting", "genuine", "give",
+        "gives", "giving", "got", "grab", "grabbing", "had", "has", "have", "heck", "hell", "hey",
+        "hit", "homie", "huh", "i", "if", "in", "info", "information", "insist", "insisting",
+        "into", "is", "just", "legit", "lmao", "lol", "man", "me", "mine", "my", "need", "needing",
+        "now", "of", "on", "only", "or", "original", "our", "out", "over", "please", "proper",
+        "provide", "providing", "provides", "pull", "pulling", "quit", "real", "really",
+        "relevant", "right", "say", "see", "send", "sending", "sends", "seriously", "show",
+        "showing", "shows", "shit", "so", "some", "source", "sources", "specific", "stop",
+        "such", "tell", "the", "then", "these", "think", "this", "those", "titles", "to",
+        "up", "us", "urls", "use", "using", "want", "wanting", "wants", "was", "were", "what",
+        "when", "where", "which", "who", "why", "will", "with", "wtf", "yeah", "yet", "you",
+        "your", "lol", "lmao", "ngl", "smh", "tbh", "honestly", "fr",
+    )
+)
+
+
+def bare_sources_request(prompt: str) -> bool:
+    """True when a "sources" demand should reuse the conversation's last search."""
+    if not prompt or not _SOURCE_WORD_RE.search(prompt):
+        return False
+    words = re.findall(r"[a-z0-9']+", prompt.lower())
+    core = [w for w in words if w not in _DEMAND_FILLER_WORDS and not _DEICTIC_RE.fullmatch(w)]
+    if _DEICTIC_RE.search(prompt):
+        return len(core) <= 4
+    return not core
+
+
+async def _send_single_response(
     bot: Bot,
     chat_id: int,
     msg_id: int,
@@ -495,7 +546,7 @@ async def send_ai_response(
     is_private: bool,
     thread_id: int | None = None,
 ):
-    """Send a response, keeping it in the originating forum topic."""
+    """Deliver one already-split reply, keeping it in the originating forum topic."""
     sanitized = sanitize_rich_html(render_math_markup(response_text))
     kwargs: dict = {"chat_id": chat_id}
     # Without this the reply lands in General instead of the topic it was
@@ -529,6 +580,33 @@ async def send_ai_response(
                     print(f"Plain text retry also failed ({str(e2)[:100]}), using rich message instead")
 
     return await bot.send_rich_message(rich_message=InputRichMessage(html=sanitized), **kwargs)
+
+
+async def send_ai_response(
+    bot: Bot,
+    chat_id: int,
+    msg_id: int,
+    response_text: str,
+    is_private: bool,
+    thread_id: int | None = None,
+):
+    """Send a response, splitting [SEND_NEW_MESSAGE] markers into real messages.
+
+    The API offers no way for a model instruction to become a burst of sends,
+    and "spam them" used to come out as the target's tag repeated inside one
+    message. Each marker now starts its own outgoing message; parts are
+    sanitized independently so the marker never leaks into the text.
+    """
+    parts = [p.strip() for p in _SEND_BREAK_RE.split(response_text or "") if p.strip()]
+    if len(parts) <= 1:
+        return await _send_single_response(bot, chat_id, msg_id, response_text, is_private, thread_id)
+    sent = None
+    for idx, part in enumerate(parts[:_MAX_SEND_PARTS], 1):
+        try:
+            sent = await _send_single_response(bot, chat_id, msg_id, part, is_private, thread_id)
+        except Exception as e:
+            print(f"Multi-part response delivery error on part {idx}: {e}")
+    return sent
 
 
 # ---------------------------------------------------------------------------
@@ -1393,7 +1471,17 @@ def register_handlers(router: Router, bot: Bot) -> None:
             search_query = normalize_search_query(prompt)
             if is_music_request(prompt):
                 search_query = music_search_query(prompt)
-            search_context = await free_web_search(search_query, news=news) if use_search else ""
+            search_context = ""
+            if use_search and not is_music_request(prompt) and bare_sources_request(prompt):
+                # "Provide sources" / "sources for the rates there" — the topic
+                # is the thing we just searched, not the demand itself.
+                _q, _c = await fetch_last_search(str(cid), str(uid))
+                if _q and _c:
+                    search_query, search_context = _q, _c
+            if use_search and not search_context:
+                search_context = await free_web_search(search_query, news=news)
+                if search_context and not is_music_request(prompt):
+                    await remember_last_search(str(cid), str(uid), search_query, search_context)
 
             context_parts = []
             # Set when a track/video request has no verified link: the reply
@@ -1547,6 +1635,7 @@ def register_handlers(router: Router, bot: Bot) -> None:
                 "When media is attached, treat that media as primary evidence. Never fabricate visual, audio, or document details. If you cannot reliably inspect it, say so.\n"
                 "For emoji, identify by exact codepoint, never by resemblance. Emoji 16.0 (2024) and 17.0 (2025) postdate you — e.g. 🫈 is HAIRY CREATURE (Bigfoot-like cryptid), never 🪬 HAMSA (Hand of Fatima); 🫪 is DISTORTED FACE, never 🫩. An explicit Emoji grounding note in the prompt overrides your memory; if Web Search Context covers the emoji, prefer it; if unsure, say so instead of substituting a similar-looking emoji.\n"
                 "Return Telegram Rich HTML for sendRichMessage. Use whichever tags best fit the content naturally.\n"
+                "Formatting requests in the USER'S INSTRUCTION are commands. When the user explicitly asks for a structure or format (table, collapsible or expandable section with any label, code block, equation, list, numbered list, fixed item count, translation, sources), build that structure in full. Persona and brevity directives shape your wording, never whether the requested structure appears.\n"
                 "Bold with <b></b> the key items: people's names and job titles, place names, organizations, and concrete figures (dates, numbers, prices, scores). Bold the direct answer to a direct question. Never leave a person's name or title unbolded in a factual answer.\n"
                 "For lists, emit real list markup: <ul><li>…</li></ul> or <ol><li>…</li></ol>, with one <li> per item inside a single list. Never fake list items by writing '1.' or '-' inside plain text.\n"
                 'For code snippets: ALWAYS use <pre><code class="language-xxx">code</code></pre> where xxx is the language (python, javascript, html, css, bash, json, etc). The class attribute is required for syntax highlighting. Example: <pre><code class="language-python">print("hello")</code></pre>\n'
@@ -1558,10 +1647,14 @@ def register_handlers(router: Router, bot: Bot) -> None:
                 "When you share a track or video link, always write it as a labelled markdown link on its own line: [Song Name - Artist](https://www.youtube.com/watch?v=ID). Never paste a bare URL on its own for a track, and never invent the label - use the real title and artist from search results. The bot requests the Telegram preview itself, so the label does not cost you the embed.\n"
                 "When the request names what it wants (a song title, a video, an article), deliver it immediately from search results. Never stall with clarifying questions or vibe checks when the request is directly answerable.\n"
                 "Never invent, guess, or half-write URLs. Share only URLs that appear verbatim in Web Search Context. If no usable URL was returned, say plainly you couldn't find it instead of fabricating one.\n"
-                "Only show source links when the user explicitly asks for sources, citations, links, or URLs. When requested, put them at the very end as a compact rich-text footnote section using <details><summary>Sources</summary>...links...</details>.\n"
+                "Only show source links when the user explicitly asks for sources, citations, links, or URLs. When requested, put them at the very end as a compact rich-text footnote section using <details><summary>Sources</summary>...links...</details>. Source links are for the topic actually discussed or searched in this conversation — the Web Search Context that supports your claims — never for a fresh search of the user's literal phrasing. Use <details><summary>...</summary>...</details> for any section the user explicitly asks to be collapsible, expandable, or folded, with whatever label they asked for.\n"
                 "For tables: use HTML <table>, <tr>, <td>, <th> tags. Never use Markdown pipe tables.\n"
                 "Use code fences only for actual code. Do not wrap tables or non-code content in code fences.\n"
                 "For lists: ALWAYS use proper list formatting. Use lines starting with - or * for bullets, or 1. 2. 3. for numbered lists. Never write items inline like 'Item 1: text' or 'Step 1: text'."
+            )
+            instructions += (
+                "\nYou can only reply in this chat: you have no way to DM another user or post into a different chat, and if asked to send something elsewhere you say so.\n"
+                "When the user explicitly asks for several messages (spam, repeated sends, 'ping them 5 times'), split the parts with the marker [SEND_NEW_MESSAGE] on its own line. Each marker starts a new outgoing message in this same chat, up to 10 parts. In a spam request put the target's @mention in every part and vary the wording across parts; never fake multiple sends by repeating text inside one message. Only use the marker when multiple messages are actually requested.\n"
             )
             if _verbatim_reformat:
                 instructions += (
@@ -1681,11 +1774,14 @@ def register_handlers(router: Router, bot: Bot) -> None:
             except Exception as rich_error:
                 print(f"Rich response delivery error: {rich_error}")
                 fallback = (
-                    html.unescape(re.sub(r"<[^>]+>", "", response_text)).strip() or "I didn't receive a response."
+                    html.unescape(re.sub(r"\[\s*send[_\s]?new[_\s]?message\s*\]", "\n\n", re.sub(r"<[^>]+>", "", response_text), flags=re.I)).strip()
+                    or "I didn't receive a response."
                 )
                 await message.answer(fallback, reply_to_message_id=None if is_private else mid)
 
-            clean_history = html.unescape(re.sub(r"<[^>]+>", "", response_text)).strip()
+            clean_history = html.unescape(
+                re.sub(r"\[\s*send[_\s]?new[_\s]?message\s*\]", "\n\n", re.sub(r"<[^>]+>", "", response_text), flags=re.I)
+            ).strip()
             await redis_client.rpush(
                 history_key, f"User: {prompt or media_description or 'Media'}", f"Bot: {clean_history}"
             )

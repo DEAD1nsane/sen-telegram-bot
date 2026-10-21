@@ -33,6 +33,49 @@ def set_search_state(query: str, result: str) -> None:
     _SEARCH_STATE.set((query, result))
 
 
+#: How long a successful search stays recallable for "provide sources"-style
+#: follow-ups that never restate the topic ("provide sources", "the rates
+#: there"). The topic lives in the conversation, not in the message, so the
+#: fresh search has to reuse the query that produced the statement instead of
+#: searching the demand verbatim (which once returned an aggressive-profanity
+#: Medium article as the "sources" for motel rates).
+_LAST_SEARCH_TTL = 60 * 45
+
+
+def _last_search_key(chat_id: str, user_id: str) -> str:
+    return f"last_search:{chat_id}:{user_id}"
+
+
+async def fetch_last_search(chat_id: str, user_id: str) -> tuple[str, str]:
+    """Recall the previous successful web search for this chat pair."""
+    try:
+        raw = await redis_client.get(_last_search_key(chat_id, user_id))
+    except Exception as e:
+        print(f"Last-search read failure: {e}")
+        return "", ""
+    if not raw:
+        return "", ""
+    try:
+        data = json.loads(raw.decode() if isinstance(raw, bytes) else raw)
+        return str(data.get("query", "")), str(data.get("context", ""))
+    except Exception:
+        return "", ""
+
+
+async def remember_last_search(chat_id: str, user_id: str, query: str, result: str) -> None:
+    """Persist a successful search so a follow-up "sources" demand can reuse it."""
+    if not query or not result:
+        return
+    try:
+        await redis_client.set(
+            _last_search_key(chat_id, user_id),
+            json.dumps({"query": query, "context": result}),
+            ex=_LAST_SEARCH_TTL,
+        )
+    except Exception as e:
+        print(f"Last-search write failure: {e}")
+
+
 def clean_url(url: str) -> str:
     """Strip query params and fragment from a URL."""
     if not url:
