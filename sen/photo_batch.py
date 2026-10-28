@@ -24,12 +24,13 @@ import html
 import io
 import os
 import re
+import time
 import zipfile
 from collections.abc import Awaitable, Callable
 from typing import Any
 
 from aiogram import Bot, Router
-from aiogram.exceptions import TelegramRetryAfter
+from aiogram.exceptions import TelegramBadRequest, TelegramRetryAfter
 from aiogram.filters import BaseFilter
 from aiogram.types import Message, ReplyParameters
 
@@ -51,6 +52,10 @@ ANALYSIS_GAP_SECONDS = 1.2
 # Spacing between outgoing messages in one chat. Telegram allows a bot ~20
 # messages per minute per group; 3.5s keeps us comfortably under that.
 REPLY_GAP_SECONDS = 3.5
+
+# Minimum spacing between interim edits of the progress message. Edits are
+# cheap but not free, so the counter refreshes at most this often.
+PROGRESS_EDIT_GAP = 3.0
 
 # Guards against a pathological upload.
 MAX_BATCH_IMAGES = 60
@@ -312,23 +317,77 @@ async def _process_batch(
         )
         return
 
+    total = len(images)
+    noun = "image" if total == 1 else "images"
+
+    # One status message is edited in place while the batch runs, so the chat
+    # sees live progress without a flood of new messages. It is sent directly
+    # (not through the paced sender) because we need its message_id back.
+    status_id: int | None = None
+    last_edit = 0.0
+    edits_allowed = True
+
+    async def _set_progress(done: int) -> None:
+        nonlocal status_id, last_edit, edits_allowed
+        if not edits_allowed:
+            return
+        now = time.monotonic()
+        if status_id is not None and now - last_edit < PROGRESS_EDIT_GAP:
+            return
+        text = f"📸 Found {total} {noun} - summarizing {done}/{total}..."
+        try:
+            if status_id is None:
+                sent = await bot.send_message(
+                    text,
+                    reply_parameters=ReplyParameters(message_id=reply_to_message_id),
+                )
+                status_id = sent.message_id
+            else:
+                await bot.edit_message_text(text, chat_id=chat_id, message_id=status_id)
+            last_edit = now
+        except TelegramRetryAfter as e:
+            # Flood control on edits: stop updating the counter, but still
+            # attempt the final swap to the summary.
+            print(f"[batch] progress edit flood-wait of {e.retry_after}s; going quiet")
+            edits_allowed = False
+        except Exception as e:
+            print(f"[batch] progress update failed: {type(e).__name__}: {e}")
+            if status_id is None:
+                # Without a status message there is nothing to edit later.
+                edits_allowed = False
+
+    await _set_progress(0)
+
     entries: list[tuple[str, str]] = []
     for index, image in enumerate(images, 1):
         label = image["label"]
         async with _analysis_lock:
             summary = await _summarize(image["data"], image["mime"], image.get("caption", ""), label)
         entries.append((label, summary))
-        if index < len(images):
+        await _set_progress(index)
+        if index < total:
             await asyncio.sleep(ANALYSIS_GAP_SECONDS)
 
-    body = _format_summaries(entries)
-    for chunk in _chunk(body):
+    chunks = _chunk(_format_summaries(entries))
+    first = html.escape(chunks[0])
+    rest = chunks[1:]
+
+    delivered_via_edit = False
+    if status_id is not None:
+        try:
+            # The status message flips into the first chunk of the summary;
+            # anything that did not fit goes through the paced sender.
+            await bot.edit_message_text(first, chat_id=chat_id, message_id=status_id)
+            delivered_via_edit = True
+        except Exception as e:
+            print(f"[batch] final progress edit failed: {type(e).__name__}: {e}")
+
+    for chunk in rest if delivered_via_edit else [first] + rest:
         # The bot defaults to parse_mode="HTML", and model output can contain
         # angle brackets or ampersands that Telegram would reject as markup.
-        safe = html.escape(chunk)
         await _sender.submit(
             chat_id,
-            lambda text=safe: bot.send_message(
+            lambda text=chunk: bot.send_message(
                 text,
                 reply_parameters=ReplyParameters(message_id=reply_to_message_id),
             ),
