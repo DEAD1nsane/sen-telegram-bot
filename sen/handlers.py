@@ -26,7 +26,7 @@ from .config import (
     OWNER_ID,
     TELEGRAM_DOWNLOAD_MAX_BYTES,
     TEMPORARY_FORGET_RE,
-    TRIGGER_AUDIO_FILES,
+    TRIGGER_AUDIO_TRACKS,
     interaction_key,
     redis_client,
 )
