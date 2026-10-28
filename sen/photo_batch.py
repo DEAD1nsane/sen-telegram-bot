@@ -30,7 +30,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 from aiogram import Bot, Router
-from aiogram.exceptions import TelegramBadRequest, TelegramRetryAfter
+from aiogram.exceptions import TelegramRetryAfter
 from aiogram.filters import BaseFilter
 from aiogram.types import Message, ReplyParameters
 
