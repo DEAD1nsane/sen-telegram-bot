@@ -236,15 +236,98 @@ def render_math_markup(text: str) -> str:
     return text
 
 
+# The tags Telegram Rich HTML actually renders ("Rich HTML style" in the Bot
+# API docs). Rich clients DISPLAY UNSUPPORTED TAGS AS LITERAL TEXT, so this
+# set is the single source of truth for what may ship in a rich message —
+# a model-emitted <thead>, <span> or <font> inside a table used to reach the
+# chat as raw HTML instead of disappearing.
+_RICH_ALLOWED_TAGS = frozenset(
+    {
+        "a",
+        "aside",
+        "audio",
+        "b",
+        "blockquote",
+        "br",
+        "caption",
+        "cite",
+        "code",
+        "del",
+        "details",
+        "em",
+        "figcaption",
+        "figure",
+        "footer",
+        "h1",
+        "h2",
+        "h3",
+        "h4",
+        "h5",
+        "h6",
+        "hr",
+        "i",
+        "img",
+        "input",
+        "ins",
+        "li",
+        "mark",
+        "ol",
+        "p",
+        "pre",
+        "s",
+        "strike",
+        "strong",
+        "sub",
+        "summary",
+        "sup",
+        "table",
+        "td",
+        "tg-collage",
+        "tg-emoji",
+        "tg-map",
+        "tg-math",
+        "tg-math-block",
+        "tg-reference",
+        "tg-slideshow",
+        "tg-spoiler",
+        "tg-time",
+        "th",
+        "tr",
+        "u",
+        "ul",
+        "video",
+    }
+)
+
+
 def sanitize_rich_html(text: str) -> str:
-    """Strip unsupported HTML tags for Telegram RichMessage."""
+    """Reduce text to the tags Telegram Rich HTML actually renders.
+
+    Rich clients show any tag outside the official list literally, so an
+    unsupported-but-harmless tag (<thead>, <tbody>, <span>, <font>, <div>…)
+    is unwrapped — tags dropped, content kept — rather than shipped raw.
+    Spoilers remap from the classic <span class="tg-spoiler"> to <tg-spoiler>,
+    and <br> stays a real break: rich HTML collapses literal newlines, so the
+    old br-to-newline conversion welded the model's lines together.
+    """
     if not text:
         return text
     # Drop these outright: the model sometimes emits them, and neither a rich
     # message nor plain sendMessage accepts a <script> start tag.
     text = re.sub(r"<(?:script|style)\b[^>]*>.*?</(?:script|style)>", "", text, flags=re.I | re.S)
-    text = re.sub(r"<div\b[^>]*>|</div>|<section\b[^>]*>|</section>|<article\b[^>]*>|</article>", "", text, flags=re.I)
-    text = re.sub(r"<br\s*/?>", "\n", text, flags=re.I)
+    spoiler_span = re.compile(
+        r'<span[^>]*class=["\'][^"\']*tg-spoiler[^"\']*["\'][^>]*>(.*?)</span>',
+        re.I | re.S,
+    )
+    while spoiler_span.search(text):
+        text = spoiler_span.sub(r"<tg-spoiler>\1</tg-spoiler>", text)
+
+    def _keep_supported(match: re.Match) -> str:
+        name_match = re.match(r"</?\s*([a-zA-Z][\w-]*)", match.group(0))
+        name = name_match.group(1).lower() if name_match else ""
+        return match.group(0) if name in _RICH_ALLOWED_TAGS else ""
+
+    text = re.sub(r"</?[a-zA-Z][^>]*>", _keep_supported, text)
     text = re.sub(r"\n{3,}", "\n\n", text)
     return text.strip()
 
@@ -301,7 +384,7 @@ def _markdown_to_rich_html(text: str) -> str:
     text = re.sub(r"(?<!\w)_([^_\s].*?[^_\s])_(?!\w)", r"<i>\1</i>", text)
     text = re.sub(r"(?<!\w)\*(?!\*)(.+?)(?<!\*)\*(?!\w)", r"<i>\1</i>", text)
     text = re.sub(r"~~(.+?)~~", r"<s>\1</s>", text)
-    text = re.sub(r"\|\|(.+?)\|\|", r'<span class="tg-spoiler">\1</span>', text)
+    text = re.sub(r"\|\|(.+?)\|\|", r"<tg-spoiler>\1</tg-spoiler>", text)
     text = re.sub(r"`([^`\n]+?)`", r"<code>\1</code>", text)
     text = re.sub(r"\[([^\]]+?)\]\((https?://[^\)]+?)\)", r'<a href="\2">\1</a>', text)
     text = re.sub(r"^(#{1,6})\s+(.+)$", lambda m: f"<b>{m.group(2).strip()}</b>", text, flags=re.M)
@@ -717,7 +800,7 @@ def base_instructions(today: str) -> str:
         "When the request names what it wants (a song title, a video, an article), deliver it immediately from search results. Never stall with clarifying questions or vibe checks when the request is directly answerable.\n"
         "Never invent, guess, or half-write URLs. Share only URLs that appear verbatim in Web Search Context. If no usable URL was returned, say plainly you couldn't find it instead of fabricating one.\n"
         "Only show source links when the user explicitly asks for sources, citations, links, or URLs. When requested, put them at the very end as a compact rich-text footnote section using <details><summary>Sources</summary>...links...</details>. Source links are for the topic actually discussed or searched in this conversation — the Web Search Context that supports your claims — never for a fresh search of the user's literal phrasing. Use <details><summary>...</summary>...</details> for any section the user explicitly asks to be collapsible, expandable, or folded, with whatever label they asked for.\n"
-        "For tables: use HTML <table>, <tr>, <td>, <th> tags. Never use Markdown pipe tables.\n"
+        "For tables: use HTML <table>, <tr>, <td>, <th> tags. Never use Markdown pipe tables. Never use <thead>, <tbody>, <span>, or <font> tags - Telegram displays them as literal text.\n"
         "Use code fences only for actual code. Do not wrap tables or non-code content in code fences.\n"
         "For lists: ALWAYS use proper list formatting. Use lines starting with - or * for bullets, or 1. 2. 3. for numbered lists. Never write items inline like 'Item 1: text' or 'Step 1: text'."
     )
@@ -767,12 +850,16 @@ async def _send_single_response(
         try:
             # The label stays a real link; asking for the preview by URL is what
             # lets a text_link embed, since auto-detection only fires on bare URLs.
-            return await bot.send_message(text=sanitized, link_preview_options=options, **kwargs)
+            # parse_mode is required: plain sendMessage shows any tags as literal
+            # text, which is exactly the raw-HTML bug in a different costume.
+            return await bot.send_message(text=sanitized, parse_mode="HTML", link_preview_options=options, **kwargs)
         except TelegramBadRequest as e:
             # The model can still emit markup only a rich message tolerates (a
             # stray <script>, an unclosed tag). Retry with the label and URL
             # split so the URL survives tag stripping and can still auto-embed.
-            bare = html.unescape(re.sub(r"<[^>]+>", "", _label_and_url(sanitized))).strip()
+            bare = html.unescape(
+                re.sub(r"<[^>]+>", "", _label_and_url(re.sub(r"<br\s*/?>", "\n", sanitized, flags=re.I)))
+            ).strip()
             print(f"YouTube preview send rejected ({str(e)[:100]}), retrying as plain text")
             if bare:
                 try:

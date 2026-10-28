@@ -5,11 +5,15 @@ Every test here maps to a bug that shipped and had to be fixed:
 * format requests ignored because persona memories outranked them
 * "spam a user" faked by repeating a tag inside one message
 * "provide sources" answered with sources for the wrong topic
+* rich replies showed RAW HTML (<thead>, <span>, <font>) inside rendered
+  tables because sanitize_rich_html let through tags Rich HTML does not
+  support - clients display unsupported tags as literal text
 
 Run with: python -m unittest discover -s tests -t .
 """
 
 import os
+import re
 import unittest
 
 # sen.config refuses to import without credentials; the tests never talk to
@@ -19,8 +23,11 @@ os.environ.setdefault("GEMINI_API_KEY", "test-key")
 
 from sen.handlers import (  # noqa: E402
     _MAX_SEND_PARTS,
+    _RICH_ALLOWED_TAGS,
     bare_sources_request,
     base_instructions,
+    clean_ai_output,
+    sanitize_rich_html,
     send_ai_response,
     strip_send_markers,
 )
@@ -165,6 +172,70 @@ class LastSearchMemoryTest(unittest.IsolatedAsyncioTestCase):
     async def test_empty_results_are_not_remembered(self):
         await remember_last_search("-100", "42", "hotel rates", "")
         self.assertEqual(await fetch_last_search("-100", "42"), ("", ""))
+
+
+class RichHtmlSanitizerTest(unittest.TestCase):
+    """Rich clients display unsupported tags literally; nothing may leak."""
+
+    TAG_RE = re.compile(r"</?([a-zA-Z][\w-]*)")
+
+    def _assert_only_supported_tags(self, text: str) -> None:
+        for name in self.TAG_RE.findall(text):
+            self.assertIn(name.lower(), _RICH_ALLOWED_TAGS, f"unsupported tag leaked: {name} in {text!r}")
+
+    def test_unsupported_table_scaffolding_is_unwrapped(self):
+        out = sanitize_rich_html(
+            "<table><thead><tr><th>Col</th></tr></thead><tbody><tr><td>Val</td></tr></tbody></table>"
+        )
+        self._assert_only_supported_tags(out)
+        self.assertIn("<th>Col</th>", out)
+        self.assertIn("<td>Val</td>", out)
+        self.assertNotIn("thead", out)
+        self.assertNotIn("tbody", out)
+
+    def test_span_and_font_keep_their_text(self):
+        out = sanitize_rich_html('<span>plain span</span> <font color="red">red text</font>')
+        self._assert_only_supported_tags(out)
+        self.assertIn("plain span", out)
+        self.assertIn("red text", out)
+
+    def test_classic_spoiler_span_becomes_tg_spoiler(self):
+        out = sanitize_rich_html('<span class="tg-spoiler">hidden</span>')
+        self.assertEqual(out, "<tg-spoiler>hidden</tg-spoiler>")
+
+    def test_line_break_tag_survives(self):
+        # Rich HTML collapses literal newlines; the old br-to-newline
+        # conversion welded the model's lines together.
+        out = sanitize_rich_html("line one<br/>line two")
+        self.assertRegex(out, r"<br\s*/?>")
+        self.assertIn("line one", out)
+        self.assertIn("line two", out)
+
+    def test_script_and_style_are_dropped_with_content(self):
+        out = sanitize_rich_html("before<script>alert('x')</script><style>b{}</style>after")
+        self.assertEqual(out, "beforeafter")
+
+    def test_realistic_rich_demo_ships_only_supported_tags(self):
+        demo = (
+            "<h3>Rich demo</h3>"
+            "<table bordered striped><caption>Stats</caption>"
+            "<thead><tr><th>Name</th><th>Score</th></tr></thead>"
+            '<tbody><tr><td colspan="2" align="center"><font color="green">Winner</font> '
+            '<span class="tg-spoiler">secret</span></td></tr></tbody></table>'
+            "<p>Break<br>next line</p>"
+        )
+        out = sanitize_rich_html(demo)
+        self._assert_only_supported_tags(out)
+        self.assertIn("<caption>Stats</caption>", out)
+        self.assertIn('<td colspan="2" align="center">', out)
+        self.assertIn("<tg-spoiler>secret</tg-spoiler>", out)
+        self.assertIn("Winner", out)
+        self.assertRegex(out, r"<br\s*/?>")
+
+    def test_markdown_spoiler_uses_rich_tag_at_source(self):
+        out = clean_ai_output("mark this ||hidden|| as spoiler")
+        self.assertIn("<tg-spoiler>hidden</tg-spoiler>", out)
+        self.assertNotIn("span", out)
 
 
 if __name__ == "__main__":
