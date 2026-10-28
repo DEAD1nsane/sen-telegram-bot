@@ -1543,7 +1543,6 @@ def register_handlers(router: Router, bot: Bot) -> None:
         has_media_input = bool(message.photo or message.voice or message.document or replied_video or replied_document)
 
         # Keyword audio always fires, even on non-directed chatter.
-        keyword_audio = None
         if text_no_html and not text_no_html.startswith("/"):
             msg_entities = (
                 getattr(message, "entities", None)
@@ -1551,16 +1550,13 @@ def register_handlers(router: Router, bot: Bot) -> None:
                 else getattr(message, "caption_entities", None)
             )
             code_stripped = _strip_code_spans(text, msg_entities)
-            if re.search(r"\bsen\b", code_stripped, re.I):
-                keyword_audio = TRIGGER_AUDIO_FILES["sen"]
-            elif re.search(r"\bmagical\b", code_stripped, re.I):
-                keyword_audio = TRIGGER_AUDIO_FILES["magical"]
-            elif re.search(r"\bmagic\b", code_stripped, re.I):
-                keyword_audio = TRIGGER_AUDIO_FILES["magic"]
-            elif re.search(r"\bdust\b", code_stripped, re.I):
-                keyword_audio = TRIGGER_AUDIO_FILES["dust"]
-        if keyword_audio:
-            await send_keyword_audio(message, keyword_audio)
+            # Iterate over TRIGGER_AUDIO_TRACKS to find all matching keywords
+            # Dedupe by filename to avoid playing the same track twice
+            seen_files: set[str] = set()
+            for pattern, filename, _title, _performer in TRIGGER_AUDIO_TRACKS.values():
+                if re.search(pattern, code_stripped, re.I) and filename not in seen_files:
+                    seen_files.add(filename)
+                    await send_keyword_audio(message, filename)
 
         if message.voice is not None:
             if not (tagged or reply_to_bot):
