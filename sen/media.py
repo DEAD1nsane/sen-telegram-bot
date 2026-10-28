@@ -274,7 +274,15 @@ MIME_ALIASES = {
     "application/xml": "text/xml",
     "application/xhtml+xml": "text/html",
     "application/x-javascript": "text/javascript",
+    "application/x-zip-compressed": "application/zip",
+    "multipart/x-zip": "application/zip",
 }
+
+# Archives Gemini cannot ingest directly. They are recognised as documents so
+# they never fall through to the "unsupported file" reply; the member listing
+# is extracted locally and sent as text (see prepare_document). Extracting and
+# summarising the images inside stays the job of the batch photo path.
+ARCHIVE_MIMES = frozenset({"application/zip"})
 
 # Gemini ingests these application types directly; everything else that is not
 # convertible below has to be rejected or the API call errors out.
@@ -318,6 +326,7 @@ EXTENSION_MIMES = {
     ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
     ".epub": "application/epub+zip",
+    ".zip": "application/zip",
     ".png": "image/png",
     ".jpg": "image/jpeg",
     ".jpeg": "image/jpeg",
@@ -356,10 +365,11 @@ DOCUMENT_LABELS = {
     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "Spreadsheet",
     "application/vnd.openxmlformats-officedocument.presentationml.presentation": "Presentation",
     "application/epub+zip": "eBook",
+    "application/zip": "ZIP archive",
 }
 
 UNSUPPORTED_DOCUMENT_REPLY = (
-    "I can't read that file type. Send a PDF, Word, Excel, PowerPoint, eBook, plain text, Markdown, "
+    "I can't read that file type. Send a PDF, Word, Excel, PowerPoint, eBook, ZIP archive, plain text, Markdown, "
     "CSV, JSON, HTML, XML, CSS, JS, YAML, RTF, image, audio, or video file and tell me what to do with it."
 )
 DOCUMENT_DOWNLOAD_ERROR = "I couldn't download that file. Try sending it again."
@@ -385,7 +395,8 @@ def is_readable_document_mime(mime: str) -> bool:
     """Check whether Gemini can ingest a MIME type, natively or after conversion."""
     if not mime:
         return False
-    if mime in NATIVE_DOCUMENT_MIMES or mime in CONVERTIBLE_MIMES:
+    mime = MIME_ALIASES.get(mime, mime)
+    if mime in NATIVE_DOCUMENT_MIMES or mime in CONVERTIBLE_MIMES or mime in ARCHIVE_MIMES:
         return True
     # text/* is extracted as plain text; media types go down the existing
     # image/audio/video pipelines. The documented lists are explicitly partial,
@@ -427,14 +438,19 @@ def prepare_document(document: Any, data: bytes) -> tuple[bytes, str, str]:
     """Classify a document and convert it to plain text when it helps.
 
     Office/ebook formats are always converted (Gemini cannot read them).
-    PDFs are text-extracted locally with pypdf first — native Gemini PDF
-    reading proved unreliable — falling back to native bytes only for
-    scanned/image PDFs with no extractable text.
+    ZIP archives become their member listing, since Gemini cannot ingest
+    archives either. PDFs are text-extracted locally with pypdf first —
+    native Gemini PDF reading proved unreliable — falling back to native
+    bytes only for scanned/image PDFs with no extractable text.
 
     Returns (data, mime, description) ready for ``Part.from_bytes``.
     """
     mime = document_mime_type(document)
     description = describe_document(document)
+    if mime in ARCHIVE_MIMES:
+        text = _zip_to_text(data)
+        print(f"ZIP listing: {len(data)} bytes in, {len(text or '')} chars out")
+        return (text.encode("utf-8"), "text/plain", description) if text else (data, mime, description)
     kind = CONVERTIBLE_MIMES.get(mime)
     if kind:
         text = _convert_document_to_text(data, kind) or ""
@@ -458,6 +474,9 @@ def prepare_document(document: Any, data: bytes) -> tuple[bytes, str, str]:
 # ---------------------------------------------------------------------------
 # Document -> text conversion
 # ---------------------------------------------------------------------------
+
+_ZIP_LISTING_MAX_MEMBERS = 200
+_ZIP_LISTING_MAX_CHARS = 20_000
 
 _W_NS = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
 _S_NS = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
@@ -587,6 +606,33 @@ def _epub_to_text(data: bytes) -> str | None:
             return "\n".join(out) or None
     except Exception:
         return None
+
+
+def _zip_to_text(data: bytes) -> str | None:
+    """List a ZIP archive's members as text (Gemini cannot ingest archives).
+
+    The batch photo path summarises the images inside; everywhere else the
+    member listing is what lets the model answer "what is in this archive?".
+    """
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as archive:
+            entries = [m for m in archive.infolist() if not m.is_dir()]
+    except zipfile.BadZipFile:
+        return None
+    lines: list[str] = []
+    for member in entries[:_ZIP_LISTING_MAX_MEMBERS]:
+        if member.filename.startswith("__MACOSX/"):
+            continue
+        lines.append(f"{member.filename} ({member.file_size:,} bytes)")
+    if not lines:
+        return None
+    header = f"ZIP archive containing {len(entries)} files:"
+    text = f"{header}\n" + "\n".join(lines)
+    if len(entries) > _ZIP_LISTING_MAX_MEMBERS:
+        text += f"\n... and {len(entries) - _ZIP_LISTING_MAX_MEMBERS} more files"
+    if len(text) > _ZIP_LISTING_MAX_CHARS:
+        text = text[:_ZIP_LISTING_MAX_CHARS] + "\n[listing truncated]"
+    return text
 
 
 def _convert_document_to_text(data: bytes, kind: str) -> str | None:

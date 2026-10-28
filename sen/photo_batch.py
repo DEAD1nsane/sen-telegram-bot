@@ -23,6 +23,7 @@ import asyncio
 import html
 import io
 import os
+import re
 import zipfile
 from collections.abc import Awaitable, Callable
 from typing import Any
@@ -190,6 +191,55 @@ def _format_summaries(entries: list[tuple[str, str]]) -> str:
     return f"{header}\n\n{body}"
 
 
+_MD_LINE_PREFIX_RE = re.compile(r"^\s{0,3}(?:#{1,6}\s+|[-*•]\s+)", re.MULTILINE)
+_MD_WRAP_RE = re.compile(r"(\*\*|__|`{1,3})")
+_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?…])\s+")
+
+
+def _response_text(response: Any) -> str:
+    """Best-effort plain text from a Gemini response, whatever shape it took.
+
+    ``response.text`` raises when the candidate carries no text part (safety
+    block, empty candidate), so fall back to walking the parts by hand before
+    giving up — the caller logs whatever comes back.
+    """
+    try:
+        text = response.text
+        if text:
+            return text.strip()
+    except Exception:
+        pass
+    chunks: list[str] = []
+    try:
+        for candidate in getattr(response, "candidates", None) or []:
+            for part in getattr(getattr(candidate, "content", None), "parts", None) or []:
+                piece = getattr(part, "text", None)
+                if piece:
+                    chunks.append(piece)
+    except Exception:
+        pass
+    return "\n".join(chunks).strip()
+
+
+def _plain_summary(text: str, max_sentences: int = 4) -> str:
+    """Force a model answer back into chat-shaped plain text.
+
+    The prompt forbids formatting, but Gemini still emits markdown headings,
+    bullets, and bold now and then; the reply is HTML-escaped plain text, so
+    those markers would show up literally. Also caps runaway answers at the
+    requested 2-4 sentences.
+    """
+    text = _MD_LINE_PREFIX_RE.sub("", text)
+    text = _MD_WRAP_RE.sub("", text)
+    text = " ".join(text.split()).strip().strip("\"'“”‘’")
+    sentences = _SENTENCE_SPLIT_RE.split(text)
+    if len(sentences) > max_sentences:
+        text = " ".join(sentences[:max_sentences]).rstrip(",;:")
+        if text and text[-1] not in ".!?…":
+            text += "."
+    return text
+
+
 async def _summarize(data: bytes, mime: str, caption: str, label: str) -> str:
     """Ask Gemini for a short, grounded description of one image."""
     from google.genai import types
@@ -207,6 +257,10 @@ async def _summarize(data: bytes, mime: str, caption: str, label: str) -> str:
     )
     if caption:
         prompt += f"\n\nThe sender captioned it: {caption[:500]}"
+    if label:
+        # ZIP-extracted images carry their filename as the label, which is
+        # real context for the model (e.g. "screenshot_02_error.png").
+        prompt += f"\n\nThe image file is named: {label[:120]}"
 
     safety = [
         types.SafetySetting(category=c, threshold="BLOCK_NONE")
@@ -225,8 +279,11 @@ async def _summarize(data: bytes, mime: str, caption: str, label: str) -> str:
         safety_settings=safety,
     )
     try:
+        print(f"[batch] gemini request: label={label} mime={mime} bytes={len(data)} caption={caption[:80]!r}")
         response = await generate_gemini_response([part, prompt], config)
-        text = (getattr(response, "text", "") or "").strip()
+        raw = _response_text(response)
+        print(f"[batch] gemini response: label={label} chars={len(raw)} raw={raw[:400]!r}")
+        text = _plain_summary(raw)
         return text or "I could not make out the contents of this one."
     except Exception as e:
         print(f"[batch] analysis failed for {label}: {type(e).__name__}: {e}")
