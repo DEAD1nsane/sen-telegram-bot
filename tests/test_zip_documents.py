@@ -4,6 +4,8 @@ Every test here maps to a bug that shipped and had to be fixed:
 
 * .zip files were classified as unsupported media in the conversation path
 * batch image summaries leaked markdown formatting into plain-text replies
+* ZIP batches only looked at images, though the bot advertises PDF, Office,
+  text, audio and video as readable types
 
 Run with: python -m unittest discover -s tests -t .
 """
@@ -12,12 +14,15 @@ import io
 import os
 import unittest
 import zipfile
+from types import SimpleNamespace
+from unittest import mock
 
 # sen.config refuses to import without credentials; the tests never talk to
 # Telegram or Gemini, so placeholder values are enough.
 os.environ.setdefault("BOT_TOKEN", "000000000:TESTTOKENPLACEHOLDER0000000000")
 os.environ.setdefault("GEMINI_API_KEY", "test-key")
 
+from sen import photo_batch  # noqa: E402
 from sen.media import (  # noqa: E402
     describe_document,
     document_mime_type,
@@ -25,7 +30,14 @@ from sen.media import (  # noqa: E402
     is_readable_document_mime,
     prepare_document,
 )
-from sen.photo_batch import _is_zip, _plain_summary, _response_text  # noqa: E402
+from sen.photo_batch import (  # noqa: E402
+    _gemini_mime,
+    _is_zip,
+    _plain_summary,
+    _response_text,
+    _summarize_instruction,
+)
+from tests.test_batch_progress import FakeBot, FakeSender, _fake_summarize  # noqa: E402
 
 
 class FakeDocument:
@@ -140,6 +152,91 @@ class ResponseTextTest(unittest.TestCase):
             text = None
 
         self.assertEqual(_response_text(Response()), "")
+
+
+class GeminiMimeTest(unittest.TestCase):
+    """Gemini only ingests text/* as plain text; other types ride as-is."""
+
+    def test_text_families_become_plain_text(self):
+        for mime in ("text/markdown", "text/csv", "text/x-python", "text/rtf", "text/yaml", "text/html"):
+            with self.subTest(mime=mime):
+                self.assertEqual(_gemini_mime(mime), "text/plain")
+
+    def test_native_types_pass_through(self):
+        for mime in ("image/png", "application/pdf", "application/json", "audio/mpeg", "video/mp4"):
+            with self.subTest(mime=mime):
+                self.assertEqual(_gemini_mime(mime), mime)
+
+
+class SummarizeInstructionTest(unittest.TestCase):
+    """The prompt has to match the entry: image, media, or document."""
+
+    def test_image_branch_describes_what_is_visible(self):
+        prompt, system = _summarize_instruction("image/jpeg")
+        self.assertIn("Describe this image", prompt)
+        self.assertIn("visual summariser", system)
+
+    def test_document_branch_summarizes_file_contents(self):
+        prompt, system = _summarize_instruction("text/plain")
+        self.assertIn("Summarize this file", prompt)
+        self.assertIn("document summariser", system)
+        self.assertNotIn("Describe this image", prompt)
+
+    def test_media_branch_handles_audio_and_video(self):
+        for mime in ("audio/mpeg", "video/mp4"):
+            with self.subTest(mime=mime):
+                prompt, system = _summarize_instruction(mime)
+                family = mime.split("/")[0]
+                self.assertIn(f"Describe this {family} file", prompt)
+                self.assertIn("media summariser", system)
+
+
+class ZipContentsBatchTest(unittest.IsolatedAsyncioTestCase):
+    """A ZIP is analysed for every advertised type, not just images."""
+
+    def _message(self):
+        return SimpleNamespace(
+            chat=SimpleNamespace(id=-1001),
+            message_id=42,
+            document=SimpleNamespace(file_id="z1", file_name="dump.zip", mime_type="application/zip"),
+        )
+
+    async def _run(self, bot: FakeBot, archive: bytes) -> None:
+        with (
+            mock.patch.object(photo_batch, "download_telegram_media", mock.AsyncMock(return_value=archive)),
+            mock.patch.object(photo_batch, "_summarize", _fake_summarize),
+            mock.patch.object(photo_batch, "ANALYSIS_GAP_SECONDS", 0),
+            mock.patch.object(photo_batch, "PROGRESS_EDIT_GAP", 0),
+            mock.patch.object(photo_batch, "_sender", FakeSender(bot)),
+        ):
+            await photo_batch._on_zip(bot, self._message())
+
+    async def test_mixed_archive_analyses_supported_and_skips_junk(self):
+        bot = FakeBot()
+        await self._run(bot, make_zip({"shot.png": b"png-bytes", "notes.md": b"# notes", "virus.exe": b"MZ"}))
+
+        final = bot.edits[-1]
+        self.assertIn("📸 Read 2 files", final)
+        self.assertIn("<b>shot.png</b>", final)
+        self.assertIn("<b>notes.md</b>", final)
+        self.assertNotIn("virus.exe", final)
+
+    async def test_image_only_archive_keeps_image_wording(self):
+        bot = FakeBot()
+        await self._run(bot, make_zip({"a.png": b"x", "b.jpg": b"y"}))
+        self.assertIn("📸 Read 2 images", bot.edits[-1])
+
+    async def test_nested_archive_is_summarised_as_its_listing(self):
+        bot = FakeBot()
+        await self._run(bot, make_zip({"inner.zip": make_zip({"doc.txt": b"hello"})}))
+        final = bot.edits[-1]
+        self.assertIn("📸 Read 1 file", final)
+        self.assertIn("<b>inner.zip</b>", final)
+
+    async def test_unreadable_only_archive_reports_no_files(self):
+        bot = FakeBot()
+        await self._run(bot, make_zip({"virus.exe": b"MZ", "setup.dll": b"MZ"}))
+        self.assertTrue(any("found no files I can read" in text for text in bot.sent))
 
 
 if __name__ == "__main__":

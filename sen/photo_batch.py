@@ -16,7 +16,9 @@ Two entry points back that rule up:
 
 * an album (or a lone photo) - collected once the burst stops and
   summarised together, but only when aimed at the bot;
-* a ZIP document - every image inside is extracted and summarised together.
+* a ZIP document - every file inside the bot can read (images, PDF, Office,
+  text and code, audio, video, nested archive listings) is extracted and
+  summarised together.
 
 The feature is opt-in per chat through ``PHOTO_BATCH_CHAT_IDS``.
 """
@@ -26,11 +28,11 @@ from __future__ import annotations
 import asyncio
 import html
 import io
-import os
 import re
 import time
 import zipfile
 from collections.abc import Awaitable, Callable
+from types import SimpleNamespace
 from typing import Any
 
 from aiogram import Bot, Router
@@ -39,7 +41,7 @@ from aiogram.filters import BaseFilter
 from aiogram.types import InputRichMessage, Message, ReplyParameters
 
 from . import config as _cfg
-from .media import download_telegram_media
+from .media import download_telegram_media, is_readable_document, prepare_document
 
 # ---------------------------------------------------------------------------
 # Tunables
@@ -61,9 +63,11 @@ REPLY_GAP_SECONDS = 3.5
 # cheap but not free, so the counter refreshes at most this often.
 PROGRESS_EDIT_GAP = 3.0
 
-# Guards against a pathological upload.
+# Guards against a pathological upload — per member and for the whole
+# archive, so a small ZIP bomb cannot turn into a gigabyte of extraction.
 MAX_BATCH_IMAGES = 60
 MAX_IMAGE_BYTES = 10 * 1024 * 1024
+MAX_TOTAL_MEMBER_BYTES = 100 * 1024 * 1024
 
 # Telegram's own message limit is 4096 characters; stay well below it.
 CHUNK_LIMIT = 3500
@@ -72,15 +76,6 @@ CHUNK_LIMIT = 3500
 # a plain message — so a full-batch summary lands as ONE message instead of a
 # string of 3500-char chunks. Stay under the cap with headroom to spare.
 RICH_CHUNK_BYTES = 30000
-
-IMAGE_MIME = {
-    ".jpg": "image/jpeg",
-    ".jpeg": "image/jpeg",
-    ".png": "image/png",
-    ".webp": "image/webp",
-    ".gif": "image/gif",
-    ".bmp": "image/bmp",
-}
 
 ZIP_MIMES = {"application/zip", "application/x-zip-compressed", "multipart/x-zip"}
 
@@ -198,10 +193,10 @@ def _chunk(text: str) -> list[str]:
     return chunks
 
 
-def _format_summaries(entries: list[tuple[str, str]]) -> str:
-    """Render the per-image summaries as one reply body."""
+def _format_summaries(entries: list[tuple[str, str]], kind: str = "image") -> str:
+    """Render the per-entry summaries as one reply body."""
     total = len(entries)
-    header = "📸 Read 1 image - here is the gist:" if total == 1 else f"📸 Read {total} images - here's the gist:"
+    header = f"📸 Read 1 {kind} - here is the gist:" if total == 1 else f"📸 Read {total} {kind}s - here's the gist:"
     body = "\n\n".join(f"{label}\n{summary}" for label, summary in entries)
     return f"{header}\n\n{body}"
 
@@ -216,12 +211,12 @@ def _rich(html_text: str) -> InputRichMessage:
     return InputRichMessage(html=html_text, skip_entity_detection=True)
 
 
-def _format_rich_summary(entries: list[tuple[str, str]]) -> list[str]:
+def _format_rich_summary(entries: list[tuple[str, str]], kind: str = "image") -> list[str]:
     """Build the summary as rich-HTML groups, packed under RICH_CHUNK_BYTES.
 
     One group is one outgoing message. Labels and summaries are HTML-escaped,
     so the only markup Telegram sees is our own tags. Structure comes from
-    real block tags — <h3> heading, <p> per image with <br> after the
+    real block tags — <h3> heading, <p> per entry with <br> after the
     filename — because rich HTML collapses literal newlines like any HTML,
     which would otherwise run all 39 entries into one unreadable paragraph.
     Packing splits strictly between blocks, so a group never cuts a tag or a
@@ -229,7 +224,7 @@ def _format_rich_summary(entries: list[tuple[str, str]]) -> list[str]:
     point: a 39-image run that took six plain messages becomes one message.
     """
     total = len(entries)
-    header = "📸 Read 1 image - here is the gist:" if total == 1 else f"📸 Read {total} images - here's the gist:"
+    header = f"📸 Read 1 {kind} - here is the gist:" if total == 1 else f"📸 Read {total} {kind}s - here's the gist:"
     blocks = [f"<h3>{html.escape(header)}</h3>"]
     blocks += [f"<p><b>{html.escape(label)}</b><br>{html.escape(summary)}</p>" for label, summary in entries]
 
@@ -296,27 +291,56 @@ def _plain_summary(text: str, max_sentences: int = 4) -> str:
     return text
 
 
+def _gemini_mime(mime: str) -> str:
+    """Gemini ingests text/* only as plain text; every other type rides as-is."""
+    return "text/plain" if (mime or "").startswith("text/") else mime
+
+
+def _summarize_instruction(mime: str) -> tuple[str, str]:
+    """Pick the (user prompt, system instruction) that fit one file's MIME family."""
+    family = (mime or "").partition("/")[0]
+    if family == "image":
+        return (
+            "Describe this image in 2-4 short sentences for a chat. "
+            "Say what the screen or scene is, the key visible content or text, and anything notable. "
+            "For a screenshot, quote the most important readable text. "
+            "Only describe what is actually visible; never guess at anything you cannot read.",
+            "You are a precise visual summariser. Report only what is visible in the image. "
+            "No preamble, no closing remarks, no headings, no bullet symbols - just the summary text.",
+        )
+    if family in ("audio", "video"):
+        return (
+            f"Describe this {family} file in 2-4 short sentences for a chat: what happens in it and anything notable. "
+            "Only describe what is actually there; never guess at anything you cannot hear or see.",
+            "You are a precise media summariser. Report only what is actually in the file. "
+            "No preamble, no closing remarks, no headings, no bullet symbols - just the summary text.",
+        )
+    return (
+        "Summarize this file in 2-4 short sentences for a chat. "
+        "Cover what it contains and anything notable - for data, the key numbers; for code, what it does; "
+        "for documents and text, the main points. "
+        "Only state what is actually in the file; never guess at anything you cannot read.",
+        "You are a precise document summariser. Report only what the file actually contains. "
+        "No preamble, no closing remarks, no headings, no bullet symbols - just the summary text.",
+    )
+
+
 async def _summarize(data: bytes, mime: str, caption: str, label: str) -> str:
-    """Ask Gemini for a short, grounded description of one image."""
+    """Ask Gemini for a short, grounded summary of one batch entry."""
     from google.genai import types
 
     # Imported here: handlers imports this module, so a top-level import
     # would be circular.
     from .handlers import generate_gemini_response
 
-    part = types.Part.from_bytes(data=data, mime_type=mime)
-    prompt = (
-        "Describe this image in 2-4 short sentences for a chat. "
-        "Say what the screen or scene is, the key visible content or text, and anything notable. "
-        "For a screenshot, quote the most important readable text. "
-        "Only describe what is actually visible; never guess at anything you cannot read."
-    )
+    part = types.Part.from_bytes(data=data, mime_type=_gemini_mime(mime))
+    prompt, system_instruction = _summarize_instruction(mime)
     if caption:
         prompt += f"\n\nThe sender captioned it: {caption[:500]}"
     if label:
-        # ZIP-extracted images carry their filename as the label, which is
+        # ZIP-extracted entries carry their filename as the label, which is
         # real context for the model (e.g. "screenshot_02_error.png").
-        prompt += f"\n\nThe image file is named: {label[:120]}"
+        prompt += f"\n\nThe file is named: {label[:120]}"
 
     safety = [
         types.SafetySetting(category=c, threshold="BLOCK_NONE")
@@ -328,10 +352,7 @@ async def _summarize(data: bytes, mime: str, caption: str, label: str) -> str:
         )
     ]
     config = types.GenerateContentConfig(
-        system_instruction=(
-            "You are a precise visual summariser. Report only what is visible in the image. "
-            "No preamble, no closing remarks, no headings, no bullet symbols - just the summary text."
-        ),
+        system_instruction=system_instruction,
         safety_settings=safety,
     )
     try:
@@ -370,7 +391,9 @@ async def _process_batch(
         return
 
     total = len(images)
-    noun = "image" if total == 1 else "images"
+    # Mixed archives read as "files"; a pure image batch keeps the old wording.
+    kind = "image" if all((image.get("mime") or "").startswith("image/") for image in images) else "file"
+    noun = kind if total == 1 else f"{kind}s"
 
     # One status message is edited in place while the batch runs, so the chat
     # sees live progress without a flood of new messages. It is sent directly
@@ -444,7 +467,7 @@ async def _process_batch(
 
     # ---- Rich delivery: the status message becomes the whole summary ----
     if status_id is not None and status_rich:
-        groups = _format_rich_summary(entries)
+        groups = _format_rich_summary(entries, kind)
         overflow: list[str] = []
         try:
             # Usually a single group, so this edit IS the delivery.
@@ -469,7 +492,7 @@ async def _process_batch(
         return
 
     # ---- Plain delivery (status never existed or rich was unavailable) ----
-    chunks = _chunk(_format_summaries(entries))
+    chunks = _chunk(_format_summaries(entries, kind))
     first = html.escape(chunks[0])
     rest = chunks[1:]
 
@@ -561,7 +584,12 @@ async def _on_photo(bot: Bot, message: Message) -> None:
 
 
 async def _on_zip(bot: Bot, message: Message) -> None:
-    """Extract every image from a ZIP and summarise the whole set."""
+    """Extract every readable file from a ZIP and summarise the whole set.
+
+    Anything the bot advertises as readable counts — images, PDF, Office,
+    text/code, audio, video — so one archive in, one batch out, instead of
+    one Gemini call per loose file.
+    """
     data = await download_telegram_media(bot, message.document.file_id)
     if not data:
         await _sender.submit(
@@ -575,24 +603,33 @@ async def _on_zip(bot: Bot, message: Message) -> None:
         return
 
     images: list[dict[str, Any]] = []
+    extracted = 0
     try:
         with zipfile.ZipFile(io.BytesIO(data)) as archive:
             members = [m for m in archive.infolist() if not m.is_dir()]
             for member in members:
-                ext = os.path.splitext(member.filename)[1].lower()
-                if ext not in IMAGE_MIME:
+                member_doc = SimpleNamespace(file_name=member.filename, mime_type=None)
+                # Resolved from the file extension: the readable set is the
+                # one the bot advertises (media.py EXTENSION_MIMES).
+                if not is_readable_document(member_doc):
                     continue
                 if member.file_size > MAX_IMAGE_BYTES:
                     continue
-                if len(images) >= MAX_BATCH_IMAGES:
+                if len(images) >= MAX_BATCH_IMAGES or extracted >= MAX_TOTAL_MEMBER_BYTES:
                     break
                 with archive.open(member) as handle:
                     payload = handle.read()
+                extracted += len(payload)
+                # Converts Office/ebook/PDF to text and lists nested archives;
+                # images and media pass through untouched for Gemini.
+                prepared, prepared_mime, _description = prepare_document(member_doc, payload)
+                if not prepared:
+                    continue
                 images.append(
                     {
-                        "label": os.path.basename(member.filename) or f"Image {len(images) + 1}",
-                        "data": payload,
-                        "mime": IMAGE_MIME[ext],
+                        "label": member_doc.file_name.rsplit("/", 1)[-1] or f"File {len(images) + 1}",
+                        "data": prepared,
+                        "mime": prepared_mime,
                         "caption": "",
                     }
                 )
@@ -612,7 +649,7 @@ async def _on_zip(bot: Bot, message: Message) -> None:
             message.chat.id,
             lambda: bot.send_message(
                 chat_id=message.chat.id,
-                text="I looked inside that archive but found no images in it.",
+                text="I looked inside that archive but found no files I can read.",
                 reply_parameters=ReplyParameters(message_id=message.message_id),
             ),
         )
@@ -630,7 +667,7 @@ class BatchPhotoFilter(BaseFilter):
     """Match images in opted-in chats only when they are a direct request.
 
     The rule: photos and albums are summarised only when explicitly aimed
-    at the bot (@tag or reply); a ZIP of images is a request in itself.
+    at the bot (@tag or reply); a ZIP of readable files is a request in itself.
     Anything bare — the common case in a busy group — stays silent.
     """
 
@@ -657,7 +694,7 @@ class BatchPhotoFilter(BaseFilter):
             # non-directed messages too, so nobody ever answers.
             return False
 
-        # A ZIP dump of images is a request in itself, tagged or not.
+        # A ZIP of readable files is a request in itself, tagged or not.
         return bool(message.document and _is_zip(message.document))
 
 
