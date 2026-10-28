@@ -68,17 +68,43 @@ TEMPORARY_MEDIA_LABEL_RE = re.compile(
     re.I,
 )
 
-TRIGGER_AUDIO_FILES: dict[str, str] = {
-    "sen": "Anythang.mp3",
-    "magic": "Do You Believe In Magic.mp3",
-    "magical": "Do You Believe In Magic.mp3",
-    "dust": "Dust In A Baggie.mp3",
+#: Single source of truth for keyword-triggered audio. To add a trigger:
+#: drop the mp3 in the music/ directory, then add one line here —
+#:   key: (word-boundary regex, filename, title, performer).
+#: Insertion order sets send order; several keys may share one filename
+#: (deduped downstream). Title/performer must always be filled in: Telegram
+#: only shows the music-card metadata because we pass it on every send.
+#: Matching is case-insensitive and ignores inline code spans (`code`, `pre`, backticks).
+TRIGGER_AUDIO_TRACKS: dict[str, tuple[str, str, str | None, str | None]] = {
+    # sen, tip -> Teeeeep (order: sen first to match test expectations)
+    "sen": (r"\bsen\b", "Teeeeep.mp3", "Teeeeep", "Shinigami In Name Only"),
+    "tip": (r"\btip\b", "Teeeeep.mp3", "Teeeeep", "Shinigami In Name Only"),
+    # magic, magical -> Do You Believe In Magic (order: 2nd for tests)
+    "magic": (
+        r"\bmagic(?:al)?\b",
+        "Do You Believe In Magic.mp3",
+        "Do You Believe In Magic",
+        "The Lovin' Spoonful",
+    ),
+    # dust -> Dust In A Baggie (order: 3rd for tests)
+    "dust": (r"\bdust\b", "Dust In A Baggie.mp3", "Dust In A Baggie", "Billy Strings"),
+    # trump -> I Hate U B
+    "trump": (r"\btrump\b", "I Hate U B.mp3", "I Hate U B", "Princess Nokia"),
+    # smd, idgaf, happy, rish, rich, hoe, ho, bitch -> Joy
+    "smd": (r"\bsmd\b", "Joy.mp3", "Joy", "Joy Again"),
+    "idgaf": (r"\bidgaf\b", "Joy.mp3", "Joy", "Joy Again"),
+    "happy": (r"\bhappy\b", "Joy.mp3", "Joy", "Joy Again"),
+    "rish": (r"\brish\b", "Joy.mp3", "Joy", "Joy Again"),
+    "rich": (r"\brich\b", "Joy.mp3", "Joy", "Joy Again"),
+    "hoe": (r"\bhoe\b", "Joy.mp3", "Joy", "Joy Again"),
+    "ho": (r"\bho(?:s|es)?\b", "Joy.mp3", "Joy", "Joy Again"),
+    "bitch": (r"\bbitch(?:es)?\b", "Joy.mp3", "Joy", "Joy Again"),
 }
 
+#: Derived views kept for delivery code and tests.
+TRIGGER_AUDIO_FILES: dict[str, str] = {key: track[1] for key, track in TRIGGER_AUDIO_TRACKS.items()}
 AUDIO_METADATA: dict[str, tuple[str | None, str | None]] = {
-    "Anythang.mp3": ("Anythang", "Devin The Dude"),
-    "Do You Believe In Magic.mp3": ("Do You Believe In Magic", "The Lovin' Spoonful"),
-    "Dust In A Baggie.mp3": ("Dust In A Baggie", "Billy Strings"),
+    track[1]: (track[2], track[3]) for track in TRIGGER_AUDIO_TRACKS.values()
 }
 
 # ---------------------------------------------------------------------------

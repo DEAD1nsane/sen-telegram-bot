@@ -226,7 +226,7 @@ class DustKeywordTest(unittest.TestCase):
 
     def test_audio_file_shipped_in_repo(self):
         root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        self.assertTrue(os.path.isfile(os.path.join(root, "Dust In A Baggie.mp3")))
+        self.assertTrue(os.path.isfile(os.path.join(root, "music", "Dust In A Baggie.mp3")))
 
     def test_dust_regex_matches_word_only(self):
         pattern = re.compile(r"\bdust\b", re.I)

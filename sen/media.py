@@ -863,7 +863,8 @@ async def _get_sticker_input(bot, message: Message) -> tuple[bytes, str, str] | 
 # ---------------------------------------------------------------------------
 
 
-_AUDIO_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# Path to the music/ directory relative to the sen/ package.
+_AUDIO_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "music")
 
 
 async def send_keyword_audio(message: Message, filename: str) -> bool:
