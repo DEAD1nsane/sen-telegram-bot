@@ -202,28 +202,36 @@ def _format_summaries(entries: list[tuple[str, str]]) -> str:
 
 
 def _rich(html_text: str) -> InputRichMessage:
-    """Wrap already-escaped HTML for Telegram's rich-message API."""
-    return InputRichMessage(html=html_text)
+    """Wrap already-escaped HTML for Telegram's rich-message API.
+
+    ``skip_entity_detection`` stops Telegram auto-linking cashtags,
+    mentions, and phone-number-looking runs inside summaries — every
+    auto-colored span is noise in a wall of text.
+    """
+    return InputRichMessage(html=html_text, skip_entity_detection=True)
 
 
 def _format_rich_summary(entries: list[tuple[str, str]]) -> list[str]:
     """Build the summary as rich-HTML groups, packed under RICH_CHUNK_BYTES.
 
     One group is one outgoing message. Labels and summaries are HTML-escaped,
-    so the only markup Telegram sees is our own <b> tags. Packing splits
-    strictly between blocks, so a group never cuts a tag or a summary in half.
-    A typical batch fits in a single group — which is the point: a 39-image
-    run that took six plain messages becomes one rich message.
+    so the only markup Telegram sees is our own tags. Structure comes from
+    real block tags — <h3> heading, <p> per image with <br> after the
+    filename — because rich HTML collapses literal newlines like any HTML,
+    which would otherwise run all 39 entries into one unreadable paragraph.
+    Packing splits strictly between blocks, so a group never cuts a tag or a
+    summary in half. A typical batch fits in a single group — which is the
+    point: a 39-image run that took six plain messages becomes one message.
     """
     total = len(entries)
     header = "📸 Read 1 image - here is the gist:" if total == 1 else f"📸 Read {total} images - here's the gist:"
-    blocks = [f"<b>{html.escape(header)}</b>"]
-    blocks += [f"<b>{html.escape(label)}</b>\n{html.escape(summary)}" for label, summary in entries]
+    blocks = [f"<h3>{html.escape(header)}</h3>"]
+    blocks += [f"<p><b>{html.escape(label)}</b><br>{html.escape(summary)}</p>" for label, summary in entries]
 
     groups: list[str] = []
     current = ""
     for block in blocks:
-        candidate = f"{current}\n\n{block}" if current else block
+        candidate = current + block
         if current and len(candidate.encode("utf-8")) > RICH_CHUNK_BYTES:
             groups.append(current)
             current = block
