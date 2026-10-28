@@ -25,7 +25,12 @@ class _SentMessage:
 
 
 class FakeBot:
-    """Records every send and edit instead of talking to Telegram."""
+    """Records every send and edit instead of talking to Telegram.
+
+    Signatures deliberately mirror aiogram's real Bot methods —
+    ``send_message(chat_id, text, ...)`` puts chat_id first — so a
+    positional-text call fails here exactly like it fails in production.
+    """
 
     def __init__(self):
         self.sent: list[str] = []
@@ -33,12 +38,12 @@ class FakeBot:
         self.edit_exception: Exception | None = None
         self._next_id = 100
 
-    async def send_message(self, text, **kwargs):
+    async def send_message(self, chat_id, text, **kwargs):
         self.sent.append(text)
         self._next_id += 1
         return _SentMessage(self._next_id)
 
-    async def edit_message_text(self, text, **kwargs):
+    async def edit_message_text(self, text=None, chat_id=None, message_id=None, **kwargs):
         if self.edit_exception is not None:
             raise self.edit_exception
         self.edits.append(text)
@@ -112,12 +117,12 @@ class ProgressCounterTest(unittest.IsolatedAsyncioTestCase):
         calls = {"n": 0}
 
         class FlakyBot(FakeBot):
-            async def send_message(self, text, **kwargs):
+            async def send_message(self, chat_id, text, **kwargs):
                 calls["n"] += 1
                 if calls["n"] == 1:
                     raise RuntimeError("status send failed")
                 delivered.append(text)
-                return await super().send_message(text, **kwargs)
+                return await super().send_message(chat_id, text, **kwargs)
 
         bot = FlakyBot()
         with (

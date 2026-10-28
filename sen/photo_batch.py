@@ -311,7 +311,8 @@ async def _process_batch(
         await _sender.submit(
             chat_id,
             lambda: bot.send_message(
-                "I could not download any of those images, so there is nothing to summarise.",
+                chat_id=chat_id,
+                text="I could not download any of those images, so there is nothing to summarise.",
                 reply_parameters=ReplyParameters(message_id=reply_to_message_id),
             ),
         )
@@ -338,12 +339,13 @@ async def _process_batch(
         try:
             if status_id is None:
                 sent = await bot.send_message(
-                    text,
+                    chat_id=chat_id,
+                    text=text,
                     reply_parameters=ReplyParameters(message_id=reply_to_message_id),
                 )
                 status_id = sent.message_id
             else:
-                await bot.edit_message_text(text, chat_id=chat_id, message_id=status_id)
+                await bot.edit_message_text(text=text, chat_id=chat_id, message_id=status_id)
             last_edit = now
         except TelegramRetryAfter as e:
             # Flood control on edits: stop updating the counter, but still
@@ -377,7 +379,7 @@ async def _process_batch(
         try:
             # The status message flips into the first chunk of the summary;
             # anything that did not fit goes through the paced sender.
-            await bot.edit_message_text(first, chat_id=chat_id, message_id=status_id)
+            await bot.edit_message_text(text=first, chat_id=chat_id, message_id=status_id)
             delivered_via_edit = True
         except Exception as e:
             print(f"[batch] final progress edit failed: {type(e).__name__}: {e}")
@@ -388,7 +390,8 @@ async def _process_batch(
         await _sender.submit(
             chat_id,
             lambda text=chunk: bot.send_message(
-                text,
+                chat_id=chat_id,
+                text=text,
                 reply_parameters=ReplyParameters(message_id=reply_to_message_id),
             ),
         )
@@ -465,7 +468,8 @@ async def _on_zip(bot: Bot, message: Message) -> None:
         await _sender.submit(
             message.chat.id,
             lambda: bot.send_message(
-                "I could not download that archive, so there is nothing to summarise.",
+                chat_id=message.chat.id,
+                text="I could not download that archive, so there is nothing to summarise.",
                 reply_parameters=ReplyParameters(message_id=message.message_id),
             ),
         )
@@ -497,7 +501,8 @@ async def _on_zip(bot: Bot, message: Message) -> None:
         await _sender.submit(
             message.chat.id,
             lambda: bot.send_message(
-                "That file is not a readable ZIP archive.",
+                chat_id=message.chat.id,
+                text="That file is not a readable ZIP archive.",
                 reply_parameters=ReplyParameters(message_id=message.message_id),
             ),
         )
@@ -507,7 +512,8 @@ async def _on_zip(bot: Bot, message: Message) -> None:
         await _sender.submit(
             message.chat.id,
             lambda: bot.send_message(
-                "I looked inside that archive but found no images in it.",
+                chat_id=message.chat.id,
+                text="I looked inside that archive but found no images in it.",
                 reply_parameters=ReplyParameters(message_id=message.message_id),
             ),
         )
