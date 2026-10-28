@@ -8,10 +8,14 @@ group. The batch path therefore collects the burst first, analyses the images
 one at a time, and pushes a single combined reply through a paced per-chat
 queue.
 
-Two entry points are supported:
+Images are only summarised when they are a direct request: an @tag or a
+reply to the bot on a photo/album, or a ZIP document. Bare photos and
+albums — the common case in a busy group — are ignored completely.
 
-* an album (or a lone photo) - the photos are collected until the album stops
-  growing, then summarised together;
+Two entry points back that rule up:
+
+* an album (or a lone photo) - collected once the burst stops and
+  summarised together, but only when aimed at the bot;
 * a ZIP document - every image inside is extracted and summarised together.
 
 The feature is opt-in per chat through ``PHOTO_BATCH_CHAT_IDS``.
@@ -141,9 +145,10 @@ class _PendingAlbum:
 
 _pending_albums: dict[tuple[int, str], _PendingAlbum] = {}
 
-# Albums whose first item addressed the bot directly. The conversation path
-# owns those, so the batch path must not double-answer them.
-_addressed_albums: set[tuple[int, str]] = set()
+# Albums already claimed for batch summarising. Telegram stamps the caption
+# and the reply on the album's first message only, so once that part aims
+# at the bot, every remaining part must follow it into the same batch.
+_batch_albums: set[tuple[int, str]] = set()
 
 
 # ---------------------------------------------------------------------------
@@ -622,7 +627,12 @@ async def _on_zip(bot: Bot, message: Message) -> None:
 
 
 class BatchPhotoFilter(BaseFilter):
-    """Match photos and ZIP dumps in chats that opted into batch summarising."""
+    """Match images in opted-in chats only when they are a direct request.
+
+    The rule: photos and albums are summarised only when explicitly aimed
+    at the bot (@tag or reply); a ZIP of images is a request in itself.
+    Anything bare — the common case in a busy group — stays silent.
+    """
 
     async def __call__(self, message: Message) -> bool:
         if not _cfg.PHOTO_BATCH_CHAT_IDS:
@@ -632,23 +642,23 @@ class BatchPhotoFilter(BaseFilter):
         if message.from_user and message.from_user.is_bot:
             return False
 
-        group_id = message.media_group_id
-        if group_id and (message.chat.id, group_id) in _addressed_albums:
+        if message.photo:
+            group_id = message.media_group_id
+            key = (message.chat.id, group_id) if group_id else None
+            if key is not None and key in _batch_albums:
+                # Another part of this album already claimed it (later parts
+                # carry no caption or reply of their own).
+                return True
+            if _addresses_bot(message):
+                if key is not None:
+                    _batch_albums.add(key)
+                return True
+            # Bare photo or album: ignore it, the conversation path skips
+            # non-directed messages too, so nobody ever answers.
             return False
 
-        if message.photo:
-            if _addresses_bot(message):
-                # The conversation path answers direct requests, so the album
-                # must not be summarised twice.
-                if group_id:
-                    _addressed_albums.add((message.chat.id, group_id))
-                return False
-            return True
-
-        if message.document and _is_zip(message.document):
-            return not _addresses_bot(message)
-
-        return False
+        # A ZIP dump of images is a request in itself, tagged or not.
+        return bool(message.document and _is_zip(message.document))
 
 
 def register_batch_photos(router: Router, bot: Bot) -> None:
