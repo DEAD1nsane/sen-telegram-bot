@@ -72,11 +72,13 @@ TRIGGER_AUDIO_FILES: dict[str, str] = {
     "sen": "Anythang.mp3",
     "magic": "Do You Believe In Magic.mp3",
     "magical": "Do You Believe In Magic.mp3",
+    "dust": "Dust In A Baggie.mp3",
 }
 
 AUDIO_METADATA: dict[str, tuple[str | None, str | None]] = {
     "Anythang.mp3": ("Anythang", "Devin The Dude"),
     "Do You Believe In Magic.mp3": ("Do You Believe In Magic", "The Lovin' Spoonful"),
+    "Dust In A Baggie.mp3": ("Dust In A Baggie", "Billy Strings"),
 }
 
 # ---------------------------------------------------------------------------

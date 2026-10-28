@@ -1470,6 +1470,8 @@ def register_handlers(router: Router, bot: Bot) -> None:
                 keyword_audio = TRIGGER_AUDIO_FILES["magical"]
             elif re.search(r"\bmagic\b", code_stripped, re.I):
                 keyword_audio = TRIGGER_AUDIO_FILES["magic"]
+            elif re.search(r"\bdust\b", code_stripped, re.I):
+                keyword_audio = TRIGGER_AUDIO_FILES["dust"]
         if keyword_audio:
             await send_keyword_audio(message, keyword_audio)
 
