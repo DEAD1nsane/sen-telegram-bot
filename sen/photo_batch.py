@@ -32,7 +32,7 @@ from typing import Any
 from aiogram import Bot, Router
 from aiogram.exceptions import TelegramRetryAfter
 from aiogram.filters import BaseFilter
-from aiogram.types import Message, ReplyParameters
+from aiogram.types import InputRichMessage, Message, ReplyParameters
 
 from . import config as _cfg
 from .media import download_telegram_media
@@ -63,6 +63,11 @@ MAX_IMAGE_BYTES = 10 * 1024 * 1024
 
 # Telegram's own message limit is 4096 characters; stay well below it.
 CHUNK_LIMIT = 3500
+
+# Rich messages (sendRichMessage) accept 32768 UTF-8 characters — eight times
+# a plain message — so a full-batch summary lands as ONE message instead of a
+# string of 3500-char chunks. Stay under the cap with headroom to spare.
+RICH_CHUNK_BYTES = 30000
 
 IMAGE_MIME = {
     ".jpg": "image/jpeg",
@@ -196,6 +201,39 @@ def _format_summaries(entries: list[tuple[str, str]]) -> str:
     return f"{header}\n\n{body}"
 
 
+def _rich(html_text: str) -> InputRichMessage:
+    """Wrap already-escaped HTML for Telegram's rich-message API."""
+    return InputRichMessage(html=html_text)
+
+
+def _format_rich_summary(entries: list[tuple[str, str]]) -> list[str]:
+    """Build the summary as rich-HTML groups, packed under RICH_CHUNK_BYTES.
+
+    One group is one outgoing message. Labels and summaries are HTML-escaped,
+    so the only markup Telegram sees is our own <b> tags. Packing splits
+    strictly between blocks, so a group never cuts a tag or a summary in half.
+    A typical batch fits in a single group — which is the point: a 39-image
+    run that took six plain messages becomes one rich message.
+    """
+    total = len(entries)
+    header = "📸 Read 1 image - here is the gist:" if total == 1 else f"📸 Read {total} images - here's the gist:"
+    blocks = [f"<b>{html.escape(header)}</b>"]
+    blocks += [f"<b>{html.escape(label)}</b>\n{html.escape(summary)}" for label, summary in entries]
+
+    groups: list[str] = []
+    current = ""
+    for block in blocks:
+        candidate = f"{current}\n\n{block}" if current else block
+        if current and len(candidate.encode("utf-8")) > RICH_CHUNK_BYTES:
+            groups.append(current)
+            current = block
+        else:
+            current = candidate
+    if current:
+        groups.append(current)
+    return groups
+
+
 _MD_LINE_PREFIX_RE = re.compile(r"^\s{0,3}(?:#{1,6}\s+|[-*•]\s+)", re.MULTILINE)
 _MD_WRAP_RE = re.compile(r"(\*\*|__|`{1,3})")
 _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?…])\s+")
@@ -324,26 +362,47 @@ async def _process_batch(
     # One status message is edited in place while the batch runs, so the chat
     # sees live progress without a flood of new messages. It is sent directly
     # (not through the paced sender) because we need its message_id back.
+    # Rich is tried first so the final summary can flip in as rich HTML; if
+    # the API rejects rich here, the whole run degrades to plain text.
     status_id: int | None = None
+    status_rich = False
+    rich_enabled = True
     last_edit = 0.0
     edits_allowed = True
 
     async def _set_progress(done: int) -> None:
-        nonlocal status_id, last_edit, edits_allowed
+        nonlocal status_id, status_rich, rich_enabled, last_edit, edits_allowed
         if not edits_allowed:
             return
         now = time.monotonic()
         if status_id is not None and now - last_edit < PROGRESS_EDIT_GAP:
             return
         text = f"📸 Found {total} {noun} - summarizing {done}/{total}..."
+        reply = ReplyParameters(message_id=reply_to_message_id)
         try:
             if status_id is None:
-                sent = await bot.send_message(
-                    chat_id=chat_id,
-                    text=text,
-                    reply_parameters=ReplyParameters(message_id=reply_to_message_id),
-                )
+                sent = None
+                if rich_enabled:
+                    try:
+                        sent = await bot.send_rich_message(
+                            chat_id=chat_id,
+                            rich_message=_rich(text),
+                            reply_parameters=reply,
+                        )
+                        status_rich = True
+                    except Exception as e:
+                        print(f"[batch] rich status failed: {type(e).__name__}: {e}; falling back to plain")
+                        rich_enabled = False
+                if sent is None:
+                    sent = await bot.send_message(
+                        chat_id=chat_id,
+                        text=text,
+                        reply_parameters=reply,
+                    )
+                    status_rich = False
                 status_id = sent.message_id
+            elif status_rich:
+                await bot.edit_message_text(rich_message=_rich(text), chat_id=chat_id, message_id=status_id)
             else:
                 await bot.edit_message_text(text=text, chat_id=chat_id, message_id=status_id)
             last_edit = now
@@ -370,6 +429,33 @@ async def _process_batch(
         if index < total:
             await asyncio.sleep(ANALYSIS_GAP_SECONDS)
 
+    # ---- Rich delivery: the status message becomes the whole summary ----
+    if status_id is not None and status_rich:
+        groups = _format_rich_summary(entries)
+        overflow: list[str] = []
+        try:
+            # Usually a single group, so this edit IS the delivery.
+            await bot.edit_message_text(
+                rich_message=_rich(groups[0]),
+                chat_id=chat_id,
+                message_id=status_id,
+            )
+            overflow = groups[1:]
+        except Exception as e:
+            print(f"[batch] final progress edit failed: {type(e).__name__}: {e}")
+            overflow = groups  # status is stale; send everything instead
+        for group in overflow:
+            await _sender.submit(
+                chat_id,
+                lambda g=group: bot.send_rich_message(
+                    chat_id=chat_id,
+                    rich_message=_rich(g),
+                    reply_parameters=ReplyParameters(message_id=reply_to_message_id),
+                ),
+            )
+        return
+
+    # ---- Plain delivery (status never existed or rich was unavailable) ----
     chunks = _chunk(_format_summaries(entries))
     first = html.escape(chunks[0])
     rest = chunks[1:]

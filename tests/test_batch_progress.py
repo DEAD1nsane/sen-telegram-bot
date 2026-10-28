@@ -30,6 +30,7 @@ class FakeBot:
     Signatures deliberately mirror aiogram's real Bot methods —
     ``send_message(chat_id, text, ...)`` puts chat_id first — so a
     positional-text call fails here exactly like it fails in production.
+    Rich sends/edits record the same way, keyed on ``rich_message.html``.
     """
 
     def __init__(self):
@@ -43,10 +44,15 @@ class FakeBot:
         self._next_id += 1
         return _SentMessage(self._next_id)
 
-    async def edit_message_text(self, text=None, chat_id=None, message_id=None, **kwargs):
+    async def send_rich_message(self, chat_id, rich_message, **kwargs):
+        self.sent.append(rich_message.html)
+        self._next_id += 1
+        return _SentMessage(self._next_id)
+
+    async def edit_message_text(self, text=None, chat_id=None, message_id=None, rich_message=None, **kwargs):
         if self.edit_exception is not None:
             raise self.edit_exception
-        self.edits.append(text)
+        self.edits.append(rich_message.html if rich_message is not None else text)
 
 
 class FakeSender:
@@ -90,8 +96,8 @@ class ProgressCounterTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("📸 Found 3 images - summarizing 2/3...", bot.edits)
         self.assertIn("📸 Found 3 images - summarizing 3/3...", bot.edits)
         # The last edit flips the same message into the summary header.
-        self.assertTrue(bot.edits[-1].startswith("📸 Read 3 images"), bot.edits[-1])
-        self.assertIn("img_1.jpg", bot.edits[-1])
+        self.assertIn("📸 Read 3 images", bot.edits[-1])
+        self.assertIn("<b>img_1.jpg</b>", bot.edits[-1])
 
     async def test_single_chunk_never_goes_through_paced_sender(self):
         bot = FakeBot()
@@ -113,15 +119,24 @@ class ProgressCounterTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(any("📸 Read 2 images" in text for text in bot.sent))
 
     async def test_no_status_message_at_all_still_delivers(self):
-        delivered: list[str] = []
-        calls = {"n": 0}
-
         class FlakyBot(FakeBot):
-            async def send_message(self, chat_id, text, **kwargs):
-                calls["n"] += 1
-                if calls["n"] == 1:
+            """Both the rich and the plain status-send attempts die."""
+
+            def __init__(self):
+                super().__init__()
+                self.rich_fails = 1
+                self.plain_fails = 1
+
+            async def send_rich_message(self, chat_id, rich_message, **kwargs):
+                if self.rich_fails > 0:
+                    self.rich_fails -= 1
                     raise RuntimeError("status send failed")
-                delivered.append(text)
+                return await super().send_rich_message(chat_id, rich_message, **kwargs)
+
+            async def send_message(self, chat_id, text, **kwargs):
+                if self.plain_fails > 0:
+                    self.plain_fails -= 1
+                    raise RuntimeError("status send failed")
                 return await super().send_message(chat_id, text, **kwargs)
 
         bot = FlakyBot()
@@ -131,7 +146,7 @@ class ProgressCounterTest(unittest.IsolatedAsyncioTestCase):
             mock.patch.object(photo_batch, "_sender", FakeSender(bot)),
         ):
             await photo_batch._process_batch(bot, -1001, _images(1), 42)
-        self.assertTrue(any("📸 Read 1 image" in text for text in delivered))
+        self.assertTrue(any("📸 Read 1 image" in text for text in bot.sent))
 
     async def test_progress_edits_are_throttled(self):
         bot = FakeBot()
@@ -145,7 +160,59 @@ class ProgressCounterTest(unittest.IsolatedAsyncioTestCase):
             await photo_batch._process_batch(bot, -1001, _images(5), 42)
         interim = [e for e in bot.edits if "summarizing" in e]
         self.assertLessEqual(len(interim), 2, interim)
-        self.assertTrue(bot.edits[-1].startswith("📸 Read 5 images"), bot.edits[-1])
+        self.assertIn("📸 Read 5 images", bot.edits[-1])
+
+    async def test_large_batch_lands_in_one_rich_message(self):
+        """39 images ≈ 20k chars: one message, not the six plain chunks."""
+        bot = FakeBot()
+        images = [{"label": f"IMG_{i:03}.jpg", "data": b"x", "mime": "image/jpeg", "caption": ""} for i in range(39)]
+
+        async def long_summarize(data, mime, caption, label) -> str:
+            return f"Summary for {label}. " + "A" * 460
+
+        with (
+            mock.patch.object(photo_batch, "_summarize", long_summarize),
+            mock.patch.object(photo_batch, "ANALYSIS_GAP_SECONDS", 0),
+            mock.patch.object(photo_batch, "PROGRESS_EDIT_GAP", 0),
+            mock.patch.object(photo_batch, "_sender", FakeSender(bot)),
+        ):
+            await photo_batch._process_batch(bot, -1001, images, 42)
+
+        # Only the status message was ever *sent*; the whole summary is its
+        # single final edit. Any overflow would show up as extra sends.
+        self.assertEqual(len(bot.sent), 1, bot.sent)
+        final = bot.edits[-1]
+        self.assertIn("<b>IMG_000.jpg</b>", final)
+        self.assertIn("<b>IMG_038.jpg</b>", final)  # all 39 in one edit
+        self.assertLessEqual(len(final.encode("utf-8")), photo_batch.RICH_CHUNK_BYTES)
+
+    async def test_overflow_groups_split_on_block_boundaries(self):
+        bot = FakeBot()
+        with (
+            mock.patch.object(photo_batch, "_summarize", _fake_summarize),
+            mock.patch.object(photo_batch, "ANALYSIS_GAP_SECONDS", 0),
+            mock.patch.object(photo_batch, "PROGRESS_EDIT_GAP", 0),
+            mock.patch.object(photo_batch, "RICH_CHUNK_BYTES", 300),
+            mock.patch.object(photo_batch, "_sender", FakeSender(bot)),
+        ):
+            await photo_batch._process_batch(bot, -1001, _images(16), 42)
+
+        groups = bot.sent[1:]  # after the status message
+        self.assertGreaterEqual(len(groups), 2, bot.sent)
+        for group in groups:
+            self.assertEqual(group.count("<b>"), group.count("</b>"), group)
+            self.assertLessEqual(len(group.encode("utf-8")), photo_batch.RICH_CHUNK_BYTES)
+
+    async def test_rich_failure_falls_back_to_plain(self):
+        class PlainOnlyBot(FakeBot):
+            async def send_rich_message(self, chat_id, rich_message, **kwargs):
+                raise RuntimeError("rich messages unavailable")
+
+        bot = PlainOnlyBot()
+        await self._run(bot, 2)
+        # Plain status sent, plain summary flip — same behaviour as before.
+        self.assertEqual(bot.sent[0], "📸 Found 2 images - summarizing 0/2...")
+        self.assertIn("📸 Read 2 images", bot.edits[-1])
 
 
 class DustKeywordTest(unittest.TestCase):
