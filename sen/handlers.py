@@ -387,10 +387,30 @@ def _markdown_to_rich_html(text: str) -> str:
     text = re.sub(r"\|\|(.+?)\|\|", r"<tg-spoiler>\1</tg-spoiler>", text)
     text = re.sub(r"`([^`\n]+?)`", r"<code>\1</code>", text)
     text = re.sub(r"\[([^\]]+?)\]\((https?://[^\)]+?)\)", r'<a href="\2">\1</a>', text)
-    text = re.sub(r"^(#{1,6})\s+(.+)$", lambda m: f"<b>{m.group(2).strip()}</b>", text, flags=re.M)
-    text = re.sub(r"^>\s?(.+)$", lambda m: f"<i>{m.group(1)}</i>", text, flags=re.M)
-    text = re.sub(r"^---+$", "—", text, flags=re.M)
+    # Markdown headings become REAL headings, not bold: <h1>..<h6> is the
+    # only way to get a rendered heading size, and collapsing them to <b>
+    # is what made a "six heading sizes" request come back flat.
+    text = re.sub(
+        r"^(#{1,6})\s+(.+)$",
+        lambda m: f"<h{len(m.group(1))}>{m.group(2).strip()}</h{len(m.group(1))}>",
+        text,
+        flags=re.M,
+    )
+    # Consecutive ">" lines become ONE blockquote rather than scattered
+    # italics. A run is joined so the quote keeps its line structure.
+    text = re.sub(r"(?:^>\s?.*\n?)+", _markdown_blockquote, text, flags=re.M)
+    # A horizontal rule is a divider; it used to become an em dash, which is
+    # a different thing entirely.
+    text = re.sub(r"^\s*([-*_]){3,}\s*$", "<hr/>", text, flags=re.M)
     return text
+
+
+def _markdown_blockquote(match: re.Match) -> str:
+    """Turn a run of markdown '>' lines into a single <blockquote> block."""
+    body = "".join(re.sub(r"^>\s?", "", line) for line in match.group(0).splitlines(keepends=True))
+    if not body.strip():
+        return ""
+    return f"<blockquote>{body.strip()}</blockquote>"
 
 
 def clean_ai_output(text: str, plain_lists: bool = False) -> str:
@@ -442,9 +462,18 @@ def clean_ai_output(text: str, plain_lists: bool = False) -> str:
         for line in lines:
             stripped = line.strip()
             indent = len(line) - len(line.lstrip())
+            # Task-list items carry a checkbox, which Rich HTML renders from
+            # <input type="checkbox">. Checked state comes from the bracket.
+            task_match = re.match(r"^[-*+]\s*\[([ xX])\]\s*(.+)", stripped)
             bullet_match = re.match(r"^[•\-\*·‣∙➤►▸▹◦○●▪▫–—]\s*(.+)", stripped)
             numbered_match = re.match(r"^(\d+)[.)]\s+(.+)", stripped)
-            if bullet_match:
+            if task_match:
+                kind, body = "ul", (
+                    f'<input type="checkbox" checked>{task_match.group(2)}'
+                    if task_match.group(1) in "xX"
+                    else f'<input type="checkbox">{task_match.group(2)}'
+                )
+            elif bullet_match:
                 kind, body = "ul", bullet_match.group(1)
             elif numbered_match:
                 kind, body = "ol", numbered_match.group(2)
@@ -568,7 +597,8 @@ def _label_and_url(text: str) -> str:
 # Markup only a rich message understands. Plain sendMessage would reject the
 # text outright, so those replies stay on the rich path (no embed, as before).
 _RICH_ONLY_TAG_RE = re.compile(
-    r"</?(?:ul|ol|li|table|thead|tbody|tr|td|th|details|summary|tg-math|tg-math-block|h[1-6]|hr)\b",
+    r"</?(?:ul|ol|li|table|thead|tbody|tr|td|th|caption|details|summary|blockquote|aside|cite|"
+    r"figure|figcaption|footer|input|mark|sub|sup|hr|tg-math|tg-math-block|h[1-6])\b",
     re.I,
 )
 
@@ -787,6 +817,33 @@ def base_instructions(today: str) -> str:
         "When media is attached, treat that media as primary evidence. Never fabricate visual, audio, or document details. If you cannot reliably inspect it, say so.\n"
         "For emoji, identify by exact codepoint, never by resemblance. Emoji 16.0 (2024) and 17.0 (2025) postdate you — e.g. 🫈 is HAIRY CREATURE (Bigfoot-like cryptid), never 🪬 HAMSA (Hand of Fatima); 🫪 is DISTORTED FACE, never 🫩. An explicit Emoji grounding note in the prompt overrides your memory; if Web Search Context covers the emoji, prefer it; if unsure, say so instead of substituting a similar-looking emoji.\n"
         "Return Telegram Rich HTML for sendRichMessage. Use whichever tags best fit the content naturally.\n"
+        "You support the FULL Telegram Rich HTML vocabulary, so never tell the user a formatting feature is "
+        "unsupported, unavailable, or something you cannot do if it is listed here. Every tag below renders.\n"
+        "Headings: <h1>..<h6>. Inline: <b>/<strong>, <i>/<em>, <u>/<ins>, <s>/<strike>/<del>, <mark> (marked or "
+        "highlighted text), <sub> (subscript), <sup> (superscript), <tg-spoiler> (spoiler), <code> (inline code). "
+        "Code blocks: <pre><code class=\"language-python\">...</code></pre> — the class attribute is what enables "
+        "syntax highlighting.\n"
+        "Lists: <ul><li>, <ol><li>, and task lists via <li><input type=\"checkbox\" checked>Done</li> or "
+        "<li><input type=\"checkbox\">To do</li>. Ordered lists accept <ol start=\"3\" type=\"a\" reversed> and "
+        "<li value=\"7\" type=\"i\">.\n"
+        "Quotes: <blockquote>text<cite>Author Name</cite></blockquote> puts an author credit on the quote; add the "
+        "bare word expandable as an attribute — <blockquote expandable>...</blockquote> — to fold it closed by "
+        "default. <aside>Pull quote<cite>Author</cite></aside> is a centered pull quote. A horizontal divider is "
+        "<hr/>.\n"
+        "Collapsible sections: <details><summary>Title</summary>content</details>; add open as an attribute to start "
+        "expanded. Nested rich content is allowed inside.\n"
+        "Tables: <table bordered striped compact><caption>Table caption</caption><tr><th>Head</th></tr>"
+        "<tr><td>cell</td></tr></table>. Use <th> for header cells, <caption> for the caption, and the attributes "
+        "colspan, rowspan, align=\"left|center|right\" and valign=\"top|middle|bottom\" on cells. Never use Markdown "
+        "pipe tables, and never emit <thead> or <tbody> — Telegram has no such tags.\n"
+        "Math: <tg-math>LaTeX</tg-math> inline and <tg-math-block>LaTeX</tg-math-block> on its own line; the source "
+        "is treated as raw LaTeX and rendered.\n"
+        "Links: <a href=\"https://...\">label</a> for URLs, mailto:user@example.com for e-mail, tel:+123456789 for "
+        "phone numbers, tg://user?id=123456789 to mention a user by id, and in-document anchors via "
+        "<a name=\"chapter-1\"></a> paired with <a href=\"#chapter-1\">jump</a>. Vary the link kinds to suit the "
+        "content instead of defaulting to a bare URL.\n"
+        "<footer>Footer text</footer> adds a footer block. Escape literal <, > and & as &lt;, &gt; and &amp; "
+        "whenever they are not part of a tag.\n"
         "Formatting requests in the USER'S INSTRUCTION are commands. When the user explicitly asks for a structure or format (table, collapsible or expandable section with any label, code block, equation, list, numbered list, fixed item count, translation, sources), build that structure in full. Persona and brevity directives shape your wording, never whether the requested structure appears.\n"
         "Bold with <b></b> the key items: people's names and job titles, place names, organizations, and concrete figures (dates, numbers, prices, scores). Bold the direct answer to a direct question. Never leave a person's name or title unbolded in a factual answer.\n"
         "For lists, emit real list markup: <ul><li>…</li></ul> or <ol><li>…</li></ol>, with one <li> per item inside a single list. Never fake list items by writing '1.' or '-' inside plain text.\n"
