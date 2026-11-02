@@ -468,10 +468,13 @@ def clean_ai_output(text: str, plain_lists: bool = False) -> str:
             bullet_match = re.match(r"^[•\-\*·‣∙➤►▸▹◦○●▪▫–—]\s*(.+)", stripped)
             numbered_match = re.match(r"^(\d+)[.)]\s+(.+)", stripped)
             if task_match:
-                kind, body = "ul", (
-                    f'<input type="checkbox" checked>{task_match.group(2)}'
-                    if task_match.group(1) in "xX"
-                    else f'<input type="checkbox">{task_match.group(2)}'
+                kind, body = (
+                    "ul",
+                    (
+                        f'<input type="checkbox" checked>{task_match.group(2)}'
+                        if task_match.group(1) in "xX"
+                        else f'<input type="checkbox">{task_match.group(2)}'
+                    ),
                 )
             elif bullet_match:
                 kind, body = "ul", bullet_match.group(1)
@@ -821,11 +824,11 @@ def base_instructions(today: str) -> str:
         "unsupported, unavailable, or something you cannot do if it is listed here. Every tag below renders.\n"
         "Headings: <h1>..<h6>. Inline: <b>/<strong>, <i>/<em>, <u>/<ins>, <s>/<strike>/<del>, <mark> (marked or "
         "highlighted text), <sub> (subscript), <sup> (superscript), <tg-spoiler> (spoiler), <code> (inline code). "
-        "Code blocks: <pre><code class=\"language-python\">...</code></pre> — the class attribute is what enables "
+        'Code blocks: <pre><code class="language-python">...</code></pre> — the class attribute is what enables '
         "syntax highlighting.\n"
-        "Lists: <ul><li>, <ol><li>, and task lists via <li><input type=\"checkbox\" checked>Done</li> or "
-        "<li><input type=\"checkbox\">To do</li>. Ordered lists accept <ol start=\"3\" type=\"a\" reversed> and "
-        "<li value=\"7\" type=\"i\">.\n"
+        'Lists: <ul><li>, <ol><li>, and task lists via <li><input type="checkbox" checked>Done</li> or '
+        '<li><input type="checkbox">To do</li>. Ordered lists accept <ol start="3" type="a" reversed> and '
+        '<li value="7" type="i">.\n'
         "Quotes: <blockquote>text<cite>Author Name</cite></blockquote> puts an author credit on the quote; add the "
         "bare word expandable as an attribute — <blockquote expandable>...</blockquote> — to fold it closed by "
         "default. <aside>Pull quote<cite>Author</cite></aside> is a centered pull quote. A horizontal divider is "
@@ -834,13 +837,13 @@ def base_instructions(today: str) -> str:
         "expanded. Nested rich content is allowed inside.\n"
         "Tables: <table bordered striped compact><caption>Table caption</caption><tr><th>Head</th></tr>"
         "<tr><td>cell</td></tr></table>. Use <th> for header cells, <caption> for the caption, and the attributes "
-        "colspan, rowspan, align=\"left|center|right\" and valign=\"top|middle|bottom\" on cells. Never use Markdown "
+        'colspan, rowspan, align="left|center|right" and valign="top|middle|bottom" on cells. Never use Markdown '
         "pipe tables, and never emit <thead> or <tbody> — Telegram has no such tags.\n"
         "Math: <tg-math>LaTeX</tg-math> inline and <tg-math-block>LaTeX</tg-math-block> on its own line; the source "
         "is treated as raw LaTeX and rendered.\n"
-        "Links: <a href=\"https://...\">label</a> for URLs, mailto:user@example.com for e-mail, tel:+123456789 for "
+        'Links: <a href="https://...">label</a> for URLs, mailto:user@example.com for e-mail, tel:+123456789 for '
         "phone numbers, tg://user?id=123456789 to mention a user by id, and in-document anchors via "
-        "<a name=\"chapter-1\"></a> paired with <a href=\"#chapter-1\">jump</a>. Vary the link kinds to suit the "
+        '<a name="chapter-1"></a> paired with <a href="#chapter-1">jump</a>. Vary the link kinds to suit the '
         "content instead of defaulting to a bare URL.\n"
         "<footer>Footer text</footer> adds a footer block. Escape literal <, > and & as &lt;, &gt; and &amp; "
         "whenever they are not part of a tag.\n"
