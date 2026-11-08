@@ -1604,19 +1604,8 @@ def register_handlers(router: Router, bot: Bot) -> None:
         replied_document = get_replied_document(message)
         has_media_input = bool(message.photo or message.voice or message.document or replied_video or replied_document)
 
-        # Keyword audio with rate limiting: only send after every N messages in a chat
+        # Keyword audio always fires, even on non-directed chatter.
         if text_no_html and not text_no_html.startswith("/"):
-            # Increment message counter for this chat
-            msg_count_key = audio_message_count_key(message.chat.id)
-            current_count = await redis_client.incr(msg_count_key)
-            # Reset counter if it wraps past the threshold (to keep numbers manageable)
-            if current_count > 1000000:
-                await redis_client.set(msg_count_key, 0)
-                current_count = 0
-            print(f"[DEBUG] Audio trigger check: chat={message.chat.id}, count={current_count}, mod={current_count % AUDIO_TRIGGER_EVERY_N_MESSAGES}")
-
-            # Only trigger audio if we've hit the Nth message (5, 10, 15, ...)
-            if current_count % AUDIO_TRIGGER_EVERY_N_MESSAGES == 0:
                 msg_entities = (
                     getattr(message, "entities", None)
                     if message.text is not None
