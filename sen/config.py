@@ -51,6 +51,7 @@ INTERACTION_TTL = 300
 MENU_TTL = 300
 SEARCH_CACHE_TTL = 300
 AUDIO_CACHE_TTL = 60 * 60 * 24 * 30
+AUDIO_TRIGGER_EVERY_N_MESSAGES = 5  # Only send audio after every N messages in a chat
 
 # Telegram refuses bot downloads above 20 MB, which is also well under the
 # Gemini inline-data ceiling, so everything a document path fetches can be inlined.
@@ -88,8 +89,8 @@ TRIGGER_AUDIO_TRACKS: dict[str, tuple[str, str, str | None, str | None]] = {
     ),
     # dust -> Dust In A Baggie (order: 3rd for tests)
     "dust": (r"\bdust\b", "Dust In A Baggie.mp3", "Dust In A Baggie", "Billy Strings"),
-    # trump -> I Hate U B
-    "trump": (r"\btrump\b", "I Hate U B.mp3", "I Hate U B", "Princess Nokia"),
+    # trump -> I Hate U
+    "trump": (r"\btrump\b", "I Hate U.mp3", "I Hate U", "Princess Nokia"),
     # smd, idgaf, happy, rish, rich, hoe, ho, bitch -> Joy
     "smd": (r"\bsmd\b", "Joy.mp3", "Joy", "Joy Again"),
     "idgaf": (r"\bidgaf\b", "Joy.mp3", "Joy", "Joy Again"),
@@ -126,3 +127,7 @@ def search_cache_key(query: str, news: bool) -> str:
 
 def audio_cache_key(filename: str) -> str:
     return f"keyword_audio_file_id:{filename}"
+
+
+def audio_message_count_key(chat_id: int) -> str:
+    return f"keyword_audio_message_count:{chat_id}"
