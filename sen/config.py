@@ -90,7 +90,7 @@ TRIGGER_AUDIO_TRACKS: dict[str, tuple[str, str, str | None, str | None]] = {
     # dust -> Dust In A Baggie (order: 3rd for tests)
     "dust": (r"\bdust\b", "Dust In A Baggie.mp3", "Dust In A Baggie", "Billy Strings"),
     # trump -> I Hate U
-    "trump": (r"\btrump\b", "I Hate U.mp3", "I Hate U", "Princess Nokia"),
+    "trump": (r"\btrump\b", "I Hate U.mp3", "I Hate U", "Z-Ro"),
     # smd, idgaf, happy, rish, rich, hoe, ho, bitch -> Joy
     "smd": (r"\bsmd\b", "Joy.mp3", "Joy", "Joy Again"),
     "idgaf": (r"\bidgaf\b", "Joy.mp3", "Joy", "Joy Again"),
