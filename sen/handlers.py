@@ -28,7 +28,6 @@ from .config import (
     TELEGRAM_DOWNLOAD_MAX_BYTES,
     TEMPORARY_FORGET_RE,
     TRIGGER_AUDIO_TRACKS,
-    audio_message_count_key,
     interaction_key,
     redis_client,
 )

@@ -127,7 +127,3 @@ def search_cache_key(query: str, news: bool) -> str:
 
 def audio_cache_key(filename: str) -> str:
     return f"keyword_audio_file_id:{filename}"
-
-
-def audio_message_count_key(chat_id: int) -> str:
-    return f"keyword_audio_message_count:{chat_id}"
