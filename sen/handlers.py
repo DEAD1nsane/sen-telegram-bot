@@ -1613,8 +1613,9 @@ def register_handlers(router: Router, bot: Bot) -> None:
             if current_count > 1000000:
                 await redis_client.set(msg_count_key, 0)
                 current_count = 0
+            print(f"[DEBUG] Audio trigger check: chat={message.chat.id}, count={current_count}, mod={current_count % AUDIO_TRIGGER_EVERY_N_MESSAGES}")
 
-            # Only trigger audio if we've hit the Nth message
+            # Only trigger audio if we've hit the Nth message (5, 10, 15, ...)
             if current_count % AUDIO_TRIGGER_EVERY_N_MESSAGES == 0:
                 msg_entities = (
                     getattr(message, "entities", None)
