@@ -1604,20 +1604,27 @@ def register_handlers(router: Router, bot: Bot) -> None:
         replied_document = get_replied_document(message)
         has_media_input = bool(message.photo or message.voice or message.document or replied_video or replied_document)
 
-        # Keyword audio always fires, even on non-directed chatter.
+        # Keyword audio: fires after keyword is said 5 times in a chat
         if text_no_html and not text_no_html.startswith("/"):
-                msg_entities = (
-                    getattr(message, "entities", None)
-                    if message.text is not None
-                    else getattr(message, "caption_entities", None)
-                )
-                code_stripped = _strip_code_spans(text, msg_entities)
-                # Iterate over TRIGGER_AUDIO_TRACKS to find all matching keywords
-                # Dedupe by filename to avoid playing the same track twice
-                seen_files: set[str] = set()
-                for pattern, filename, _title, _performer in TRIGGER_AUDIO_TRACKS.values():
-                    if re.search(pattern, code_stripped, re.I) and filename not in seen_files:
-                        seen_files.add(filename)
+            msg_entities = (
+                getattr(message, "entities", None)
+                if message.text is not None
+                else getattr(message, "caption_entities", None)
+            )
+            code_stripped = _strip_code_spans(text, msg_entities)
+            # Check each keyword, track per-chat count, trigger audio on 5th hit
+            seen_files: set[str] = set()
+            for key, (pattern, filename, _title, _performer) in TRIGGER_AUDIO_TRACKS.items():
+                if re.search(pattern, code_stripped, re.I) and filename not in seen_files:
+                    seen_files.add(filename)
+                    # Increment count for this keyword in this chat
+                    kw_count_key = f"keyword_audio_count:{message.chat.id}:{key}"
+                    kw_count = await redis_client.incr(kw_count_key)
+                    if kw_count > 1000000:
+                        await redis_client.set(kw_count_key, 0)
+                        kw_count = 0
+                    # Trigger on every 5th occurrence (5, 10, 15, ...)
+                    if kw_count % AUDIO_TRIGGER_EVERY_N_MESSAGES == 0:
                         await send_keyword_audio(message, filename)
 
         if message.voice is not None:
